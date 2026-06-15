@@ -10,14 +10,22 @@
 // Node ESM, SOLO moduli built-in: nessun npm install, nessuna dipendenza di rete.
 //
 // Controlli (11 §5.1):
-//   (1) REQUIRED_FIELDS — ogni task ha objective + definition_of_done +
-//       acceptance_criteria + target_tests non vuoti (enforcement diretto L-COL-019);
+//   (1) REQUIRED_FIELDS — ogni task ha id + objective + definition_of_done +
+//       acceptance_criteria + target_tests NON vuoti, e con CONTENUTO non vacuo
+//       (ogni voce di definition_of_done non vuota; ogni target_test nomina un
+//       file). Enforcement diretto di L-COL-019 e dello schema §3;
 //   (2) AC_COVERAGE     — ogni acceptance_criteria (id) è coperto da >=1 target_tests.covers;
 //   (3) DAG_VALID       — depends_on senza cicli e senza riferimenti a id inesistenti;
 //   (4) UNIQUE_IDS      — id univoci, non riusati;
 //   (5) MACROTASK_OWNERSHIP — ogni task dichiara un macrotask non vuoto.
 //
 // Ogni acceptance_criteria, inoltre, deve portare id + given + when + then (11 §3).
+//
+// Fedeltà del parser: il subset YAML dello schema §3 è supportato in modo coerente
+// a OGNI livello — scalari, liste inline [A, B], BLOCK-SEQUENCE ("- x" su più righe),
+// BLOCK-SCALAR (| literal e > folded) E commenti di riga intera, sia per i campi del
+// task sia DENTRO gli item di acceptance_criteria/target_tests. Così l'oracolo accetta
+// i blueprint validi a prescindere dall'idioma di scrittura e rifiuta solo i difetti reali.
 //
 // Uso:
 //   node validate_blueprint.mjs [dir-del-blueprint]   -> report umano, exit 0/1
@@ -51,10 +59,9 @@ function extractYamlBlocks(text) {
 }
 
 // --- Mini-parser del solo subset YAML usato dallo schema 11 §3 ---------------
-// Supporta: lista di task ("- id: ..."), scalari, blocchi ">" / "|" (folded/literal),
-// liste di scalari ("- foo"), liste di mappe (acceptance_criteria, target_tests),
-// liste inline ([A, B]). Deterministico e sufficiente per lo schema del task.
-// (Logica riusata dall'harness di T-1.3: stesso formato, stesso parser.)
+// Supporta, a OGNI livello (campo del task E item di lista-di-mappe): scalari,
+// liste inline [A, B], block-sequence ("- x"), block-scalar (|/>) e commenti di
+// riga intera. Deterministico e sufficiente per lo schema del task.
 function parseTasks(yaml) {
   const lines = yaml.replace(/\r\n/g, '\n').split('\n');
   const tasks = [];
@@ -62,18 +69,29 @@ function parseTasks(yaml) {
   let i = 0;
 
   const indentOf = (l) => l.length - l.trimStart().length;
+
+  // Rimuove i commenti "#" non quotati. Se le virgolette risultano sbilanciate
+  // (es. un apostrofo italiano in un valore non quotato: "chiama l'endpoint # x"),
+  // rifà la scansione ignorando le virgolette, così il commento viene comunque tolto.
   const stripComment = (s) => {
-    // rimuove i commenti "#" solo se non dentro apici
-    let inS = false, inD = false, out = '';
-    for (let k = 0; k < s.length; k++) {
-      const c = s[k];
-      if (c === "'" && !inD) inS = !inS;
-      else if (c === '"' && !inS) inD = !inD;
-      if (c === '#' && !inS && !inD) break;
-      out += c;
-    }
-    return out;
+    const scan = (honorQuotes) => {
+      let inS = false, inD = false, out = '';
+      for (let k = 0; k < s.length; k++) {
+        const c = s[k];
+        if (honorQuotes) {
+          if (c === "'" && !inD) inS = !inS;
+          else if (c === '"' && !inS) inD = !inD;
+        }
+        if (c === '#' && !inS && !inD) break;
+        out += c;
+      }
+      return { out, balanced: !inS && !inD };
+    };
+    let r = scan(true);
+    if (!r.balanced) r = scan(false);
+    return r.out;
   };
+
   const unquote = (v) => {
     v = v.trim();
     if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
@@ -85,6 +103,46 @@ function parseTasks(yaml) {
     const inner = v.trim().slice(1, -1).trim();
     if (inner === '') return [];
     return inner.split(',').map((x) => unquote(x.trim()));
+  };
+  const isBlockScalarMarker = (v) =>
+    v === '>' || v === '|' || v === '>-' || v === '|-' || v === '>+' || v === '|+';
+
+  // Assegna a obj[key] il valore di una chiave dentro un item di lista-di-mappe,
+  // consumando le righe successive se il valore è un block-scalar o una block-sequence.
+  // keyIndent = colonna della chiave (i figli devono essere PIÙ indentati di questa).
+  const assignItemValue = (obj, key, rawVal, keyIndent) => {
+    const v = (rawVal || '').trim();
+    if (isBlockScalarMarker(v)) {
+      const blockLines = [];
+      while (i < lines.length) {
+        const bl = lines[i];
+        if (bl.trim() === '') { blockLines.push(''); i++; continue; }
+        if (indentOf(bl) <= keyIndent) break;
+        blockLines.push(bl.trim());
+        i++;
+      }
+      obj[key] = blockLines.join(' ').trim();
+      return;
+    }
+    if (v.startsWith('[')) { obj[key] = parseInlineList(v); return; }
+    if (v === '') {
+      // Possibile block-sequence: righe "- x" più indentate della chiave.
+      const seq = [];
+      let consumed = false;
+      while (i < lines.length) {
+        const sl = lines[i];
+        if (sl.trim() === '') { i++; continue; }
+        if (indentOf(sl) <= keyIndent) break;
+        const stext = stripComment(sl).trim();
+        if (stext === '') { i++; continue; } // solo commento
+        if (!stext.startsWith('- ')) break;
+        seq.push(unquote(stext.slice(2).trim()));
+        i++; consumed = true;
+      }
+      obj[key] = consumed ? seq : '';
+      return;
+    }
+    obj[key] = unquote(v);
   };
 
   while (i < lines.length) {
@@ -112,7 +170,7 @@ function parseTasks(yaml) {
       const key = kv[1];
       let val = kv[2];
 
-      if (val === '>' || val === '|' || val === '>-' || val === '|-') {
+      if (isBlockScalarMarker(val)) {
         // blocco scalare multilinea -> raccogli le righe più indentate
         const blockLines = [];
         i++;
@@ -135,48 +193,47 @@ function parseTasks(yaml) {
       }
 
       if (val === '') {
-        // potrebbe essere una lista (righe "- ...") o una lista di mappe
+        // Una LISTA: di scalari ("- foo") o di mappe ("- key: val ...").
+        // Salta righe vuote e di solo-commento; chiude al primo dedent <= ind.
         const childItems = [];
         i++;
         while (i < lines.length) {
-          let craw = lines[i];
+          const craw = lines[i];
           if (craw.trim() === '') { i++; continue; }
           const cind = indentOf(craw);
           if (cind <= ind) break;
           const ctext = stripComment(craw).trim();
-          if (ctext.startsWith('- ')) {
-            const after = ctext.slice(2).trim();
-            const innerKv = after.match(/^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/);
-            if (innerKv) {
-              // lista di mappe: prima chiave dell'item
-              const obj = {};
-              let kk = innerKv[1];
-              let vv = innerKv[2];
-              obj[kk] = vv.startsWith('[') ? parseInlineList(vv) : unquote(vv);
-              i++;
-              // chiavi successive della stessa mappa (più indentate del "- ")
-              const itemInd = cind;
-              while (i < lines.length) {
-                let nraw = lines[i];
-                if (nraw.trim() === '') { i++; continue; }
-                const nind = indentOf(nraw);
-                if (nind <= itemInd) break;
-                const ntext = stripComment(nraw).trim();
-                const nkv = ntext.match(/^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/);
-                if (!nkv) break;
-                obj[nkv[1]] = nkv[2].startsWith('[')
-                  ? parseInlineList(nkv[2])
-                  : unquote(nkv[2]);
-                i++;
-              }
-              childItems.push(obj);
-            } else {
-              // lista di scalari
-              childItems.push(unquote(after));
-              i++;
+          if (ctext === '') { i++; continue; } // riga di solo commento
+          if (!ctext.startsWith('- ')) break;  // non è un item di lista
+          const after = ctext.slice(2);
+          const innerKv = after.trim().match(/^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/);
+          if (innerKv) {
+            // LISTA DI MAPPE: la prima chiave sta sulla riga del trattino.
+            const obj = {};
+            const itemBaseInd = cind; // colonna del "-"
+            // colonna reale della prima chiave (dopo "- ", spazi variabili)
+            const afterDash = craw.slice(itemBaseInd + 1);
+            const firstKeyInd = itemBaseInd + 1 + (afterDash.length - afterDash.trimStart().length);
+            i++; // consuma la riga "- key: val"
+            assignItemValue(obj, innerKv[1], innerKv[2], firstKeyInd);
+            // chiavi successive dello stesso item (più indentate del trattino)
+            while (i < lines.length) {
+              const nraw = lines[i];
+              if (nraw.trim() === '') { i++; continue; }
+              const nind = indentOf(nraw);
+              if (nind <= itemBaseInd) break;
+              const ntext = stripComment(nraw).trim();
+              if (ntext === '') { i++; continue; } // solo commento dentro l'item
+              const nkv = ntext.match(/^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/);
+              if (!nkv) break;
+              i++; // consuma la riga della chiave
+              assignItemValue(obj, nkv[1], nkv[2], nind);
             }
+            childItems.push(obj);
           } else {
-            break;
+            // lista di scalari
+            childItems.push(unquote(after.trim()));
+            i++;
           }
         }
         cur[key] = childItems;
@@ -208,8 +265,11 @@ function loadAllTasks(dir) {
     const text = readFileSync(join(dir, f), 'utf8');
     for (const block of extractYamlBlocks(text)) {
       const parsed = parseTasks(block);
-      // considera solo i blocchi che contengono task (hanno almeno un id)
-      if (parsed.some((t) => t.id)) tasks = tasks.concat(parsed.filter((t) => t.id));
+      // Considera un blocco "di task" se contiene almeno un task con id reale,
+      // ma INCLUDE anche i task con id vuoto/mancante, così vengono SEGNALATI
+      // dai controlli invece di sparire silenziosamente (no falso verde).
+      const hasRealTask = parsed.some((t) => typeof t.id === 'string' && t.id.trim().length > 0);
+      if (hasRealTask) tasks = tasks.concat(parsed);
     }
   }
   return { tasks, error: null };
@@ -237,15 +297,18 @@ check('TASKS_PRESENT', !error && tasks.length > 0,
 
 // Se non c'è nulla da validare, salta i controlli sullo schema ma resta FAIL.
 if (!error && tasks.length > 0) {
-  // (1) campi obbligatori non vuoti (L-COL-019)
+  // (1) campi obbligatori PRESENTI e con CONTENUTO non vacuo (L-COL-019 + schema §3)
   {
     const bad = [];
     for (const t of tasks) {
       const miss = [];
+      if (!nonEmptyStr(t.id)) miss.push('id');
       if (!nonEmptyStr(t.objective)) miss.push('objective');
       if (!nonEmptyList(t.definition_of_done)) miss.push('definition_of_done');
+      else if (!t.definition_of_done.every(nonEmptyStr)) miss.push('definition_of_done(voce vuota)');
       if (!nonEmptyList(t.acceptance_criteria)) miss.push('acceptance_criteria');
       if (!nonEmptyList(t.target_tests)) miss.push('target_tests');
+      else if (!t.target_tests.every((tt) => tt && nonEmptyStr(tt.file))) miss.push('target_tests(file mancante)');
       if (miss.length) bad.push(`${t.id || '(?)'}: manca ${miss.join(',')}`);
     }
     check('(1) REQUIRED_FIELDS', bad.length === 0,

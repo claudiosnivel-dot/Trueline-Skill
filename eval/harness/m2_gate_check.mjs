@@ -143,6 +143,127 @@ try { rmSync(TMP_NEG, { recursive: true, force: true }); } catch { /* best effor
 assert('fixture negativa rimossa (nessun residuo temp)', !existsSync(TMP_NEG),
   existsSync(TMP_NEG) ? 'directory ancora presente' : 'assente');
 
+// --- B2/B3/B4) Robustezza del parser e fedelta dei controlli -----------------
+// L'oracolo del piano (11 §5.1) deve: (i) ACCETTARE i blueprint validi scritti
+// negli idiomi YAML che la spec §3 dichiara supportati; (ii) RIFIUTARE i difetti
+// di contenuto, non solo quelli "di forma"; (iii) avere i template gate-ati.
+// Ogni fixture e usa-e-getta sotto eval/.tmp-m2-* (gitignorata) e poi rimossa.
+const TMP_ROB = resolve(ROOT, 'eval', '.tmp-m2-rob');
+function writeAndValidate(filename, lines) {
+  try { rmSync(TMP_ROB, { recursive: true, force: true }); } catch { /* idempotente */ }
+  mkdirSync(TMP_ROB, { recursive: true });
+  writeFileSync(resolve(TMP_ROB, filename), lines.join('\n'), 'utf8');
+  const r = nodeRun(VALIDATE_BP, [TMP_ROB, '--json']);
+  let rep = null; try { rep = JSON.parse(r.stdout); } catch { /* gestito */ }
+  try { rmSync(TMP_ROB, { recursive: true, force: true }); } catch { /* best effort */ }
+  return { status: r.status, rep };
+}
+
+console.log('');
+console.log('2b) Idiomi YAML VALIDI del subset 11 §3 (atteso: ACCETTA, exit 0):');
+// P1: covers come block-sequence multilinea (equivalente all'inline [A, B])
+const p1 = writeAndValidate('01.md', [
+  '```yaml', '- id: T-P1', '  title: "covers block-sequence"', '  macrotask: "m"', '  depends_on: []',
+  '  objective: >', '    Task valido con covers scritto come block-sequence.',
+  '  definition_of_done:', '    - "Artefatto osservabile"',
+  '  acceptance_criteria:',
+  '    - id: AC-P1-1', '      given: "g"', '      when: "w"', '      then: "t"',
+  '    - id: AC-P1-2', '      given: "g"', '      when: "w"', '      then: "t"',
+  '  target_tests:', '    - file: "tests/p1.test.ts"', '      covers:', '        - AC-P1-1', '        - AC-P1-2',
+  '```', '',
+]);
+assert('P1 covers come block-sequence ACCETTATA', p1.status === 0 && p1.rep && p1.rep.ok === true,
+  p1.rep ? `ok=${p1.rep.ok} exit=${p1.status}` : `exit=${p1.status}`);
+
+// P2: commenti di riga intera dentro le liste (prima del 1o item DoD; tra due AC)
+const p2 = writeAndValidate('01.md', [
+  '```yaml', '- id: T-P2', '  title: "commenti nelle liste"', '  macrotask: "m"', '  depends_on: []',
+  '  objective: >', '    Task valido con commenti di riga dentro le liste.',
+  '  definition_of_done:', '    # commento prima del primo item (YAML idiomatico, cfr esempio §3)', '    - "Artefatto osservabile"',
+  '  acceptance_criteria:',
+  '    - id: AC-P2-1', '      given: "g"', '      when: "w"', '      then: "t"',
+  '    # commento tra due criteri', '    - id: AC-P2-2', '      given: "g"', '      when: "w"', '      then: "t"',
+  '  target_tests:', '    - file: "tests/p2.test.ts"', '      covers: [AC-P2-1, AC-P2-2]',
+  '```', '',
+]);
+assert('P2 commenti di riga dentro le liste ACCETTATI', p2.status === 0 && p2.rep && p2.rep.ok === true,
+  p2.rep ? `ok=${p2.rep.ok} exit=${p2.status}` : `exit=${p2.status}`);
+
+// P3: block scalar (folded) dentro un item AC, con prosa multilinea reale
+const p3 = writeAndValidate('01.md', [
+  '```yaml', '- id: T-P3', '  title: "block scalar in AC"', '  macrotask: "m"', '  depends_on: []',
+  '  objective: >', '    Task valido con un then come block scalar.',
+  '  definition_of_done:', '    - "Artefatto osservabile"',
+  '  acceptance_criteria:',
+  '    - id: AC-P3-1', '      given: "g"', '      when: "w"',
+  '      then: >', '        esito osservabile descritto', '        su piu righe come folded scalar',
+  '  target_tests:', '    - file: "tests/p3.test.ts"', '      covers: [AC-P3-1]',
+  '```', '',
+]);
+assert('P3 block scalar dentro item AC ACCETTATO', p3.status === 0 && p3.rep && p3.rep.ok === true,
+  p3.rep ? `ok=${p3.rep.ok} exit=${p3.status}` : `exit=${p3.status}`);
+
+console.log('');
+console.log('2c) Difetti di CONTENUTO (atteso: RIFIUTA, exit 1):');
+// N1: definition_of_done con item stringa-vuota (lista non vuota ma vacua)
+const n1 = writeAndValidate('01.md', [
+  '```yaml', '- id: T-N1', '  title: "DoD vacuo"', '  macrotask: "m"', '  depends_on: []',
+  '  objective: >', '    Task con definition_of_done fatto di stringhe vuote.',
+  '  definition_of_done:', '    - ""', '    - ""',
+  '  acceptance_criteria:', '    - id: AC-N1-1', '      given: "g"', '      when: "w"', '      then: "t"',
+  '  target_tests:', '    - file: "tests/n1.test.ts"', '      covers: [AC-N1-1]',
+  '```', '',
+]);
+assert('N1 DoD con item vuoti RIFIUTATO', n1.status === 1 && n1.rep && n1.rep.ok === false,
+  n1.rep ? `ok=${n1.rep.ok} exit=${n1.status}` : `exit=${n1.status}`);
+
+// N2: target_test senza campo file (test non "nominato", schema §3)
+const n2 = writeAndValidate('01.md', [
+  '```yaml', '- id: T-N2', '  title: "target_test senza file"', '  macrotask: "m"', '  depends_on: []',
+  '  objective: >', '    Task con un target_test privo di file.',
+  '  definition_of_done:', '    - "Artefatto osservabile"',
+  '  acceptance_criteria:', '    - id: AC-N2-1', '      given: "g"', '      when: "w"', '      then: "t"',
+  '  target_tests:', '    - covers: [AC-N2-1]',
+  '```', '',
+]);
+assert('N2 target_test senza file RIFIUTATO', n2.status === 1 && n2.rep && n2.rep.ok === false,
+  n2.rep ? `ok=${n2.rep.ok} exit=${n2.status}` : `exit=${n2.status}`);
+
+// N3: task con id vuoto (non deve essere scartato silenziosamente)
+const n3 = writeAndValidate('01.md', [
+  '```yaml',
+  '- id: ""', '  title: "id vuoto"', '  macrotask: "m"', '  depends_on: []',
+  '  objective: >', '    Task con id vuoto: di per se invalido.',
+  '  definition_of_done:', '    - "x"',
+  '  acceptance_criteria:', '    - id: AC-N3-1', '      given: "g"', '      when: "w"', '      then: "t"',
+  '  target_tests:', '    - file: "tests/n3.test.ts"', '      covers: [AC-N3-1]',
+  '- id: T-N3', '  title: "task valido di contrasto"', '  macrotask: "m"', '  depends_on: []',
+  '  objective: >', '    Task valido per dare un blocco-task riconoscibile.',
+  '  definition_of_done:', '    - "x"',
+  '  acceptance_criteria:', '    - id: AC-N3-2', '      given: "g"', '      when: "w"', '      then: "t"',
+  '  target_tests:', '    - file: "tests/n3b.test.ts"', '      covers: [AC-N3-2]',
+  '```', '',
+]);
+assert('N3 task con id vuoto RIFIUTATO', n3.status === 1 && n3.rep && n3.rep.ok === false,
+  n3.rep ? `ok=${n3.rep.ok} exit=${n3.status} task_count=${n3.rep.task_count}` : `exit=${n3.status}`);
+
+console.log('');
+console.log('2d) Copertura template: 01-example-macrotask valida PULITO (11 §4, atteso exit 0):');
+const EXAMPLE_TPL = resolve(ROOT, 'trueline', 'references', 'blueprint', 'template', '01-example-macrotask.template.md');
+let tplOk = false, tplDetail = 'example template assente';
+if (existsSync(EXAMPLE_TPL)) {
+  try { rmSync(TMP_ROB, { recursive: true, force: true }); } catch { /* idempotente */ }
+  mkdirSync(TMP_ROB, { recursive: true });
+  writeFileSync(resolve(TMP_ROB, '01-example.md'), readFileSync(EXAMPLE_TPL, 'utf8'), 'utf8');
+  const t = nodeRun(VALIDATE_BP, [TMP_ROB, '--json']);
+  let trep = null; try { trep = JSON.parse(t.stdout); } catch { /* gestito */ }
+  try { rmSync(TMP_ROB, { recursive: true, force: true }); } catch { /* best effort */ }
+  tplOk = t.status === 0 && trep && trep.ok === true;
+  tplDetail = trep ? `ok=${trep.ok} task_count=${trep.task_count}` : `exit=${t.status}`;
+}
+assert('01-example-macrotask.template.md valida pulito', tplOk, tplDetail);
+assert('nessun residuo temp 2b-2d', !existsSync(TMP_ROB), existsSync(TMP_ROB) ? 'residuo' : 'assente');
+
 // --- C) Self-check semantico presente/applicabile (11 §5.2) ------------------
 console.log('');
 console.log('3) Self-check checklist semantica presente e applicabile (11 §5.2):');
@@ -166,24 +287,28 @@ console.log('4) I 3 prompt di lifecycle ben formati e parametrizzati (12 §3, §
 const prompts = ['project-start.md', 'session-start.md', 'session-end.md'];
 // Parametri attesi (12 §3) — almeno questi placeholder devono comparire.
 const requiredParams = ['{{project_name}}', '{{session_state_path}}', '{{macrotask_plan_with_dependencies}}'];
-// Invarianti non negoziabili (12 §5) — riferimenti L-COL che ogni prompt incorpora.
-const requiredInvariants = ['L-COL-002', 'L-COL-003', 'L-COL-005', 'L-COL-006', 'L-COL-024'];
+// Invarianti non negoziabili (12 §5) — TUTTI i riferimenti L-COL che ogni prompt
+// deve incorporare NEL TESTO EMESSO (incl. L-COL-021 dead-code e L-COL-025 deploy).
+const requiredInvariants = ['L-COL-002', 'L-COL-003', 'L-COL-005', 'L-COL-006', 'L-COL-021', 'L-COL-024', 'L-COL-025'];
 
 for (const p of prompts) {
   const fp = resolve(PROMPTS_DIR, p);
   if (!existsSync(fp)) { assert(`${p} esiste`, false, fp); continue; }
   const txt = readFileSync(fp, 'utf8');
   assert(`${p} esiste`, true, '');
-  // ben formato: contiene un blocco "Prompt da incollare" in un fence ```
-  const hasFence = /```[\s\S]*?```/.test(txt);
-  assert(`${p} ha un blocco prompt fenced`, hasFence, hasFence ? 'fence presente' : 'nessun fence ```');
-  // parametrizzato: i placeholder chiave presenti
-  const missParams = requiredParams.filter((q) => !txt.includes(q));
-  assert(`${p} parametrizzato (placeholder 12 §3)`, missParams.length === 0,
+  // ben formato: contiene un blocco "da incollare" in un fence ```. I controlli
+  // di sostanza si applicano SOLO al contenuto del fence (12 §5: gli invarianti
+  // devono stare nel testo EMESSO, non nelle note non-incollabili).
+  const fenceMatch = txt.match(/```[a-z]*\r?\n([\s\S]*?)```/);
+  const fenced = fenceMatch ? fenceMatch[1] : '';
+  assert(`${p} ha un blocco prompt fenced`, Boolean(fenceMatch), fenceMatch ? 'fence presente' : 'nessun fence ```');
+  // parametrizzato: i placeholder chiave presenti NEL FENCE
+  const missParams = requiredParams.filter((q) => !fenced.includes(q));
+  assert(`${p} parametrizzato nel fence (placeholder 12 §3)`, missParams.length === 0,
     missParams.length ? `mancano: ${missParams.join(', ')}` : `placeholder presenti`);
-  // invarianti incorporate (12 §5)
-  const missInv = requiredInvariants.filter((q) => !txt.includes(q));
-  assert(`${p} incorpora le invarianti (12 §5)`, missInv.length === 0,
+  // invarianti incorporate NEL FENCE (12 §5)
+  const missInv = requiredInvariants.filter((q) => !fenced.includes(q));
+  assert(`${p} incorpora le invarianti nel fence (12 §5)`, missInv.length === 0,
     missInv.length ? `mancano: ${missInv.join(', ')}` : 'tutte le invarianti citate');
 }
 
