@@ -1,0 +1,129 @@
+{
+  "$comment": "Registro dei difetti attesi del banco di prova M-1 (10-EVALUATION §2). Per ogni difetto seminato S1..S8: id, categoria, oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), stato-fix atteso a regime (04 §5), ancora ispezionabile (file+marker, o 'git-history' per S2), scope di scansione dell'oracolo (03 §5.2/§7), e note. I valori rispecchiano 10 §2 / 04 §3 / 03 §5. L'harness M-1 (run_eval.mjs) verifica solo che ogni difetto sia PRESENTE e ISPEZIONABILE; gli oracoli reali (M0+) sostituiranno gli anchor-check e produrranno il fix_state effettivo.",
+  "schema_version": "1.0",
+  "milestone": "M-1",
+  "reference_app": "eval/reference-app",
+  "seeded_blueprint": "eval/seeded-blueprint",
+  "defects": [
+    {
+      "id": "S1",
+      "category": "secret",
+      "source_oracle": "gitleaks",
+      "owasp": "A07:2025",
+      "owasp_alt": "A02:2025",
+      "cwe": "CWE-798",
+      "expected_fix_state": "verified",
+      "anchor": {
+        "file": "eval/reference-app/src/lib/config.ts",
+        "marker": "SEED:S1"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Service_role key hardcoded nel sorgente, PRESENTE nel working tree. Scope BUILD = scansione gitleaks del working tree (03 §5.2): rimuovendo il literal dal sorgente la riesecuzione e pulita -> verified. Valore di fixture DIVERSO dal segreto di S2."
+    },
+    {
+      "id": "S2",
+      "category": "secret",
+      "source_oracle": "gitleaks",
+      "owasp": "A07:2025",
+      "cwe": "CWE-798",
+      "expected_fix_state": "mitigated-residual",
+      "anchor": {
+        "file": "eval/reference-app/src/legacy/credentials.ts",
+        "marker": "git-history",
+        "history_path": "src/legacy/credentials.ts"
+      },
+      "scan_scope": "history",
+      "notes": "Segreto presente SOLO nella git history della reference app (add-then-remove); il working tree e pulito (il file non esiste piu). Scope REMEDIATE = scansione gitleaks della history completa (03 §5.2): la rimozione dalla history e una riscrittura distruttiva (gate umano, L-COL-024) -> mitigated-residual, NON verified (04 §5). Valore di fixture DIVERSO dal segreto di S1."
+    },
+    {
+      "id": "S3",
+      "category": "rls",
+      "source_oracle": "rls-check",
+      "owasp": "A01:2025",
+      "cwe": "CWE-285",
+      "expected_fix_state": "verified",
+      "anchor": {
+        "file": "eval/reference-app/supabase/migrations/0001_init.sql",
+        "marker": "SEED:S3",
+        "table": "public.audit_logs"
+      },
+      "scan_scope": "static-ddl",
+      "notes": "Tabella in schema public SENZA 'ENABLE ROW LEVEL SECURITY'. Rilevabile staticamente dal checker RLS sulla DDL delle migration. Nel set verificato-a-zero v1 (04 §3): abilitando RLS + policy il checker riesieguito azzera il finding -> verified."
+    },
+    {
+      "id": "S4",
+      "category": "rls",
+      "source_oracle": "rls-check",
+      "owasp": "A01:2025",
+      "cwe": "CWE-285",
+      "expected_fix_state": "verified",
+      "anchor": {
+        "file": "eval/reference-app/supabase/migrations/0001_init.sql",
+        "marker": "SEED:S4",
+        "table": "public.documents",
+        "policy": "documents_read_all"
+      },
+      "scan_scope": "static-ddl",
+      "notes": "Policy con 'USING (true)': isolamento finto (ogni riga visibile a chiunque). Rilevabile staticamente dal checker RLS sulla DDL. Set verificato-a-zero v1: sostituendo la condizione con un vincolo per auth.uid()/tenant il checker torna pulito -> verified."
+    },
+    {
+      "id": "S5",
+      "category": "rls",
+      "source_oracle": "rls-check",
+      "owasp": "A01:2025",
+      "cwe": "CWE-285",
+      "expected_fix_state": "verified",
+      "anchor": {
+        "file": "eval/reference-app/supabase/migrations/0001_init.sql",
+        "marker": "SEED:S5",
+        "table": "public.invoices",
+        "policy": "invoices_visible_when_not_draft"
+      },
+      "scan_scope": "dynamic-db",
+      "notes": "Tabella multi-tenant (tenant_id) la cui policy NON vincola per auth.uid() ne per tenant_id (filtra solo per status). La verifica comportamentale passa dal DB di test (rls-check [DB-test], 10 §2): per il set in-scope con DB di test attivo, expected_fix_state = verified. Senza DB di test il controllo DEGRADA al checker statico e si dichiara (06 §6.1)."
+    },
+    {
+      "id": "S6",
+      "category": "injection",
+      "source_oracle": "semgrep",
+      "owasp": "A05:2025",
+      "cwe": "CWE-89",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "eval/reference-app/src/db.ts",
+        "marker": "SEED:S6"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Query SQL costruita per concatenazione di input utente. Categoria detection-only (04 §3, L-COL-010): trovata, spiegata, prioritizzata, MA non auto-fixata nel set verificato. In REMEDIATE la skill puo proporre una fix (remediation piena, L-COL-023) senza elevare la categoria a verificata-a-zero."
+    },
+    {
+      "id": "S7",
+      "category": "authz",
+      "source_oracle": "semgrep",
+      "owasp": "A01:2025",
+      "cwe": "CWE-862",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "eval/reference-app/src/routes/bookings.ts",
+        "marker": "SEED:S7"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Route mutante (POST/PUT) che scrive su DB con service_role (bypassa RLS) SENZA check di identita/ruolo. Categoria detection-only (04 §3): trovata e prioritizzata, non auto-fixata nel set verificato. Nessun falso 'via libera' (10 §3, criterio 3)."
+    },
+    {
+      "id": "S8",
+      "category": "dead-code",
+      "source_oracle": "knip",
+      "owasp": null,
+      "cwe": null,
+      "expected_fix_state": "verified",
+      "anchor": {
+        "file": "eval/reference-app/src/legacy/unused.ts",
+        "marker": "SEED:S8",
+        "symbol": "formatLegacyBookingLabel"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Export/funzione esportata che nessun entry importa (igiene, nessun OWASP). Set verificato-a-zero v1 tramite RIMOZIONE (gate umano): knip riesieguito non segnala piu il morto -> verified. Il controllo 1 del checkpoint blocca per DELTA (nuovo morto), non per severita (04 §4)."
+    }
+  ]
+}
