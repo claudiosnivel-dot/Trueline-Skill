@@ -6,9 +6,9 @@
 |---|---|
 | **Progetto** | Trueline (`COL`) — ex codename *Collaudo*, nome bloccato in `O-COL-001` |
 | **Versione suite** | **v1.0** |
-| **Ultima sessione** | Impl. — **M-1 + M0** completati (gate verdi, verificati indipendentemente). |
+| **Ultima sessione** | Impl. — **M-1 + M0 + M1** completati e verificati; M-1+M0 mergeati su `main`. |
 | **Data** | 15 giugno 2026 |
-| **Fase** | **Implementazione in corso** via Dynamic Workflows. **M-1 ✅ · M0 ✅** → prossima: **M1 — Checkpoint & loop**. |
+| **Fase** | **Implementazione in corso** via Dynamic Workflows. **M-1 ✅ · M0 ✅ (su main) · M1 ✅** → prossima: **M2 — Motore di blueprint**. |
 
 ---
 
@@ -23,7 +23,7 @@
 - **Chiusa `O-COL-001`**: nome = **Trueline** (brand check fatto; "trueforge" scartato per collisione con un'umbrella dev esistente). **Rename Collaudo→Trueline** applicato a tutta la suite.
 - **Due nuovi lock**: `L-COL-027` (Dynamic Workflows) e `L-COL-028` (policy conservativa FP promossa). `validate_blueprint` **resta meccanismo** di `L-COL-019`. **Aperta `O-COL-010`** (piano Max).
 
-Prossimo: **M1 — Checkpoint & loop** (`01` §4 + `05`): `run_checkpoint`, macchina del verify-fix loop, retry `O-COL-006`, git a strati + detector di deploy-coupling. Gate: il set in scope raggiunge `fix_state: verified`, `S2` resta `mitigated-residual`, git a strati esercitato (`10` §3-§4). **Qui si tara e si pinna il budget `O-COL-006`** sulla reference app (`10` §6 → `references/oracles/thresholds.md`). M-1 e M0 sono **completati e verificati** (vedi §1bis).
+Prossimo: **M2 — Motore di blueprint** (`11` + `12`): `validate_blueprint` (strutturale) + checklist di self-check (semantica) + template del blueprint in formato-utente + i 3 prompt di lifecycle in `assets/prompts/`. Gate: `validate_blueprint` pulito + self-check sul **blueprint seminato** (`eval/seeded-blueprint/`, già presente da M-1) → `10` §4 criterio 5. M-1, M0, M1 sono **completati e verificati** (vedi §1bis); il budget `O-COL-006` ha default provvisori in `thresholds.md`, pin empirico → parity gate M5.
 
 > **Sweep di coerenza (post-chiusura).** Applicata una passata di coerenza sulla suite — riallineamento di note stale al ledger v1.0: `L-COL-028` in `08`, `validate_blueprint`-resta-meccanismo in `11`, emendamento `L-COL-026` applicato in `07`, deploy-coupling congelato in `01`, pin di dipendenza `03`/`04`→v0.2 (in `05`/`07`/`08`) e `00-INDEX`→v1.0 (in `01`), tassonomia OWASP-2025 in `04` §3, prerequisito **banco di prova M-1** in `DYNAMIC-WORKFLOWS` §8 e qui. Aggiunti i 3 prompt di build-time (`PROMPT-PROJECT-START`/`-SESSION-START`/`-SESSION-END`). **Nessuna decisione cambiata**: solo riallineamento editoriale a v1.0.
 
@@ -33,7 +33,11 @@ Prossimo: **M1 — Checkpoint & loop** (`01` §4 + `05`): `run_checkpoint`, macc
 |---|---|---|
 | **M-1 — Banco di prova** | ✅ **verde** (15 giu 2026) | auto-gate present+inspectable superato; verificato indipendentemente dall'orchestratore. |
 | **M0 — Oracoli & finding** | ✅ **verde** (15 giu 2026) | detection `S1/S2/S3/S4/S5/S8` via oracoli reali (EXIT=0, verificato indip.); `S6/S7` differiti a M4. 12 finding validano `finding.schema.json`. Branch `m0/oracoli-finding` (`f45a26d`). |
-| **M1 — Checkpoint & loop** | ⏭️ prossima | `run_checkpoint` (4 controlli), macchina verify-fix loop, retry `O-COL-006`, deploy-coupling. **Tara/pinna il budget `O-COL-006`** (`10` §6). |
+| **M1 — Checkpoint & loop** | ✅ **verde** (15 giu) | gate `eval/harness/m1_gate_check.mjs` **21/21** (verificato indip.): `S1/S3/S4/S5/S8`→`verified`, `S2`→`mitigated-residual` (mai verified), git a strati (4 scenari + distruttiva bloccata), checkpoint 1-2 verdi/3-4 degradati onesti. `loop.test` 6/6. Branch `m1/checkpoint-loop` (`f785b81`). |
+| **M2 — Motore di blueprint** | ⏭️ prossima | `11` + `12`: `validate_blueprint`, template blueprint, 3 prompt di lifecycle (`assets/prompts/`). Gate: `validate_blueprint` pulito + self-check sul blueprint seminato (`10` §4, criterio 5). |
+
+> **Merge su `main` (human-gated, 15 giu):** M-1 + M0 mergeati su `main` (`c0098c7`, `--no-ff`) dopo verifica indipendente dei gate. M1 resta su branch `m1/checkpoint-loop` (`f785b81`), merge su `main` da decidere.
+> **Recovery M1 (15 giu):** il workflow M1 abortì al barrier W1 per un **errore d'infrastruttura** ("API Error: Overloaded") sul build di `M1.1-baseline`; gli agenti paralleli avevano però completato la sostanza **e** fatto operazioni git autonome (cambio branch + `git add -A`) lasciando un commit mal-etichettato con artefatti temp. Bonificato: lavoro consolidato in **un commit M1 pulito** su `m1/checkpoint-loop`, branch-runtime del loop eliminato, `eval/.tmp-*/` gitignorato. Gate ri-verificato verde. **Lezione per M2+:** vincolare gli agenti del workflow a NON toccare git (solo scaffold+integrate dell'orchestratore); vedi [[trueline-workflow-orchestration]].
 
 **Toolchain installata (preflight 15 giu, human-gated):** gitleaks + osv-scanner 1.9.2 (`C:\Users\claud\go\bin`); knip 6.16.1 + `pgsql-ast-parser` 12.0.2 (npm); **semgrep 1.165.0 via Docker** (`semgrep/semgrep:latest`, mount Windows verificato).
 
