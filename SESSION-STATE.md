@@ -6,9 +6,9 @@
 |---|---|
 | **Progetto** | Trueline (`COL`) — ex codename *Collaudo*, nome bloccato in `O-COL-001` |
 | **Versione suite** | **v1.0** |
-| **Ultima sessione** | Chat E — Packaging, distribuzione, collaudo, Dynamic Workflows. **Blueprint chiuso.** |
-| **Data** | 14 giugno 2026 |
-| **Fase** | **Blueprint chiuso. Implementazione sbloccata**, orchestrata via Dynamic Workflows (`DYNAMIC-WORKFLOWS.md`). |
+| **Ultima sessione** | Impl. — **M-1 + M0** completati (gate verdi, verificati indipendentemente). |
+| **Data** | 15 giugno 2026 |
+| **Fase** | **Implementazione in corso** via Dynamic Workflows. **M-1 ✅ · M0 ✅** → prossima: **M1 — Checkpoint & loop**. |
 
 ---
 
@@ -23,9 +23,33 @@
 - **Chiusa `O-COL-001`**: nome = **Trueline** (brand check fatto; "trueforge" scartato per collisione con un'umbrella dev esistente). **Rename Collaudo→Trueline** applicato a tutta la suite.
 - **Due nuovi lock**: `L-COL-027` (Dynamic Workflows) e `L-COL-028` (policy conservativa FP promossa). `validate_blueprint` **resta meccanismo** di `L-COL-019`. **Aperta `O-COL-010`** (piano Max).
 
-Prossimo: **avvio implementazione** secondo la mappa di milestone (`DYNAMIC-WORKFLOWS` §8): prima il **banco di prova M-1** (le fixture di gate di `10`: reference app + `S1–S8`, DB di test RLS, blueprint seminato, harness), poi **M0 — Oracoli & finding**.
+Prossimo: **M1 — Checkpoint & loop** (`01` §4 + `05`): `run_checkpoint`, macchina del verify-fix loop, retry `O-COL-006`, git a strati + detector di deploy-coupling. Gate: il set in scope raggiunge `fix_state: verified`, `S2` resta `mitigated-residual`, git a strati esercitato (`10` §3-§4). **Qui si tara e si pinna il budget `O-COL-006`** sulla reference app (`10` §6 → `references/oracles/thresholds.md`). M-1 e M0 sono **completati e verificati** (vedi §1bis).
 
 > **Sweep di coerenza (post-chiusura).** Applicata una passata di coerenza sulla suite — riallineamento di note stale al ledger v1.0: `L-COL-028` in `08`, `validate_blueprint`-resta-meccanismo in `11`, emendamento `L-COL-026` applicato in `07`, deploy-coupling congelato in `01`, pin di dipendenza `03`/`04`→v0.2 (in `05`/`07`/`08`) e `00-INDEX`→v1.0 (in `01`), tassonomia OWASP-2025 in `04` §3, prerequisito **banco di prova M-1** in `DYNAMIC-WORKFLOWS` §8 e qui. Aggiunti i 3 prompt di build-time (`PROMPT-PROJECT-START`/`-SESSION-START`/`-SESSION-END`). **Nessuna decisione cambiata**: solo riallineamento editoriale a v1.0.
+
+## 1bis. Avanzamento implementazione (milestone)
+
+| Milestone | Stato | Note |
+|---|---|---|
+| **M-1 — Banco di prova** | ✅ **verde** (15 giu 2026) | auto-gate present+inspectable superato; verificato indipendentemente dall'orchestratore. |
+| **M0 — Oracoli & finding** | ✅ **verde** (15 giu 2026) | detection `S1/S2/S3/S4/S5/S8` via oracoli reali (EXIT=0, verificato indip.); `S6/S7` differiti a M4. 12 finding validano `finding.schema.json`. Branch `m0/oracoli-finding` (`f45a26d`). |
+| **M1 — Checkpoint & loop** | ⏭️ prossima | `run_checkpoint` (4 controlli), macchina verify-fix loop, retry `O-COL-006`, deploy-coupling. **Tara/pinna il budget `O-COL-006`** (`10` §6). |
+
+**Toolchain installata (preflight 15 giu, human-gated):** gitleaks + osv-scanner 1.9.2 (`C:\Users\claud\go\bin`); knip 6.16.1 + `pgsql-ast-parser` 12.0.2 (npm); **semgrep 1.165.0 via Docker** (`semgrep/semgrep:latest`, mount Windows verificato).
+
+**Artefatti M0** (branch `m0/oracoli-finding`, `f45a26d`; stack: `f45a26d`←`d3d7116`←`5a84bb6`, `main` intatto):
+- `trueline/scripts/oracles/` — `run_gitleaks.mjs` (working-tree + history, redatto), `rls_check.mjs` (custom, pgsql-ast-parser, controlli RLS001/003/004…), `run_deadcode.mjs` (knip), `run_osv.mjs`, `run_semgrep.mjs` (Docker, ruleset **placeholder** + `// TODO M4`), `gitleaks.toml`.
+- `trueline/scripts/findings/` — `finding.schema.json`, `normalize.mjs` (native→finding, fingerprint, dedup, OWASP→2025 con `// TODO M4` per la mappa autoritativa `07` §3.1), `validate_finding.mjs`.
+- `trueline/references/finding-model.md` · `trueline/references/oracles/semgrep-ai-ruleset/placeholder.yml`.
+- `eval/harness/run_eval.mjs` — modalità `--mode=detection` (oracoli reali, criterio 1) oltre a `--mode=present`.
+
+**Artefatti M-1** — branch `m-1/banco-di-prova` (commit `d3d7116`); `main` intatto a `5a84bb6` (merge human-gated, `L-COL-024`):
+- `eval/reference-app/` — **repo git indipendente** (gitignorato dal repo esterno): `S1,S6,S7,S8` nel working tree; `S2` add-then-remove in history (`386f02b`→`990fe79`); `supabase/migrations/0001_init.sql` con `S3` (`public.audit_logs`, no RLS), `S4` (`documents_read_all`, `USING (true)`), `S5` (`invoices`, policy senza `auth.uid()`) + tabelle pulite di contrasto.
+- `eval/seeded-blueprint/` — blueprint valido (3 task `T-001…003`, 7 acceptance_criteria tutti coperti, DAG aciclico).
+- `eval/harness/` — `run_eval.mjs` (exit 0), `validate_blueprint.mjs`, `expected/registry.json` (S1–S8: `category`/`source_oracle`/OWASP-2025/`scan_scope`). Hook `// TODO M0` segnano dove M0 innesta gli oracoli reali.
+- `eval/db-test/` — `config.toml` + `up.sh`/`up.ps1` + **nota di degradazione dichiarata**; live `supabase start` differito a M0/M3.
+
+**Toolchain (preflight 15 giu):** presenti node 25.5 · npm 11.8 · git 2.52 · docker 29.5 · go 1.26 · python 3.14. Mancanti (→ M0): supabase-CLI · semgrep · gitleaks · osv-scanner.
 
 ## 2. File prodotti / stato
 

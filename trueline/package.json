@@ -1,0 +1,10 @@
+{
+  "name": "trueline",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Trueline — Agent Skill blueprint-first build-e-verifica oracle-first (scripts/oracoli)",
+  "dependencies": {
+    "pgsql-ast-parser": "^12.0.2"
+  }
+}
