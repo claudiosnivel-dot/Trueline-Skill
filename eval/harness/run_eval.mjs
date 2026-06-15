@@ -1,41 +1,56 @@
 #!/usr/bin/env node
 // run_eval.mjs — harness di regressione/detection del banco di prova (10-EVALUATION §5).
-// Node ESM, SOLO moduli built-in (fs, path, child_process, url): nessun npm install,
-// nessuna dipendenza di rete. E l'aggancio che TUTTE le milestone successive
-// consumano come gate dei task (DYNAMIC-WORKFLOWS §6).
+// Node ESM, SOLO moduli built-in (fs, path, child_process, url) PIU' l'adapter
+// del finding model (trueline/scripts/findings/normalize.mjs, anch'esso solo
+// built-in): nessun npm install, nessuna dipendenza di rete. E l'aggancio che
+// TUTTE le milestone successive consumano come gate dei task (DYNAMIC-WORKFLOWS §6).
 //
 // -----------------------------------------------------------------------------
-// COSA FA OGGI (M-1) — auto-gate "present & inspectable".
+// DUE MODALITA' (--mode=present | --mode=detection).
 // -----------------------------------------------------------------------------
-// Per ogni voce S1..S8 del registry (expected/registry.json) verifica con
-// controlli DETERMINISTICI built-in che il difetto seminato sia PRESENTE e
-// ISPEZIONABILE (NON che sia gia corretto):
-//   - anchor-grep nei sorgenti                  -> S1, S6, S7, S8
-//   - condizione DDL nelle migration            -> S3 (niente ENABLE RLS),
-//                                                   S4 (USING (true)),
-//                                                   S5 (policy senza auth.uid()/tenant)
-//   - ispezione della git history (child_process) -> S2 (add-then-remove,
-//                                                   working tree pulito)
-// Verifica anche che eval/seeded-blueprint sia strutturalmente valido,
-// riusando la logica di T-1.3 (validate_blueprint.mjs invocato come processo).
 //
-// Stampa un report leggibile (S1..S8 OK/FAIL + blueprint OK/FAIL) ed esce con
-// codice 0 SOLO se tutto e present+inspectable, altrimenti exit 1.
+// MODE=present (default, banco di prova M-1) — auto-gate "present & inspectable".
+//   Per ogni voce S1..S8 del registry (expected/registry.json) verifica con
+//   controlli DETERMINISTICI built-in che il difetto seminato sia PRESENTE e
+//   ISPEZIONABILE (NON che sia gia corretto):
+//     - anchor-grep nei sorgenti                  -> S1, S6, S7, S8
+//     - condizione DDL nelle migration            -> S3 (niente ENABLE RLS),
+//                                                     S4 (USING (true)),
+//                                                     S5 (policy senza auth.uid()/tenant)
+//     - ispezione della git history (child_process) -> S2 (add-then-remove,
+//                                                     working tree pulito)
+//   Verifica anche che eval/seeded-blueprint sia strutturalmente valido,
+//   riusando la logica di T-1.3 (validate_blueprint.mjs invocato come processo).
+//   Esce 0 SOLO se tutto e present+inspectable, altrimenti exit 1.
+//
+// MODE=detection (M0, gate headline 10 §3 criterio 1, PARZIALE per §10b) —
+//   per OGNI difetto in scope-M0 (S1,S2,S3,S4,S5,S8) ESEGUE l'ORACOLO REALE,
+//   normalizza l'output nativo nel FINDING MODEL (04) e ASSERISCE che esista
+//   un finding con la category e il source_oracle attesi dal registry:
+//     S1 -> gitleaks (working-tree)   S2 -> gitleaks (history, commit 386f02b)
+//     S3/S4/S5 -> rls_check (DDL)     S8 -> knip (dead-code)
+//   NIENTE docker nel gate: S6 (injection) e S7 (authz) sono DIFFERITI a M4
+//   (serve il ruleset Semgrep curato) e vengono stampati come "DEFERRED M4".
+//   Il finding e' prodotto dall'ORACOLO (non da ispezione LLM): e' il "verde"
+//   come fatto deterministico (L-COL-002). Esce 0 SOLO se tutti gli S in
+//   scope-M0 sono DETECTED dall'oracolo corretto, altrimenti exit 1.
 //
 // -----------------------------------------------------------------------------
-// COSA FARA (M0+) — vedi gli hook "// TODO M0:" / "// TODO M3:" / "// TODO M5:".
+// COSA RESTA (M3/M5) — vedi gli hook "// TODO M3:" / "// TODO M5:".
 // -----------------------------------------------------------------------------
-// Gli anchor-check di M-1 sono uno SCHELETRO dichiaratamente parziale: NON
-// eseguono gli oracoli reali. In M0+ ogni anchor-check sara sostituito
-// dall'esecuzione del VERO oracolo (gitleaks / Semgrep / rls-check / knip),
-// normalizzato nel finding model (04), per asserire la DETECTION (10 §3,
-// criterio 1). In M3/M5 si aggiungono le asserzioni dei due parity gate
-// (gate di verifica, 10 §3; gate di build, 10 §4).
+//   - M3/M5: i due PARITY GATE (gate di verifica, 10 §3; gate di build, 10 §4).
+//   - M4: detection di S6/S7 via Semgrep (ruleset AI curato, 07 §4) integrata
+//     nel gate detection (oggi DEFERRED M4, niente docker nel gate).
 
 import { readFileSync, existsSync } from 'node:fs';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname, resolve, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+
+// Adapter del finding model (04): normalizza l'output NATIVO degli oracoli nei
+// finding strutturati su cui il gate detection asserisce. Solo built-in a valle.
+import { normalize } from '../../trueline/scripts/findings/normalize.mjs';
+import { validateMany } from '../../trueline/scripts/findings/validate_finding.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HARNESS_DIR = __dirname;
@@ -45,6 +60,25 @@ const REFERENCE_APP = resolve(EVAL_DIR, 'reference-app');
 const SEEDED_BLUEPRINT = resolve(EVAL_DIR, 'seeded-blueprint');
 const REGISTRY_PATH = resolve(HARNESS_DIR, 'expected', 'registry.json');
 const VALIDATE_BLUEPRINT = resolve(HARNESS_DIR, 'validate_blueprint.mjs');
+
+// Oracoli reali (03), eseguiti come processi figli in mode=detection.
+const ORACLES_DIR = resolve(ROOT_DIR, 'trueline', 'scripts', 'oracles');
+const RUN_GITLEAKS = resolve(ORACLES_DIR, 'run_gitleaks.mjs');
+const RLS_CHECK = resolve(ORACLES_DIR, 'rls_check.mjs');
+const RUN_DEADCODE = resolve(ORACLES_DIR, 'run_deadcode.mjs');
+const MIGRATIONS_DIR = resolve(REFERENCE_APP, 'supabase', 'migrations');
+
+// go/bin dove vivono gitleaks/osv (NON sul PATH in questo ambiente): lo
+// aggiungiamo al PATH passato ai processi figli (l'oracolo lo ripiega comunque,
+// ma lo rendiamo esplicito qui per robustezza — vedi prompt M0).
+const GO_BIN = process.platform === 'win32'
+  ? 'C:/Users/claud/go/bin'
+  : '/c/Users/claud/go/bin';
+
+// Difetti in scope-M0 per il gate detection (10 §3 criterio 1).
+const SCOPE_M0 = new Set(['S1', 'S2', 'S3', 'S4', 'S5', 'S8']);
+// Difetti differiti a M4 (Semgrep via docker, NON nel gate M0).
+const DEFERRED_M4 = new Set(['S6', 'S7']);
 
 // --- Helper di lettura/ricerca deterministici (solo built-in) ----------------
 
@@ -73,11 +107,9 @@ function mk(ok, detail) {
 
 // Anchor-grep nei sorgenti: il marker "SEED:Sn" e presente nel file atteso.
 // Usato per S1 (secret working-tree), S6 (injection), S7 (authz), S8 (dead-code).
-// TODO M0: sostituire con l'esecuzione del vero oracolo e l'asserzione di
-//   detection sul finding model (04): S1 -> gitleaks (working tree, redatto,
-//   03 §5.2); S6/S7 -> Semgrep (ruleset AI curato, 07 §4); S8 -> knip
-//   (export non referenziato). Qui M0 verifichera che l'oracolo EMETTA il
-//   finding atteso con category/source_oracle/owasp coerenti col registry.
+// NOTA: la DETECTION da oracolo reale (S1 -> gitleaks, S8 -> knip) e fatta in
+//   --mode=detection (runDetection). Qui in --mode=present restiamo all'anchor
+//   "present & inspectable" (M-1). S6/S7 -> Semgrep: detection a M4.
 function checkAnchorGrep(entry) {
   const file = abs(entry.anchor.file);
   const marker = entry.anchor.marker;
@@ -94,8 +126,8 @@ function checkAnchorGrep(entry) {
 // S3 — tabella in schema public SENZA "ENABLE ROW LEVEL SECURITY".
 // Controllo DDL: la migration contiene il CREATE TABLE della tabella attesa
 // e per quella tabella NON viene mai emesso "ENABLE ROW LEVEL SECURITY".
-// TODO M0: sostituire con rls-check reale (03 §5/30) che parsa la DDL e emette
-//   il finding 'rls-missing' (rule_id) normalizzato nel finding model.
+// NOTA: la DETECTION da rls_check reale (RLS001_MISSING_RLS) e fatta in
+//   --mode=detection; qui in --mode=present resta il controllo DDL "present".
 function checkS3NoRls(entry) {
   const file = abs(entry.anchor.file);
   if (!existsSync(file)) return mk(false, `migration assente: ${entry.anchor.file}`);
@@ -123,7 +155,8 @@ function checkS3NoRls(entry) {
 
 // S4 — policy con "USING (true)" (isolamento finto).
 // Controllo DDL: la migration contiene una USING (true) marcata con l'anchor.
-// TODO M0: sostituire con rls-check reale -> finding 'rls-using-true'.
+// NOTA: la DETECTION da rls_check reale (RLS003_PERMISSIVE_TRUE) e fatta in
+//   --mode=detection; qui resta il controllo DDL "present".
 function checkS4UsingTrue(entry) {
   const file = abs(entry.anchor.file);
   if (!existsSync(file)) return mk(false, `migration assente: ${entry.anchor.file}`);
@@ -143,11 +176,12 @@ function checkS4UsingTrue(entry) {
 // S5 — tabella multi-tenant la cui policy NON vincola per auth.uid()/tenant.
 // Controllo DDL: isola il blocco della CREATE POLICY attesa e verifica che il
 // suo predicato USING non referenzi ne auth.uid() ne tenant_id.
-// TODO M0: questo difetto e DYNAMIC (scan_scope=dynamic-db): in M-1 lo ispezioniamo
-//   staticamente sulla DDL; il vero controllo comportamentale gira sul DB di
-//   test (rls-check [DB-test], 10 §2). Sostituire con l'asserzione runtime quando
-//   il DB di test e attivo; degradazione dichiarata al checker statico se assente
-//   (06 §6.1).
+// NOTA: la DETECTION da rls_check reale (RLS004_MISSING_TENANT_PREDICATE,
+//   euristica static-first) e fatta in --mode=detection; qui resta il controllo
+//   DDL "present". Questo difetto e DYNAMIC (scan_scope=dynamic-db): il vero
+//   controllo comportamentale per-tenant gira sul DB di test (rls-check [DB-test],
+//   10 §2), con degradazione dichiarata al checker statico se il DB non c'e
+//   (06 §6.1). // TODO M3+: asserzione runtime quando il DB di test e attivo.
 function checkS5NoTenantIsolation(entry) {
   const file = abs(entry.anchor.file);
   if (!existsSync(file)) return mk(false, `migration assente: ${entry.anchor.file}`);
@@ -177,8 +211,8 @@ function checkS5NoTenantIsolation(entry) {
 // Ispeziona la history con git -C <reference-app> log -p -- <history_path>:
 // deve mostrare un add-then-remove (il file e stato aggiunto e poi rimosso) e
 // il working tree deve essere PULITO (il file non esiste piu).
-// TODO M0: sostituire con gitleaks sulla HISTORY (scope REMEDIATE, 03 §5.2),
-//   redatto (--redact), che emette il finding 'secret' -> mitigated-residual.
+// NOTA: la DETECTION da gitleaks sulla HISTORY (scope REMEDIATE, 03 §5.2,
+//   redatto) e fatta in --mode=detection; qui resta l'ispezione git "present".
 function checkS2History(entry) {
   const historyPath = entry.anchor.history_path; // relativo alla reference app
   if (!existsSync(REFERENCE_APP)) {
@@ -294,9 +328,228 @@ function loadRegistry() {
   return reg;
 }
 
-// --- Esecuzione ---------------------------------------------------------------
+// =============================================================================
+// MODE=detection (M0) — esegue gli ORACOLI REALI, normalizza nel finding model
+// e asserisce la DETECTION per ogni difetto in scope-M0 (10 §3, criterio 1).
+// =============================================================================
 
-function main() {
+// Esegue un oracolo come processo figlio e ne parsa lo stdout JSON. Decide
+// l'esito dal REPORT, non dall'exit code (03 §3): JSON valido => run riuscita.
+// Ritorna { ok, json, detail }. PATH arricchito col go/bin per gitleaks/osv.
+function runOracle(scriptPath, args, { cwd = ROOT_DIR } = {}) {
+  if (!existsSync(scriptPath)) {
+    return { ok: false, json: null, detail: `oracolo assente: ${scriptPath}` };
+  }
+  const env = {
+    ...process.env,
+    PATH: `${process.env.PATH || ''}${delimiter}${GO_BIN}`,
+  };
+  const res = spawnSync(process.execPath, [scriptPath, ...args], {
+    cwd,
+    env,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (res.error) {
+    return { ok: false, json: null, detail: `spawn fallito: ${res.error.message}` };
+  }
+  const raw = (res.stdout || '').trim();
+  if (!raw) {
+    const errTail = (res.stderr || '').trim().split('\n').slice(-1)[0] || '(stderr vuoto)';
+    return { ok: false, json: null, detail: `nessun JSON su stdout (exit=${res.status}): ${errTail}` };
+  }
+  try {
+    return { ok: true, json: JSON.parse(raw), detail: `exit=${res.status}` };
+  } catch (e) {
+    return { ok: false, json: null, detail: `stdout non e JSON valido: ${e.message}` };
+  }
+}
+
+// Normalizza l'output nativo nel finding model e valida i finding contro lo
+// schema (04): un finding malformato a monte e' un FAIL (mai un falso verde).
+// Ritorna { ok, findings, detail }.
+function normalizeAndValidate(oracle, native, opts) {
+  let findings;
+  try {
+    findings = normalize(oracle, native, opts);
+  } catch (e) {
+    return { ok: false, findings: [], detail: `normalize(${oracle}) ha lanciato: ${e.message}` };
+  }
+  const v = validateMany(findings);
+  if (!v.ok) {
+    return {
+      ok: false,
+      findings,
+      detail: `finding non conformi allo schema 04: ${v.errors.slice(0, 2).join('; ')}`,
+    };
+  }
+  return { ok: true, findings, detail: `${findings.length} finding normalizzati e validi` };
+}
+
+// Predicati di match: un difetto e' DETECTED se esiste >=1 finding con la
+// category attesa, prodotto dall'oracolo atteso (source_oracle.oracle), che
+// insiste sul punto giusto (file / tabella-policy / simbolo dal registry).
+// La firma POSIX del path atteso e' repo-relativa (come la normalizzazione).
+function expectedPath(entry) {
+  // anchor.file e' gia repo-relativo POSIX (eval/reference-app/...).
+  return String(entry.anchor.file).replace(/\\/g, '/');
+}
+
+// Per S2 (history) il path nativo e' "src/..." e l'adapter lo prefissa con la
+// base reference-app: l'atteso e' eval/reference-app/<history_path>.
+function expectedHistoryPath(entry) {
+  return `eval/reference-app/${String(entry.anchor.history_path).replace(/\\/g, '/')}`;
+}
+
+// Match per categoria + oracolo + localizzazione. Per rls usiamo policy/table;
+// per i segreti e il dead-code usiamo il path del file.
+function matchFinding(entry, findings) {
+  const wantOracle = entry.source_oracle;
+  const wantCat = entry.category;
+  const byCatOracle = findings.filter(
+    (f) => f.category === wantCat && f.source_oracle.oracle === wantOracle,
+  );
+  if (byCatOracle.length === 0) return null;
+
+  if (entry.id === 'S2') {
+    const wantFile = expectedHistoryPath(entry);
+    return byCatOracle.find((f) => f.location.file === wantFile) || null;
+  }
+  if (wantCat === 'rls') {
+    // Distingui per policy (S4/S5) o per tabella (S3) tramite il simbolo,
+    // e per il control_id (rule_id) atteso dal mapping 03 §5.4.
+    const wantSymbol = entry.anchor.policy || entry.anchor.table;
+    return (
+      byCatOracle.find(
+        (f) => f.location.symbol === wantSymbol || f.evidence.includes(entry.anchor.table),
+      ) || null
+    );
+  }
+  // secret working-tree (S1) e dead-code (S8): match per file.
+  const wantFile = expectedPath(entry);
+  return (
+    byCatOracle.find(
+      (f) => f.location.file === wantFile || f.location.file.startsWith(wantFile),
+    ) || null
+  );
+}
+
+// Esegue l'oracolo giusto per il difetto e ritorna i finding normalizzati.
+// I difetti rls condividono UN'unica esecuzione di rls_check (cache).
+function detectFindingsFor(entry, cache, runOpts) {
+  switch (entry.id) {
+    case 'S1': {
+      const r = runOracle(RUN_GITLEAKS, [REFERENCE_APP, 'working-tree']);
+      if (!r.ok) return { ok: false, findings: [], detail: r.detail };
+      return normalizeAndValidate('gitleaks', r.json, { ...runOpts, scope: 'working-tree' });
+    }
+    case 'S2': {
+      const r = runOracle(RUN_GITLEAKS, [REFERENCE_APP, 'history']);
+      if (!r.ok) return { ok: false, findings: [], detail: r.detail };
+      return normalizeAndValidate('gitleaks', r.json, { ...runOpts, scope: 'history' });
+    }
+    case 'S3':
+    case 'S4':
+    case 'S5': {
+      if (!cache.rls) {
+        const r = runOracle(RLS_CHECK, [MIGRATIONS_DIR]);
+        cache.rls = r.ok
+          ? normalizeAndValidate('rls-check', r.json, { ...runOpts, scope: 'static-ddl' })
+          : { ok: false, findings: [], detail: r.detail };
+      }
+      return cache.rls;
+    }
+    case 'S8': {
+      const r = runOracle(RUN_DEADCODE, [REFERENCE_APP]);
+      if (!r.ok) return { ok: false, findings: [], detail: r.detail };
+      return normalizeAndValidate('knip', r.json, { ...runOpts, scope: 'working-tree' });
+    }
+    default:
+      return { ok: false, findings: [], detail: `id non gestito in detection: ${entry.id}` };
+  }
+}
+
+function runDetection() {
+  const reg = loadRegistry();
+  const defects = [...reg.defects].sort((a, b) => a.id.localeCompare(b.id));
+
+  // run_id/created_at FISSI: il gate deve essere riproducibile (L-COL-002).
+  const runOpts = { runId: 'M0-detection-gate', createdAt: '1970-01-01T00:00:00.000Z' };
+  const cache = {}; // condivide l'esecuzione di rls_check fra S3/S4/S5
+
+  console.log('============================================================');
+  console.log(' run_eval — gate DETECTION (M0: oracoli reali -> finding model)');
+  console.log(`   registry      : ${REGISTRY_PATH}`);
+  console.log(`   reference-app : ${REFERENCE_APP}`);
+  console.log('   scope-M0      : S1,S2,S3,S4,S5,S8 (S6,S7 differiti a M4)');
+  console.log('============================================================');
+  console.log('');
+  console.log('Detection da ORACOLO (10 §3, criterio 1 — il verde e un fatto, L-COL-002):');
+
+  let allOk = true;
+  for (const entry of defects) {
+    const tag = `${entry.id} [${entry.category}/atteso:${entry.source_oracle}]`;
+
+    if (DEFERRED_M4.has(entry.id)) {
+      // S6/S7: Semgrep via docker, fuori dal gate M0 (10 §3; registry).
+      console.log(`  [DEFERRED M4] ${tag} — Semgrep (ruleset curato 07 §4) non gate-ato in M0`);
+      continue;
+    }
+    if (!SCOPE_M0.has(entry.id)) {
+      console.log(`  [SKIP] ${tag} — non in scope-M0`);
+      continue;
+    }
+
+    const res = detectFindingsFor(entry, cache, runOpts);
+    if (!res.ok) {
+      allOk = false;
+      console.log(`  [FAIL] ${tag} — oracolo/normalizzazione KO: ${res.detail}`);
+      continue;
+    }
+    const hit = matchFinding(entry, res.findings);
+    if (!hit) {
+      allOk = false;
+      console.log(
+        `  [FAIL] ${tag} — nessun finding ${entry.category}/${entry.source_oracle} ` +
+          `corrispondente al difetto (${res.findings.length} finding totali dall'oracolo)`,
+      );
+      continue;
+    }
+    const where = hit.location.symbol
+      ? `${hit.location.file} (${hit.location.symbol})`
+      : hit.location.file;
+    console.log(
+      `  [DETECTED] ${tag} — source_oracle=${hit.source_oracle.oracle} ` +
+        `rule_id=${hit.source_oracle.rule_id} fp=${hit.fingerprint.slice(0, 12)} @ ${where}`,
+    );
+  }
+
+  // TODO M3: aggiungere qui le asserzioni del GATE DI VERIFICA (10 §3,
+  //   criteri 1-4) sulla reference app in REMEDIATE: set in scope a
+  //   fix_state=verified e S2 a mitigated-residual; detection-only (S6,S7)
+  //   trovate ma NON auto-fixate e report mai "sicuro"; budget O-COL-006.
+  // TODO M4: integrare la detection di S6/S7 via Semgrep (ruleset curato) —
+  //   oggi DEFERRED M4 (niente docker nel gate).
+  // TODO M5: aggiungere qui le asserzioni del GATE DI BUILD (10 §4, criteri
+  //   5-7) sul blueprint seminato; M5 esegue i DUE parity gate -> v1 "fatto".
+
+  console.log('');
+  console.log('------------------------------------------------------------');
+  console.log(
+    allOk
+      ? 'RESULT: OK — ogni difetto in scope-M0 e DETECTED come finding dall\'oracolo atteso'
+      : 'RESULT: FAIL — almeno un difetto in scope-M0 non e stato rilevato dall\'oracolo atteso',
+  );
+  console.log('------------------------------------------------------------');
+
+  return allOk ? 0 : 1;
+}
+
+// =============================================================================
+// MODE=present (M-1) — auto-gate "present & inspectable" (invariato).
+// =============================================================================
+
+function runPresent() {
   const reg = loadRegistry();
   // Ordina S1..S8 per output stabile.
   const defects = [...reg.defects].sort((a, b) => a.id.localeCompare(b.id));
@@ -327,19 +580,6 @@ function main() {
     for (const line of bp.output.split('\n')) console.log(`      | ${line}`);
   }
 
-  // TODO M3: aggiungere qui le asserzioni del GATE DI VERIFICA (10 §3,
-  //   criteri 1-4) sulla reference app in REMEDIATE: ogni difetto e finding
-  //   DA ORACOLO (criterio 1); il set in scope (S1,S3-S5,S8) raggiunge
-  //   fix_state=verified e S2 resta mitigated-residual (criterio 2); le
-  //   detection-only (S6,S7) sono trovate/spiegate/prioritizzate ma NON
-  //   auto-fixate e il report non dice mai "sicuro" (criterio 3); il run resta
-  //   entro il budget pinnato O-COL-006 (criterio 4).
-  // TODO M5: aggiungere qui le asserzioni del GATE DI BUILD (10 §4, criteri
-  //   5-7) sul blueprint seminato (BOOTSTRAP -> BUILD): validate_blueprint +
-  //   self-check (criterio 5); checkpoint a 4 controlli (criterio 6); git a
-  //   strati / fail-safe deploy-coupling (criterio 7). M5 esegue qui i DUE
-  //   parity gate completi -> v1 "fatto" (VISION §10).
-
   console.log('');
   console.log('------------------------------------------------------------');
   console.log(
@@ -349,7 +589,40 @@ function main() {
   );
   console.log('------------------------------------------------------------');
 
-  process.exit(allOk ? 0 : 1);
+  return allOk ? 0 : 1;
+}
+
+// =============================================================================
+// DISPATCH per --mode
+// =============================================================================
+
+function parseMode(argv) {
+  for (const a of argv.slice(2)) {
+    const m = /^--mode=(.+)$/.exec(a);
+    if (m) return m[1];
+    if (a === '--mode') {
+      const idx = argv.indexOf(a);
+      if (argv[idx + 1]) return argv[idx + 1];
+    }
+  }
+  return 'present'; // default: la modalita M-1 resta il comportamento di base
+}
+
+function main() {
+  const mode = parseMode(process.argv);
+  let code;
+  switch (mode) {
+    case 'detection':
+      code = runDetection();
+      break;
+    case 'present':
+      code = runPresent();
+      break;
+    default:
+      console.error(`[ERRORE] modalita sconosciuta: "${mode}" (ammesse: present | detection)`);
+      code = 2;
+  }
+  process.exit(code);
 }
 
 main();

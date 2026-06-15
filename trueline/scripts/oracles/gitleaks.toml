@@ -1,0 +1,55 @@
+# Configurazione gitleaks di Trueline (03-ORACLES §5.2).
+#
+# Perche una config dedicata invece del default puro:
+#  - estende il ruleset di default (`useDefault = true`), quindi tutti i pattern
+#    nativi di gitleaks (chiavi AWS/GCP, token reali, ecc.) restano attivi;
+#  - aggiunge alcune regole "ad alta entropia su identificatore sensibile" che
+#    coprono segreti hardcoded scritti come `const NOME_KEY = "<literal>"` anche
+#    quando il literal non rispetta esattamente il formato di un provider noto
+#    (il caso piu comune nei sorgenti applicativi e nelle nostre fixture);
+#  - centralizza l'allowlist dei segreti di test/finti (vedi sotto), esplicita e
+#    versionata, per non gonfiare i falsi positivi (03 §5.2).
+#
+# NB: il valore del segreto NON appare mai qui ne nell'output: il wrapper invoca
+# sempre gitleaks con `--redact`.
+
+title = "trueline-gitleaks"
+
+[extend]
+# Mantieni tutte le regole native di gitleaks e aggiungi le nostre.
+useDefault = true
+
+# --- Regole aggiuntive Trueline ----------------------------------------------
+
+[[rules]]
+id = "trueline-generic-assigned-secret"
+description = "Stringa ad alta entropia assegnata a un identificatore dal nome sensibile (key/token/secret/cred/password)"
+# Cattura `xxxKey = "..."`, `apiToken: "..."`, ecc., anche se l'assegnazione e
+# spezzata su piu righe. Il gruppo 1 e il solo valore (per redazione/entropia).
+regex = '''(?i)["']?[a-z0-9_]*(?:key|token|secret|cred|passwd|password)[a-z0-9_]*["']?\s*[=:]\s*["']([a-z0-9][a-z0-9_\-]{24,})["']'''
+secretGroup = 1
+entropy = 3.0
+keywords = ["key", "token", "secret", "cred", "passwd", "password"]
+
+[[rules]]
+id = "trueline-stripe-like-key"
+description = "Chiave segreta in stile Stripe (sk_live_/sk_test_), tollerante a underscore interni"
+regex = '''sk_(?:live|test)_[A-Za-z0-9_]{16,}'''
+keywords = ["sk_live", "sk_test"]
+
+[[rules]]
+id = "trueline-gitlab-like-pat"
+description = "Personal Access Token in stile GitLab (glpat), tollerante a underscore interni"
+regex = '''glpat[_-][A-Za-z0-9_]{16,}'''
+keywords = ["glpat"]
+
+# --- Allowlist -----------------------------------------------------------------
+# Posto dove inserire, in modo esplicito e versionato, i segreti di test/finti
+# che NON devono produrre finding (03 §5.2). Volutamente vuota sul banco di
+# prova M-1: i segreti seminati S1/S2 DEVONO essere rilevati dal gate M0.
+# Esempio (commentato) di come si allowlista un valore di fixture noto:
+#
+# [[allowlists]]
+# description = "Segreti di esempio nella documentazione"
+# regexTarget = "match"
+# regexes = ['''AKIAIOSFODNN7EXAMPLE''']
