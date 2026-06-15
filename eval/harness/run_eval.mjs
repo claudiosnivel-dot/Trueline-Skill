@@ -59,7 +59,10 @@ const ROOT_DIR = resolve(EVAL_DIR, '..');
 const REFERENCE_APP = resolve(EVAL_DIR, 'reference-app');
 const SEEDED_BLUEPRINT = resolve(EVAL_DIR, 'seeded-blueprint');
 const REGISTRY_PATH = resolve(HARNESS_DIR, 'expected', 'registry.json');
-const VALIDATE_BLUEPRINT = resolve(HARNESS_DIR, 'validate_blueprint.mjs');
+// SORGENTE UNICA dell'oracolo strutturale del blueprint (11 §5.1): vive nel
+// runtime della skill e viaggia nel .skill. L'harness NON duplica più la logica
+// del validator: la invoca da qui (riconciliazione M2).
+const VALIDATE_BLUEPRINT = resolve(ROOT_DIR, 'trueline', 'scripts', 'blueprint', 'validate_blueprint.mjs');
 
 // Oracoli reali (03), eseguiti come processi figli in mode=detection.
 const ORACLES_DIR = resolve(ROOT_DIR, 'trueline', 'scripts', 'oracles');
