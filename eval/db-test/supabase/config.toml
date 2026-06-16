@@ -1,0 +1,203 @@
+# =============================================================================
+# eval/db-test/supabase/config.toml — Supabase CLI 2.106 project config
+#
+# Banco di prova RLS (M-1 / M0 / M3): istanza Supabase locale per esercitare
+# RLS a runtime (proof S5, contrasto S3/S4). NON per produzione.
+#
+# PORTE SPOSTATE +100: le porte standard 543xx erano gia occupate da uno stack
+# non correlato (ASV_Officina). Per coesistere senza collisioni tutte le porte
+# pubblicate sono spostate di +100 rispetto al default Supabase:
+#   api/kong   54321 -> 54421
+#   db         54322 -> 54422
+#   db.shadow  54320 -> 54420
+#   studio     54323 -> 54423
+#   inbucket   54324 -> 54424
+#   analytics  54327 -> 54427   (il default 2.106 era gia 54327)
+#
+# project_id DEVE essere "trueline-db-test": determina i nomi dei container
+# (supabase_db_trueline-db-test, ...). Con il default derivato dal nome della
+# directory ("db-test") `supabase status` cercherebbe i container sbagliati.
+#
+# Migration: directory supabase/migrations e una JUNCTION (Windows) / symlink
+# (POSIX) verso ../../reference-app/supabase/migrations, unica source-of-truth
+# (0001_init.sql). Vedi up.ps1 / up.sh (ricreazione idempotente del link).
+#
+# Immagine postgres fissata: public.ecr.aws/supabase/postgres:17.6.1.134
+# =============================================================================
+
+project_id = "trueline-db-test"
+
+[api]
+enabled = true
+# Porta API/kong (default 54321, +100).
+port = 54421
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[api.tls]
+enabled = false
+
+[db]
+# Porta DB Postgres (default 54322, +100). DB URL: postgresql://postgres:postgres@127.0.0.1:54422/postgres
+port = 54422
+# Porta shadow per `db diff` (default 54320, +100).
+shadow_port = 54420
+health_timeout = "2m"
+# Deve combaciare con l'immagine postgres 17.6.1.134.
+major_version = 17
+
+[db.pooler]
+enabled = false
+# Porta pooler (default 54329, +100) per evitare collisioni se abilitato.
+port = 54429
+pool_mode = "transaction"
+default_pool_size = 20
+max_client_conn = 100
+
+[db.migrations]
+enabled = true
+schema_paths = []
+
+[db.seed]
+# Niente seed automatico: i dati di prova sono iniettati da proof_s5.sql.
+enabled = false
+sql_paths = []
+
+[realtime]
+enabled = true
+
+[studio]
+enabled = true
+# Porta Studio (default 54323, +100).
+port = 54423
+api_url = "http://127.0.0.1"
+openai_api_key = "env(OPENAI_API_KEY)"
+
+[inbucket]
+enabled = true
+# Porta web del server email di test / mailpit (default 54324, +100).
+port = 54424
+
+[storage]
+enabled = true
+file_size_limit = "50MiB"
+
+[storage.s3_protocol]
+enabled = true
+
+[storage.analytics]
+enabled = false
+max_namespaces = 5
+max_tables = 10
+max_catalogs = 2
+
+[storage.vector]
+enabled = true
+max_buckets = 10
+max_indexes = 5
+
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:3000"
+additional_redirect_urls = ["https://127.0.0.1:3000"]
+jwt_expiry = 3600
+enable_refresh_token_rotation = true
+refresh_token_reuse_interval = 10
+enable_signup = true
+enable_anonymous_sign_ins = false
+enable_manual_linking = false
+minimum_password_length = 6
+password_requirements = ""
+
+[auth.rate_limit]
+email_sent = 2
+sms_sent = 30
+anonymous_users = 30
+token_refresh = 150
+sign_in_sign_ups = 30
+token_verifications = 30
+web3 = 30
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = true
+enable_confirmations = false
+secure_password_change = false
+max_frequency = "1s"
+otp_length = 6
+otp_expiry = 3600
+
+[auth.sms]
+enable_signup = false
+enable_confirmations = false
+template = "Your code is {{ `{{ .Code }}` }}"
+max_frequency = "5s"
+
+[auth.sms.twilio]
+enabled = false
+account_sid = ""
+message_service_sid = ""
+auth_token = "env(SUPABASE_AUTH_SMS_TWILIO_AUTH_TOKEN)"
+
+[auth.mfa]
+max_enrolled_factors = 10
+
+[auth.mfa.totp]
+enroll_enabled = false
+verify_enabled = false
+
+[auth.mfa.phone]
+enroll_enabled = false
+verify_enabled = false
+otp_length = 6
+template = "Your code is {{ `{{ .Code }}` }}"
+max_frequency = "5s"
+
+[auth.external.apple]
+enabled = false
+client_id = ""
+secret = "env(SUPABASE_AUTH_EXTERNAL_APPLE_SECRET)"
+redirect_uri = ""
+url = ""
+skip_nonce_check = false
+email_optional = false
+
+[auth.web3.solana]
+enabled = false
+
+[auth.third_party.firebase]
+enabled = false
+
+[auth.third_party.auth0]
+enabled = false
+
+[auth.third_party.aws_cognito]
+enabled = false
+
+[auth.third_party.clerk]
+enabled = false
+
+[auth.oauth_server]
+enabled = false
+authorization_url_path = "/oauth/consent"
+allow_dynamic_registration = false
+
+[edge_runtime]
+enabled = true
+policy = "per_worker"
+inspector_port = 8083
+deno_version = 2
+
+[analytics]
+enabled = true
+# Porta analytics/logflare (default 2.106 gia 54327).
+port = 54427
+backend = "postgres"
+
+[experimental]
+orioledb_version = ""
+s3_host = "env(S3_HOST)"
+s3_region = "env(S3_REGION)"
+s3_access_key = "env(S3_ACCESS_KEY)"
+s3_secret_key = "env(S3_SECRET_KEY)"

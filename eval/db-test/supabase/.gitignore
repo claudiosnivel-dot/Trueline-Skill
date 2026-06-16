@@ -1,0 +1,12 @@
+# Cache transiente della CLI Supabase
+.branches
+.temp
+
+# 'migrations' e una junction (Windows) / symlink (POSIX) verso
+# ../../reference-app/supabase/migrations, ricreata in modo idempotente da
+# up.ps1 / up.sh. Non va committata come link platform-specifico.
+/migrations
+
+# File potenzialmente sensibili generati dalla CLI
+.env
+signing_keys.json

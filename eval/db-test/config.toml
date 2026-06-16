@@ -1,56 +1,30 @@
 # =============================================================================
-# eval/db-test/config.toml — configurazione Supabase locale per il banco di prova M-1
-#
-# Scopo: istanza Supabase locale usata per esercitare RLS a runtime (S5 e la
-# verifica comportamentale di S3/S4). NON per produzione.
-#
-# Punta alle migration nella reference app: ../reference-app/supabase/migrations
+# eval/db-test/config.toml — STUB DEPRECATO (non e piu il config attivo)
 # =============================================================================
-
-[project]
-id = "trueline-db-test"
-
-[api]
-port     = 54321
-schemas  = ["public", "storage", "graphql_public"]
-
-[db]
-port        = 54322
-shadow_port = 54320
-major_version = 15
-
-[studio]
-enabled = true
-port    = 54323
-
-[ingest]
-port = 54324
-
-[storage]
-file_size_limit = "50MiB"
-
-[auth]
-site_url = "http://localhost:3000"
-additional_redirect_urls = ["http://localhost:3000"]
-jwt_expiry = 3600
-enable_signup = true
-
-[auth.email]
-enable_signup         = true
-double_confirm_changes = true
-enable_confirmations  = false
-
-# Supabase CLI cerca le migration nella directory configurata sotto migrations_dir.
-# Qui puntiamo all'unica source-of-truth delle migration: la reference app.
-# Il path e relativo alla posizione di questo config.toml.
-[db.migrations]
-schema_migrations_table = "schema_migrations"
-
-# NOTA: supabase CLI legge la directory delle migration dal file config.toml
-# posizionato nella root del progetto supabase (tipicamente ./supabase/).
-# Poiche questo config.toml sta in eval/db-test/, le migration vengono
-# referenziate con un path relativo che risale a ../reference-app/supabase/migrations.
-# All'avvio (up.sh / up.ps1) le migration vengono applicate con:
-#   supabase db push --db-url <conn> --migrations-dir ../reference-app/supabase/migrations
-# oppure copiando il link simbolico prima di "supabase start".
-migrations_dir = "../reference-app/supabase/migrations"
+#
+# Questo file NON e piu letto dalla Supabase CLI. Lo schema vecchio (pre-2.x)
+# con [ingest], migrations_dir e major_version=15 e INVALIDO per la CLI 2.106.
+#
+# Il config ATTIVO e ora:
+#
+#       eval/db-test/supabase/config.toml      <-- schema CLI 2.106
+#
+# La CLI cerca sempre il config sotto la sotto-directory `supabase/` del
+# workdir. Avvio / stato / proof si lanciano con:
+#
+#       supabase status  --workdir eval/db-test
+#       supabase start   --workdir eval/db-test     (solo se lo stack e giu)
+#       .\up.ps1   (Windows)   |   ./up.sh   (Linux/macOS/WSL)
+#
+# Riepilogo del setup attivo (vedi supabase/config.toml e README.md):
+#   project_id  = "trueline-db-test"
+#   porte +100  : api=54421 db=54422 shadow=54420 studio=54423
+#                 inbucket=54424 analytics=54427
+#   DB URL      : postgresql://postgres:postgres@127.0.0.1:54422/postgres
+#   immagine    : public.ecr.aws/supabase/postgres:17.6.1.134
+#   migrations  : supabase/migrations -> ../../reference-app/supabase/migrations
+#                 (junction/symlink ricreato in modo idempotente da up.ps1/up.sh)
+#
+# File mantenuto solo come segnaposto/deprecazione: NON eliminare per evitare
+# che un checkout ripristini il vecchio schema invalido al suo posto.
+# =============================================================================
