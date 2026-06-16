@@ -44,6 +44,7 @@ const ORACLES = resolve(__dirname, '..', 'oracles');
 const RUN_GITLEAKS = resolve(ORACLES, 'run_gitleaks.mjs');
 const RLS_CHECK = resolve(ORACLES, 'rls_check.mjs');
 const RUN_DEADCODE = resolve(ORACLES, 'run_deadcode.mjs');
+const RUN_SEMGREP = resolve(ORACLES, 'run_semgrep.mjs');
 const GO_BIN = process.platform === 'win32' ? 'C:/Users/claud/go/bin' : '/c/Users/claud/go/bin';
 
 const RUN_OPTS = { runId: 'loop-session', createdAt: '1970-01-01T00:00:00.000Z' };
@@ -68,7 +69,14 @@ function norm(oracle, json, scope) {
   return tagged;
 }
 
-// Raccoglie i finding dalla COPIA per il set verificato-a-zero (secret/rls/dead-code).
+// Raccoglie i finding dalla COPIA per il set verificato-a-zero (secret/rls/dead-code)
+// PIU' i detection-only semgrep (injection/authz, M4): questi NON sono in-scope per
+// il loop (selectInScope li esclude) ma DEVONO entrare nella BASELINE pre-fix, cosi'
+// che al checkpoint finale S6/S7 (immutati dalle fix) risultino PRE-EXISTING e non
+// blocchino il controllo 2 (baseline-delta, 04 §6). semgrep e' BEST-EFFORT (via
+// docker): se l'oracolo non gira, i suoi finding semplicemente non entrano nella
+// baseline e il checkpoint li tratterebbe come nuovi — ma quello stesso checkpoint
+// dichiarerebbe semgrep DEGRADATO (oracolo assente), coerente con L-COL-006.
 function collectFindings(dir) {
   const findings = [];
   const migrations = resolve(dir, 'supabase', 'migrations');
@@ -84,6 +92,15 @@ function collectFindings(dir) {
 
   const dc = runOracle(RUN_DEADCODE, [dir], dir);
   if (dc.ok) findings.push(...norm('knip', dc.json, 'working-tree'));
+
+  // semgrep (M4, 07 §4): pattern vietati injection/authz (S6/S7), detection-only.
+  // Collezionati SOLO per la baseline pre-fix (non per il loop): cosi' il checkpoint
+  // finale non li vede come NUOVI. Stesso normalize/base degli altri oracoli ->
+  // fingerprint coerenti con control2Security del checkpoint.
+  const sg = runOracle(RUN_SEMGREP, [dir], dir);
+  if (sg.ok && sg.json && Array.isArray(sg.json.results)) {
+    findings.push(...norm('semgrep', sg.json, 'working-tree'));
+  }
 
   return findings;
 }

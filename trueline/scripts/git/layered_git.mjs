@@ -17,7 +17,40 @@
 // Node ESM, solo built-in (child_process, path, url). Niente rete.
 
 import { spawnSync } from 'node:child_process';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { evaluateDeployCoupling } from './detect_deploy_coupling.mjs';
+
+// trueline/scripts/git -> repo ESTERNO = 3 livelli sopra.
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const OUTER_REPO_ROOT = resolve(__dirname, '..', '..', '..');
+const CANONICAL_REFERENCE_APP = resolve(OUTER_REPO_ROOT, 'eval', 'reference-app');
+const normPath = (p) => resolve(String(p)).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+
+// GUARDRAIL D'ISOLAMENTO (L-COL-024) — la difesa DEFINITIVA contro la
+// contaminazione ricorrente del repo esterno (M1/M2/M3/M4). Ogni operazione git
+// MUTANTE del loop (checkout -b / add+commit / reset --hard+clean) DEVE girare su
+// una COPIA temporanea con .git proprio (eval/.tmp-verify/<id>), MAI sul repo
+// esterno ne' sul fixture canonico. Se per un bug d'isolamento del workspace il
+// `dir` risolve al repo esterno/canonico, RIFIUTIAMO con errore esplicito invece
+// di committare/resettare la' (fallimento RUMOROSO, non contaminazione silenziosa).
+function assertIsolatedRepo(dir, op) {
+  const top = git(dir, ['rev-parse', '--show-toplevel']);
+  const topResolved = top.ok ? normPath(top.stdout) : null;
+  if (topResolved === normPath(OUTER_REPO_ROOT)) {
+    throw new Error(
+      `RIFIUTO git a strati (${op}): "${dir}" risolve al REPO ESTERNO (${OUTER_REPO_ROOT}). `
+      + 'Il verify-fix loop deve operare SOLO su una COPIA temporanea con .git proprio '
+      + '(eval/.tmp-verify/<id>), MAI sul repo esterno (L-COL-024). Bug d\'isolamento del workspace.',
+    );
+  }
+  if (topResolved === normPath(CANONICAL_REFERENCE_APP)) {
+    throw new Error(
+      `RIFIUTO git a strati (${op}): "${dir}" risolve al FIXTURE CANONICO ${CANONICAL_REFERENCE_APP}. `
+      + 'Il loop deve usare una COPIA, mai il fixture canonico (L-COL-024).',
+    );
+  }
+}
 
 // Operazioni classificate come DISTRUTTIVE (01 §5.1 / 05 §8.4): mai autonome.
 export const DESTRUCTIVE_OPS = new Set([
@@ -49,6 +82,7 @@ export function git(dir, args, env = process.env) {
 // Crea/seleziona il branch di lavoro (autonomo, additivo, reversibile).
 // Convenzione (05 §8.1): trueline/<modalita>/<macrotask-o-lotto>.
 export function createWorkBranch(dir, name) {
+  assertIsolatedRepo(dir, 'createWorkBranch');
   // Se il branch esiste gia', selezionalo; altrimenti crealo.
   const exists = git(dir, ['rev-parse', '--verify', name]).ok;
   if (exists) return git(dir, ['checkout', name]);
@@ -59,6 +93,7 @@ export function createWorkBranch(dir, name) {
 // tutto) e commit con `message`. Configura un'identita' locale se assente, per
 // non dipendere dalla config globale dell'ambiente.
 export function commitOnBranch(dir, message, paths = ['-A']) {
+  assertIsolatedRepo(dir, 'commitOnBranch');
   ensureLocalIdentity(dir);
   const add = git(dir, ['add', ...paths]);
   if (!add.ok) return { ok: false, step: 'add', detail: add.stderr || add.error };
@@ -78,6 +113,7 @@ export function commitOnBranch(dir, message, paths = ['-A']) {
 // reversibile (L-COL-024) e la copia e' usa-e-getta. NON e' un'operazione
 // distruttiva su storia PUBBLICATA: agisce solo sulla copia temp non pushata.
 export function revertToRef(dir, ref) {
+  assertIsolatedRepo(dir, 'revertToRef');
   const reset = git(dir, ['reset', '--hard', ref]);
   if (!reset.ok) return { ok: false, detail: reset.stderr || reset.error };
   const clean = git(dir, ['clean', '-fd']);

@@ -37,7 +37,7 @@ import { normalize } from '../findings/normalize.mjs';
 import { validateMany } from '../findings/validate_finding.mjs';
 import { partition } from '../characterization/partition.mjs';
 import {
-  GATE_SEVERITY, VERIFIED_ZERO_CATEGORIES, severityAtLeast,
+  GATE_SEVERITY, VERIFIED_ZERO_CATEGORIES, CONTROL2_GATE_CATEGORIES, severityAtLeast,
 } from './thresholds.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -47,6 +47,7 @@ const RUN_GITLEAKS = resolve(ORACLES, 'run_gitleaks.mjs');
 const RLS_CHECK = resolve(ORACLES, 'rls_check.mjs');
 const RUN_DEADCODE = resolve(ORACLES, 'run_deadcode.mjs');
 const RUN_OSV = resolve(ORACLES, 'run_osv.mjs');
+const RUN_SEMGREP = resolve(ORACLES, 'run_semgrep.mjs');
 
 const GO_BIN = process.platform === 'win32'
   ? 'C:/Users/claud/go/bin'
@@ -83,8 +84,13 @@ function normFindings(oracle, native, opts) {
 
 // Applica il baseline-delta (04 §6): marca ogni finding new/pre-existing in base
 // al set di fingerprint baseline, e ritorna solo quelli che BLOCCANO (new +
-// sopra soglia / categoria dead-code). baseline = Set<fingerprint>.
-function deltaBlockers(findings, baseline, { deadcode = false } = {}) {
+// sopra soglia nelle categorie gate / categoria dead-code). baseline = Set<fingerprint>.
+//
+// gateCategories: l'insieme di categorie che bloccano il controllo. Il controllo 1
+// (dead-code) usa deadcode=true (gate per delta, mai per severita). Il controllo 2
+// (sicurezza) passa CONTROL2_GATE_CATEGORIES (secret/rls + detection-blocking
+// injection/authz). Default = VERIFIED_ZERO_CATEGORIES per i chiamanti legacy.
+function deltaBlockers(findings, baseline, { deadcode = false, gateCategories = VERIFIED_ZERO_CATEGORIES } = {}) {
   const out = [];
   for (const f of findings) {
     const isNew = !baseline.has(f.fingerprint);
@@ -94,7 +100,7 @@ function deltaBlockers(findings, baseline, { deadcode = false } = {}) {
       // controllo 1: gate per DELTA, mai per severita.
       out.push(f);
     } else if (
-      VERIFIED_ZERO_CATEGORIES.has(f.category)
+      gateCategories.has(f.category)
       && severityAtLeast(f.severity, GATE_SEVERITY)
     ) {
       out.push(f);
@@ -169,16 +175,46 @@ export function control2Security(referenceApp, { baseline = new Set(), runOpts, 
     }
   }
 
-  // semgrep DIFFERITO M4 (07 §4): non gate-ato qui.
-  // TODO M4: integrare semgrep (ruleset AI curato) nel controllo 2.
+  // semgrep (07 §4) — oracolo AI curato per i pattern vietati injection/authz/
+  // crypto/sink (S6 injection, S7 authz). Gira VIA DOCKER (run_semgrep.mjs): la
+  // SKILL resta dep-free, il container ha semgrep pinnato. BEST-EFFORT come osv:
+  // se docker/l'immagine non e' disponibile NON falsifichiamo il verde, ma lo
+  // dichiariamo DEGRADATO per semgrep (un oracolo che non gira NON e' verde,
+  // L-COL-006/L-COL-002) — MAI contato come pulito. Il path normalizzato dei
+  // finding semgrep (stripContainerSrc -> base "eval/reference-app") coincide con
+  // quello di gitleaks/rls, quindi i fingerprint sono coerenti col baseline-delta.
+  let semgrepNote = '';
+  if (existsSync(RUN_SEMGREP)) {
+    // run_semgrep.mjs emette il JSON nativo su stdout (diagnostiche su stderr) e
+    // monta la dir target in /src. Gli passiamo la dir target (la copia temp del
+    // checkpoint), eseguito con cwd=referenceApp come gli altri oracoli.
+    const s = runOracle(RUN_SEMGREP, [referenceApp], referenceApp);
+    if (s.ok && s.json && Array.isArray(s.json.results)) {
+      // NIENTE override di base: i path semgrep arrivano come "/src/<rel>" e
+      // normalize li strippa a "eval/reference-app/<rel>" (DEFAULT_BASE), ESATTAMENTE
+      // come gitleaks/rls. Cosi i fingerprint sono coerenti col baseline-delta e col
+      // run di sezione 2 del gate (che usa base eval/reference-app).
+      const n = normFindings('semgrep', s.json, { ...runOpts, scope: 'working-tree' });
+      if (n.ok) { all.push(...n.findings); sub.push(`semgrep:${n.findings.length}`); }
+      else semgrepNote = ` (semgrep: output non normalizzabile, degradato — ${n.detail})`;
+    } else {
+      // docker assente / immagine non pinnata / JSON non valido: DEGRADATO, non verde.
+      semgrepNote = ` (semgrep: oracolo non disponibile via docker, degradato — ${s.detail})`;
+    }
+  } else {
+    semgrepNote = ' (semgrep: wrapper assente, degradato)';
+  }
 
-  const blockers = deltaBlockers(all, baseline, { deadcode: false });
+  // CONTROL2_GATE_CATEGORIES (thresholds): secret/rls (verificato-a-zero) PIU' le
+  // detection-blocking injection/authz (M4). Un NUOVO finding semgrep injection/
+  // authz sopra soglia BLOCCA; un S6/S7 PRE-ESISTENTE (gia' in baseline) no.
+  const blockers = deltaBlockers(all, baseline, { deadcode: false, gateCategories: CONTROL2_GATE_CATEGORIES });
   const green = blockers.length === 0;
   return {
     id: 2, name: 'security', status: green ? 'green' : 'red', green,
     detail: green
-      ? `nessun finding di sicurezza NUOVO >= ${GATE_SEVERITY} [${sub.join(' ')}]${osvNote}`
-      : `${blockers.length} finding NUOVO >= ${GATE_SEVERITY} [${sub.join(' ')}]${osvNote}`,
+      ? `nessun finding di sicurezza NUOVO >= ${GATE_SEVERITY} [${sub.join(' ')}]${osvNote}${semgrepNote}`
+      : `${blockers.length} finding NUOVO >= ${GATE_SEVERITY} [${sub.join(' ')}]${osvNote}${semgrepNote}`,
     findings: all, blockers,
   };
 

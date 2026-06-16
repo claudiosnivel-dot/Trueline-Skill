@@ -53,14 +53,16 @@ const REPO_ROOT = resolve(__dirname, '..', '..', '..');
 // la riproducibilita dell'oracolo dipende dal pin (L-COL-002).
 const SEMGREP_IMAGE = 'semgrep/semgrep:latest';
 
-// Ruleset AI curato (M0: placeholder; M4: curato, 07 §4), tracciato nel repo.
+// Ruleset AI curato (07 §4), tracciato nel repo. In M0 era il placeholder.yml
+// (solo smoke test); da M4 e' il ruleset CURATO trueline-ai-ruleset.yml, forma
+// eseguibile dei pattern vietati (07 §4: secrets/injection/authz/crypto/sink).
 const RULESET_SRC = resolve(
   REPO_ROOT,
   'trueline',
   'references',
   'oracles',
   'semgrep-ai-ruleset',
-  'placeholder.yml',
+  'trueline-ai-ruleset.yml',
 );
 
 // Sottocartella EFFIMERA (gitignorata: .trueline/) dentro la dir progetto in
