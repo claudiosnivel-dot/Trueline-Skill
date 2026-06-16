@@ -153,7 +153,10 @@ export function destroyVerifyWorkspace(dir) {
 
 // Pulisce TUTTE le copie temporanee residue (es. dopo un crash). Idempotente.
 export function cleanupAllVerifyWorkspaces() {
-  if (existsSync(TMP_VERIFY_ROOT)) {
-    rmSync(TMP_VERIFY_ROOT, { recursive: true, force: true });
-  }
+  // rmWithRetry (NON rmSync nudo): su Windows TMP_VERIFY_ROOT puo' essere
+  // transitoriamente LOCKED da un figlio appena terminato -> un rmSync nudo
+  // lancerebbe EPERM/EBUSY e farebbe CRASHARE il chiamante (es. il gate M4 che
+  // chiama questa funzione in cima, prima di ogni check). Il retry/backoff
+  // assorbe il lock transitorio; un fallimento reale e persistente riemerge.
+  if (existsSync(TMP_VERIFY_ROOT)) rmWithRetry(TMP_VERIFY_ROOT);
 }
