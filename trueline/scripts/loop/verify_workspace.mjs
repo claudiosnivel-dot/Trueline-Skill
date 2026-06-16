@@ -30,6 +30,49 @@ export const TMP_VERIFY_ROOT = resolve(REPO_ROOT, 'eval', '.tmp-verify');
 // binario locale (node_modules/.bin) — vedi nota in createVerifyWorkspace.
 const SKIP_TOP_LEVEL = new Set([]);
 
+// Contatore monotono per-processo: garantisce un id UNICO anche per piu' copie
+// create dallo STESSO processo, SENZA Date.now()/Math.random (determinismo del
+// gate, 10 §5 / L-COL-002: niente sorgenti di non-determinismo nel codice che il
+// gate esegue). Combinato con process.pid l'id e' unico per-run E per-chiamata.
+let __wsCounter = 0;
+
+// Genera un id UNICO-per-run deterministico: pid + contatore monotono. Niente
+// Math.random/Date.now. Due copie dello stesso processo ricevono id distinti
+// (counter incrementale); processi diversi differiscono per pid. Cosi' una dir
+// temp stale di un run precedente NON collide con quella di un run nuovo.
+function uniqueWorkspaceId(label) {
+  __wsCounter += 1;
+  const safe = String(label || 'verify').replace(/[^A-Za-z0-9._-]/g, '-');
+  return `${safe}-pid${process.pid}-${__wsCounter}`;
+}
+
+// rmSync con piccolo retry/backoff: su Windows una dir temp puo' restare
+// momentaneamente LOCKED (handle non ancora rilasciato da un processo figlio
+// appena terminato: tsc, npm, git), provocando un EPERM/EBUSY spurio. Riproviamo
+// con un backoff BLOCCANTE deterministico (Atomics.wait, niente timer/random)
+// cosi' un lock transitorio non genera un rosso flaky. Il backoff e' brevissimo
+// e a passi fissi: nessuna sorgente di non-determinismo nel valore osservato.
+function rmWithRetry(target, attempts = 5) {
+  let lastErr = null;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      rmSync(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      return;
+    } catch (e) {
+      lastErr = e;
+      // Backoff bloccante deterministico (50ms, 100ms, 150ms, ...). Atomics.wait
+      // su un buffer dedicato non introduce non-determinismo nell'output.
+      if (i < attempts - 1) {
+        try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50 * (i + 1)); }
+        catch { /* Atomics non disponibile: prosegui senza attesa */ }
+      }
+    }
+  }
+  // Esaurito il retry: rilancia l'ultimo errore (un fallimento REALE deve
+  // emergere, non essere mascherato).
+  if (lastErr) throw lastErr;
+}
+
 // Crea una copia temporanea isolata della reference app canonica.
 //
 // Opzioni:
@@ -43,10 +86,17 @@ const SKIP_TOP_LEVEL = new Set([]);
 //
 // Ritorna { dir, id, cleanup }.
 export function createVerifyWorkspace(opts = {}) {
-  const {
-    id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    includeGit = true,
-  } = opts;
+  const { includeGit = true } = opts;
+  // id UNICO-per-run: pid + contatore monotono (NO Date.now/Math.random). SEMPRE
+  // derivato da uniqueWorkspaceId, ANCHE quando il chiamante passa un'etichetta:
+  // l'etichetta diventa il PREFISSO e vi appendiamo pid+counter. Il default di
+  // destrutturazione (id = uniqueWorkspaceId(opts.id)) scattava SOLO con
+  // id===undefined: poiche' run_loop/run_checkpoint passano un id ESPLICITO, lo
+  // bypassava e ricadeva sul path FISSO (es. 'loop-loop-session') -> due run
+  // concorrenti (piu' gate in parallelo) condividevano la stessa dir e si
+  // distruggevano a vicenda nel cleanup (ENOENT su chmod) -> run_loop usciva 1 ->
+  // m1/m2/m3 rossi INTERMITTENTI. Ora l'unicita' e' incondizionata.
+  const id = uniqueWorkspaceId(opts.id);
 
   if (!existsSync(CANONICAL_REFERENCE_APP)) {
     throw new Error(`reference-app canonica assente: ${CANONICAL_REFERENCE_APP}`);
@@ -55,8 +105,9 @@ export function createVerifyWorkspace(opts = {}) {
   mkdirSync(TMP_VERIFY_ROOT, { recursive: true });
   const dir = join(TMP_VERIFY_ROOT, id);
 
-  // Copia pulita: se per qualche motivo la dir esiste gia', azzerala prima.
-  if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+  // Copia pulita: se per qualche motivo la dir esiste gia', azzerala prima
+  // (con retry/backoff: una dir stale potrebbe essere ancora locked su Windows).
+  if (existsSync(dir)) rmWithRetry(dir);
 
   // cpSync ricorsivo. Filtriamo via le entry indesiderate. NB: includiamo
   // node_modules perche' run_deadcode (knip) richiede il binario locale del
@@ -89,11 +140,13 @@ export function destroyVerifyWorkspace(dir) {
   if (!abs.startsWith(TMP_VERIFY_ROOT)) {
     throw new Error(`RIFIUTO: cleanup fuori da eval/.tmp-verify: ${abs}`);
   }
-  if (existsSync(abs)) rmSync(abs, { recursive: true, force: true });
+  // rm con retry/backoff: assorbe un EPERM/EBUSY transitorio su Windows (handle
+  // non ancora rilasciato da un figlio appena terminato) -> niente rosso flaky.
+  if (existsSync(abs)) rmWithRetry(abs);
   // Pota la radice .tmp-verify se ora e' vuota (nessuna altra copia residua).
   try {
     if (existsSync(TMP_VERIFY_ROOT) && readdirSync(TMP_VERIFY_ROOT).length === 0) {
-      rmSync(TMP_VERIFY_ROOT, { recursive: true, force: true });
+      rmWithRetry(TMP_VERIFY_ROOT);
     }
   } catch { /* best-effort: una radice non vuota o concorrente non e' un errore */ }
 }
