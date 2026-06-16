@@ -1,0 +1,66 @@
+# atomic-task-schema.md — Trueline · schema del task atomico *(L-COL-019)*
+
+> Distillato da `11-BLUEPRINT-ENGINE` §3. Caricato in BOOTSTRAP (genera) e
+> consumato parzialmente in BUILD (`acceptance_criteria` come oracolo del
+> controllo 4, `02` §6). Identificatori in inglese, prosa in italiano.
+
+Lo schema è la parte **oracolabile** del piano: lo script
+`scripts/blueprint/validate_blueprint.mjs` lo verifica in modo deterministico
+(campi obbligatori non vuoti, copertura AC→test, DAG aciclico, id univoci,
+ownership del macrotask). La parte semantica resta alla
+[`self-check-checklist.md`](./self-check-checklist.md).
+
+## Formato di riferimento (YAML)
+
+```yaml
+- id: T-014                         # ID stabile, non riusato (univoco)
+  title: "Endpoint creazione prenotazione con RLS"
+  macrotask: "prenotazioni"         # ownership: non vuoto
+  depends_on: [T-009, T-011]        # DAG esplicito, niente cicli, no id inesistenti
+
+  objective: >                      # COSA deve ottenere (prosa)
+    Esporre un endpoint che crea una prenotazione per l'utente autenticato,
+    isolata per tenant via RLS.
+
+  definition_of_done:               # IL LAVORO è completo quando…  (osservabile)
+    - "Endpoint POST /bookings implementato"
+    - "Migration con policy RLS su table bookings applicata"
+    - "Input validato lato server (no fiducia nel client)"
+
+  acceptance_criteria:              # COME si prova che fa la cosa giusta (testabile)
+    - id: AC-014-1
+      given: "utente autenticato del tenant A"
+      when: "crea una prenotazione"
+      then: "la riga è scritta con tenant_id = A"
+    - id: AC-014-2
+      given: "utente del tenant A"
+      when: "tenta di leggere prenotazioni del tenant B"
+      then: "riceve insieme vuoto (RLS blocca)"
+
+  target_tests:                     # i criteri resi eseguibili — oracolo del controllo 4
+    - file: "tests/bookings.create.test.ts"
+      covers: [AC-014-1, AC-014-2]
+
+  security_notes:                   # opzionale: aggancio al threat model (07)
+    - "RLS isolation per tenant — categoria killer Supabase"
+
+  out_of_scope:                     # opzionale: argine allo scope creep
+    - "Cancellazione prenotazione (T-016)"
+```
+
+## Campi obbligatori (controllati dall'oracolo strutturale)
+
+| Campo | Regola |
+|---|---|
+| `id` | presente, non vuoto, **univoco** in tutto il blueprint |
+| `macrotask` | presente, non vuoto (ownership) |
+| `objective` | presente, non vuoto |
+| `definition_of_done` | lista non vuota, ogni voce non vuota |
+| `acceptance_criteria` | lista non vuota; ogni item con `id` + `given` + `when` + `then` |
+| `target_tests` | lista non vuota; ogni item nomina un `file`; ogni AC coperto da ≥1 test |
+| `depends_on` | opzionale; se presente, DAG aciclico verso id esistenti |
+
+**DoD vs acceptance_criteria** — `definition_of_done` = "il lavoro c'è"
+(artefatti osservabili); `acceptance_criteria` = "e fa la cosa giusta"
+(asserzioni comportamentali). Sono **questi** che il controllo conformità-logica
+usa come oracolo. `target_tests` è il ponte da criterio a eseguibile.

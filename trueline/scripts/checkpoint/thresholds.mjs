@@ -4,9 +4,10 @@
 // modulo ne e' la trascrizione eseguibile: i numeri DEVONO restare allineati al
 // reference (un disallineamento e' un bug, non una feature — vedi thresholds.md §6).
 //
-// I valori M1 sono DEFAULT PROVVISORI; il pin empirico definitivo si rifinisce
-// al parity gate di M5 (10-EVALUATION). La policy (esiste una soglia, esiste un
-// budget) e' chiusa; il pin numerico no.
+// Le SOGLIE di gating (GATE_SEVERITY, RLS_*, DEADCODE_*) restano default di policy
+// ragionati. Il BUDGET del loop (O-COL-006) e' ora PINNATO EMPIRICAMENTE al parity
+// gate M5 (10-EVALUATION §6): GLOBAL_WALL_CLOCK_MS = round(p95 x 1.25) sui campioni
+// misurati da eval/harness/measure_budget.mjs. Vedi WALL_CLOCK_DERIVATION sotto.
 //
 // Node ESM, solo built-in (nessuna dipendenza npm, nessuna rete).
 
@@ -40,14 +41,27 @@ export const VERIFIED_ZERO_CATEGORIES = new Set(['secret', 'rls', 'dead-code']);
 // VERIFIED_ZERO_CATEGORIES), il loop non li auto-fixa.
 export const CONTROL2_GATE_CATEGORIES = new Set(['secret', 'rls', 'injection', 'authz']);
 
-// --- Loop-budget (O-COL-006, policy chiusa in 05 §4; default provvisori M1) ---
+// --- Loop-budget (O-COL-006, policy chiusa in 05 §4; budget PINNATO al M5) ---
+// Derivazione empirica del tetto di tempo di parete (10-EVALUATION §6 / thresholds.md
+// §5.1): p95 dei campioni di `run_loop --eval --mode=remediate --characterize` sulla
+// reference app, con margine x1.25. Riproducibile con eval/harness/measure_budget.mjs.
+export const WALL_CLOCK_DERIVATION = Object.freeze({
+  // 95° percentile su 12 campioni: 10 dedicati (warm) + 2 del gate criterio-A
+  // (1 cold 193921ms, 1 warm 161960ms). Conservativo (~max per n=12: il cold-start
+  // che il gate esercita realmente domina la coda della distribuzione).
+  p95_ms: 193_921,
+  margin: 1.25,   // margine sopra il p95 (05 §4 / thresholds.md §5.1 step 4)
+  samples: 12,    // >= 10 richiesti (thresholds.md §5.1 step 3)
+});
 export const LOOP_BUDGET = Object.freeze({
   // Cap per-finding: 2 retry = 3 tentativi totali (deciso/chiuso in 05 §4).
   MAX_RETRIES_PER_FINDING: 2,
-  // Budget globale di tempo di parete per sessione di verifica (provvisorio).
-  GLOBAL_WALL_CLOCK_MS: 600_000,
-  // Budget di token per sessione: nella skill reale lo applica il runtime LLM;
-  // in eval (fix provider deterministico, niente token) NON si applica.
+  // Tetto di tempo di parete per sessione di verifica: PINNATO = round(p95 x margin)
+  // = round(193_921 x 1.25) = 242_401 ms (~242s). Vedi WALL_CLOCK_DERIVATION.
+  GLOBAL_WALL_CLOCK_MS: 242_401,
+  // Budget di token per sessione: nella skill reale lo applica il runtime LLM; in
+  // eval (fix provider deterministico, nessun token) NON si applica e NON e'
+  // misurabile da questo banco -> resta null, DICHIARATO (L-COL-006), non finto.
   GLOBAL_TOKEN_BUDGET: null,
 });
 

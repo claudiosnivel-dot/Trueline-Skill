@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Progetto** | Trueline (`COL`) |
-| **Milestone** | M1 (checkpoint + verify-fix loop) — **default PROVVISORI** |
+| **Milestone** | M1 (soglie di gating) + **M5 (budget del loop PINNATO empiricamente)** |
 | **Copre** | soglie di severita del controllo 2 (03 §8), baseline-delta (04 §6), loop-budget (`O-COL-006`, 05 §4) |
-| **Pin numerico** | il valore empirico definitivo si rifinisce al **parity gate (M5, 10-EVALUATION)** |
+| **Pin numerico** | budget del loop **pinnato al parity gate M5**: `GLOBAL_WALL_CLOCK_MS` = round(p95×1.25) = 242401ms (§5). Le soglie di gating restano default di policy. |
 
 ---
 
@@ -18,8 +18,9 @@ nascosto) e disaccoppia la *policy* (esiste un budget, esiste una soglia) dal
 *pin numerico* (il valore esatto), che dipende dalla reference app e si calibra
 al parity gate di M5.
 
-**In M1 i numeri qui sotto sono DEFAULT PROVVISORI ragionevoli.** La macchina e
-completa e li rispetta; il pin empirico arriva con M5.
+**Le SOGLIE di gating (§2-§3) sono default di policy ragionati** (non un pin
+empirico: sono scelte di rischio, non misure). **Il BUDGET del loop (§5) e' ora
+PINNATO EMPIRICAMENTE al parity gate M5** (§5.1).
 
 ---
 
@@ -121,42 +122,44 @@ baseline vuota, `04`).
 
 ---
 
-## 5. loop-budget — `O-COL-006` (policy chiusa in 05 §4)
+## 5. loop-budget — `O-COL-006` (policy chiusa in 05 §4; budget PINNATO al M5)
 
 > La **policy** e chiusa (05 §4): esiste un cap per-finding e un budget globale,
-> e come si fanno rispettare. Qui vivono i **default provvisori**; il pin
-> numerico empirico e di M5 (parity gate).
+> e come si fanno rispettare. Il **pin numerico** del tetto di tempo di parete e'
+> stato **derivato empiricamente al parity gate M5** (§5.1).
 
-// PIN EMPIRICO: rifinire al parity gate M5
-
-| Chiave | Default provvisorio | Significato |
+| Chiave | Valore pinnato | Significato |
 |---|---|---|
 | `MAX_RETRIES_PER_FINDING` | `2` | Cap per-finding: 2 retry = **3 tentativi totali** (proposta iniziale + 2). Deciso in 05 §4 (chiuso). |
-| `GLOBAL_WALL_CLOCK_MS` | `600000` (10 min) | Tetto di tempo di parete per **sessione** di verifica. Provvisorio. |
-| `GLOBAL_TOKEN_BUDGET` | `null` (non applicato in eval) | Tetto di token per sessione. Nella skill reale lo applica il runtime LLM; in eval (fix provider deterministico, nessun token) **non si applica**. |
+| `GLOBAL_WALL_CLOCK_MS` | `242401` (~242s) | Tetto di tempo di parete per **sessione** di verifica. **Pinnato M5** = round(p95×1.25), p95=193921ms su 12 campioni (§5.1). |
+| `GLOBAL_TOKEN_BUDGET` | `null` (non applicato in eval) | Tetto di token per sessione. Nella skill reale lo applica il runtime LLM; in eval (fix provider deterministico, nessun token) **non si applica** e **non e' misurabile da questo banco** — dichiarato null, mai un numero finto (L-COL-006). |
 
 Vale il **primo cap che scatta**: per-finding `MAX_RETRIES_PER_FINDING`
 **oppure** budget globale (`GLOBAL_WALL_CLOCK_MS` / `GLOBAL_TOKEN_BUDGET`).
 Esaurito un cap → stato **terminale** presentato all'umano (`accepted-risk` /
 fix manuale / rinvio), **mai** scarto silenzioso, **mai** `verified` (05 §4).
 
-### 5.1 Procedura di taratura e pinning (verso M5)
+### 5.1 Procedura di taratura e pinning — ESEGUITA al parity gate M5
 
-Il pin numerico definitivo si ottiene con la seguente procedura empirica al
-parity gate (M5, 10-EVALUATION):
+Pin numerico ottenuto con la procedura empirica (M5, 10-EVALUATION §6). Riproducibile
+con `eval/harness/measure_budget.mjs`:
 
-1. Eseguire il loop su tutta la reference app (gate di verifica, 10 §3) con i
-   finding del set in-scope (L-COL-010).
-2. Misurare, per ogni finding, **quanti retry** servono per raggiungere `verified`
-   e **quanto tempo di parete / quanti token** consuma la sessione complessiva.
-3. Calcolare p95 osservato su un campione rappresentativo (almeno 10 esecuzioni
-   su reference app pulita con difetti ri-seminati).
-4. Pinnare `GLOBAL_WALL_CLOCK_MS` = p95_ms × 1.25 (margine), `GLOBAL_TOKEN_BUDGET`
-   = p95_tokens × 1.25. Lasciare `MAX_RETRIES_PER_FINDING = 2` (chiuso in 05 §4).
-5. Registrare i valori pinnati in `10-EVALUATION` (Chat E) e aggiornare la tabella
-   in §5 sopra sostituendo i default provvisori.
+1. Eseguito il loop end-to-end sulla reference app (gate di verifica, 10 §3) sul set
+   in-scope (L-COL-010) — `run_loop --eval --mode=remediate --characterize`.
+2. Misurato il tempo di parete per esecuzione (i retry non scattano: il fix provider
+   deterministico azzera ogni finding in-scope al 1° tentativo; in eval non ci sono token).
+3. p95 su **12 campioni** rappresentativi (≥10 richiesti): 10 dedicati (warm, via
+   `measure_budget.mjs`) + 2 del gate criterio-A (1 cold 193921ms, 1 warm 161960ms).
+   Campioni dedicati: min 156356 · mean 161289 · max 181640 ms. **p95 = 193921 ms**
+   (conservativo per n=12; dominato dal cold-start che il gate esercita realmente).
+4. Pinnato `GLOBAL_WALL_CLOCK_MS` = round(p95 × 1.25) = round(193921 × 1.25) =
+   **242401 ms**. `MAX_RETRIES_PER_FINDING = 2` invariato (chiuso in 05 §4).
+   `GLOBAL_TOKEN_BUDGET` = null (non misurabile in eval — vedi §5, L-COL-006).
+5. Registrato in `thresholds.mjs` (`WALL_CLOCK_DERIVATION` + `LOOP_BUDGET`) e nella
+   tabella §5. Il gate M5 (criterio 4) **asserisce** `GLOBAL_WALL_CLOCK_MS ===
+   round(p95×margin)` con `samples ≥ 10`: il verde non puo' piu' convivere col default.
 
-// PIN EMPIRICO: rifinire al parity gate M5
+Ri-tara con `measure_budget.mjs` quando cambia la reference app o le versioni degli oracoli.
 
 ---
 
