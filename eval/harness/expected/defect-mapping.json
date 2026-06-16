@@ -1,0 +1,87 @@
+{
+  "$comment": "Mappa difetto-seminato -> tassonomia di 07 (10 §3 / 07 §10). Ogni difetto S1..S8 del registry (expected/registry.json) mappa a UNO dei tre artefatti di 07: un PATTERN VIETATO (07 §4, regola del ruleset semgrep curato), un PROVVEDIMENTO RLS (07 §5, standard RLS nominato R1..R9) o una SUPERFICIE enumerata (07 §6, threat model). Questo soddisfa 07 §10 ('ogni vulnerabilita seminata mappa a un pattern vietato / provvedimento RLS / superficie enumerata; l'eval verifica che il ruleset le colga'). Lo shape e {id, category, maps_to:{kind, ref, cwe?, owasp?}}: kind in {forbidden-pattern | rls-provision | surface}; ref e il riferimento NOMINATO non vuoto (sezione di 07 + identificatore della regola/provvedimento). NON e un secondo registry: i campi autoritativi (category/owasp/cwe/oracolo) restano in registry.json; qui si dichiara SOLO l'aggancio allo standard (L-COL-012).",
+  "schema_version": "1.0",
+  "milestone": "M4",
+  "registry": "eval/harness/expected/registry.json",
+  "conventions": "07-CONVENTIONS-THREATMODEL.md",
+  "mappings": [
+    {
+      "id": "S1",
+      "category": "secret",
+      "maps_to": {
+        "kind": "forbidden-pattern",
+        "ref": "07 §4.1 — service_role key hardcoded / chiave-segreto come string literal (regola col-secret-service-role-literal / col-secret-hardcoded-credential-literal)",
+        "cwe": "CWE-798",
+        "owasp": "A07:2025"
+      }
+    },
+    {
+      "id": "S2",
+      "category": "secret",
+      "maps_to": {
+        "kind": "forbidden-pattern",
+        "ref": "07 §4.1 — Segreti inline / chiavi hardcoded (segreto in git-history; stesso pattern vietato §4.1, scope history 03 §5.2)",
+        "cwe": "CWE-798",
+        "owasp": "A07:2025"
+      }
+    },
+    {
+      "id": "S3",
+      "category": "rls",
+      "maps_to": {
+        "kind": "rls-provision",
+        "ref": "07 §5 R1 — RLS abilitato su ogni tabella public/user-facing (control_id RLS001_MISSING_RLS)",
+        "cwe": "CWE-285",
+        "owasp": "A01:2025"
+      }
+    },
+    {
+      "id": "S4",
+      "category": "rls",
+      "maps_to": {
+        "kind": "rls-provision",
+        "ref": "07 §5 R3 — niente USING (true)/WITH CHECK (true) su tabelle user-facing (control_id RLS003_PERMISSIVE_TRUE)",
+        "cwe": "CWE-285",
+        "owasp": "A01:2025"
+      }
+    },
+    {
+      "id": "S5",
+      "category": "rls",
+      "maps_to": {
+        "kind": "rls-provision",
+        "ref": "07 §5 R4 — le policy vincolano per identita/tenant (auth.uid()/tenant_id) (control_id RLS004_MISSING_TENANT_PREDICATE, [DB-test])",
+        "cwe": "CWE-285",
+        "owasp": "A01:2025"
+      }
+    },
+    {
+      "id": "S6",
+      "category": "injection",
+      "maps_to": {
+        "kind": "forbidden-pattern",
+        "ref": "07 §4.2 — SQL per concatenazione/template con input (regola col-injection-sql-string-concat, injection)",
+        "cwe": "CWE-89",
+        "owasp": "A05:2025"
+      }
+    },
+    {
+      "id": "S7",
+      "category": "authz",
+      "maps_to": {
+        "kind": "forbidden-pattern",
+        "ref": "07 §4.3 — Handler mutante che scrive senza check identita/ruolo (regola col-authz-mutating-route-no-identity-check, authz)",
+        "cwe": "CWE-862",
+        "owasp": "A01:2025"
+      }
+    },
+    {
+      "id": "S8",
+      "category": "dead-code",
+      "maps_to": {
+        "kind": "surface",
+        "ref": "07 §6.3 — igiene/superficie inutile: export non referenziato (dead-code, nessun OWASP; controllo 1 del checkpoint per delta, knip unused-export)"
+      }
+    }
+  ]
+}
