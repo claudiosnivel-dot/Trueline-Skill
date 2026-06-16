@@ -1,6 +1,9 @@
 # =============================================================================
 # trueline-ai-ruleset.yml — Ruleset Semgrep CURATO di Trueline (07 §4).
 #
+# version: 1.0.0   (versione propria e pinnata del ruleset, 09 §4; bump ad ogni
+#                   aggiunta/modifica di regole — tracciata nel manifest del .skill)
+#
 # Forma eseguibile della tabella dei "pattern vietati" (07 §4): secrets,
 # injection, authz, crypto, sink pericolosi — JS/TS + Supabase. Ogni regola
 # porta i metadata { category, owasp:"A..:2025", cwe } gia in tassonomia
