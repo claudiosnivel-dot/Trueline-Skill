@@ -21,20 +21,22 @@
 //
 // Node ESM, solo built-in + i moduli M0/M1.
 
-import { delimiter, resolve, dirname } from 'node:path';
+import { delimiter, resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 import { normalize } from '../findings/normalize.mjs';
 import { validateMany } from '../findings/validate_finding.mjs';
 import { createVerifyWorkspace } from './verify_workspace.mjs';
 import { deterministicFixProvider } from './fix_provider.mjs';
 import { runFindingLoop } from './loop.mjs';
-import { runCheckpoint } from '../checkpoint/checkpoint.mjs';
+import { runCheckpoint, loadCharacterization } from '../checkpoint/checkpoint.mjs';
+import { partition } from '../characterization/partition.mjs';
 import { LOOP_BUDGET } from '../checkpoint/thresholds.mjs';
+import { generate as generateCharacterization } from '../characterization/generate.mjs';
 import {
-  createWorkBranch, decideMerge, requestDestructive, currentBranch,
+  createWorkBranch, decideMerge, requestDestructive, currentBranch, commitOnBranch,
 } from '../git/layered_git.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -88,6 +90,60 @@ function collectFindings(dir) {
 
 const baseName = (p) => String(p).replace(/\\/g, '/').split('/').pop();
 
+// Esegue il recomputer (run.mjs) sulla copia e ritorna Map id->observed corrente.
+function recomputeObserved(dir, runnerPath) {
+  const res = spawnSync(process.execPath, [runnerPath], {
+    cwd: dir, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
+  });
+  if (res.status !== 0) return null;
+  const lines = (res.stdout || '').trim().split(/\r?\n/).filter(Boolean);
+  if (lines.length === 0) return null;
+  try {
+    const parsed = JSON.parse(lines[lines.length - 1]);
+    return new Map((parsed.assertions || []).map((a) => [a.id, a.observed]));
+  } catch { return null; }
+}
+
+// RE-BASELINE post-fix (06 §4): dopo che il loop ha applicato fix VERIFIED che
+// cambiano LEGITTIMAMENTE le assertion IMPACTED (es. fixare S5 -> invoices),
+// aggiorna la baseline.json SOLO per le assertion impacted (unione delle partition
+// su tutti i finding verified), lasciando INVARIATE le GUARD. Cosi' il checkpoint
+// finale "puro" (senza finding) confronta: GUARD vs baseline ORIGINALE (cattura
+// regressioni), IMPACTED vs post-fix (re-baselined). Ritorna l'elenco di id
+// re-baselined (o [] se non applicabile). NON tocca git (lo fa il chiamante).
+function rebaselineImpacted(dir, verifiedFindings) {
+  const charz = loadCharacterization(dir);
+  if (!charz) return { rebaselined: [], reason: 'nessuna characterization' };
+  const baselinePath = join(dir, 'test', 'characterization', 'baseline.json');
+  let baselineObj;
+  try { baselineObj = JSON.parse(readFileSync(baselinePath, 'utf8')); }
+  catch { return { rebaselined: [], reason: 'baseline.json illeggibile' }; }
+  const assertions = baselineObj.assertions || [];
+
+  // Unione degli id IMPACTED su tutti i finding verified (la fix li cambia per
+  // disegno). I finding non-verified (es. S2 mitigated-residual) NON re-baseline.
+  const impactedIds = new Set();
+  for (const f of verifiedFindings) {
+    // partition() richiede category + location: usiamo il record del finding.
+    const part = partition(f, assertions);
+    for (const id of part.impacted) impactedIds.add(id);
+  }
+  if (impactedIds.size === 0) return { rebaselined: [], reason: 'nessuna assertion impacted' };
+
+  const current = recomputeObserved(dir, charz.runnerPath);
+  if (!current) return { rebaselined: [], reason: 'recompute post-fix fallito' };
+
+  const rebaselined = [];
+  for (const a of assertions) {
+    if (impactedIds.has(a.id) && current.has(a.id)) {
+      a.observed = current.get(a.id); // re-baseline all'observed post-fix.
+      rebaselined.push(a.id);
+    }
+  }
+  writeFileSync(baselinePath, JSON.stringify(baselineObj, null, 2) + '\n');
+  return { rebaselined, reason: null };
+}
+
 // Selettore del set IN-SCOPE per il loop (set verificato-a-zero, L-COL-010 +
 // set seminato verificato-a-zero del prompt: S1, S2, S3, S4, S5, S8).
 //
@@ -131,6 +187,13 @@ function main() {
   const argv = process.argv.slice(2);
   const evalMode = argv.includes('--eval');
   const keep = argv.includes('--keep');
+  // --characterize (M3): genera la suite di characterization (06) nella COPIA
+  // PRIMA del loop, cosi' i controlli 3/4 del checkpoint hanno un oracolo reale
+  // (test) e diventano verdi (non piu' degradati). Senza il flag, comportamento
+  // M1 invariato (3/4 degradati): cio' preserva il gate M1.
+  const characterize = argv.includes('--characterize');
+  const dbUrlArg = (argv.find((a) => a.startsWith('--db-url=')) || '').split('=').slice(1).join('=');
+  const dbUrl = dbUrlArg ? dbUrlArg : null;
   const modeArg = (argv.find((a) => a.startsWith('--mode=')) || '').split('=')[1];
   const mode = modeArg === 'build' ? 'build' : 'remediate';
 
@@ -144,6 +207,35 @@ function main() {
     const branchName = `trueline/${mode}/loop-session`;
     createWorkBranch(ws.dir, branchName);
     report.git.branch = currentBranch(ws.dir);
+
+    // (2.5) CHARACTERIZATION (M3, opt-in via --characterize): genera la suite che
+    //   CATTURA il comportamento corrente del percorso critico (06) nella COPIA,
+    //   PRIMA di raccogliere i finding. Cosi':
+    //     - i file di test generati entrano nella BASELINE (pre-existing): non
+    //       contano come dead-code NUOVO al controllo 1 (04 §6, L-COL-021);
+    //     - i controlli 3/4 del checkpoint hanno un oracolo reale (npm test) e
+    //       diventano VERDI (non piu' degradati M3).
+    //   La copertura ONESTA (injection/authz -> M4; RLS runtime degradato) viene
+    //   riportata in report.coverage (criterio 3 onesto, L-COL-006).
+    if (characterize) {
+      const charz = generateCharacterization(ws.dir, { dbUrl });
+      report.characterization = {
+        ok: charz.ok,
+        suiteDir: charz.suiteDir,
+        runner: charz.runner,
+        testScript: charz.testScript,
+        files: charz.files,
+        assertions: (charz.assertions || []).map((a) => ({
+          id: a.id, kind: a.kind, target: a.target, file: a.file,
+        })),
+      };
+      report.coverage = charz.coverage;
+      // COMMIT della suite sul branch di lavoro PRIMA del loop. Senza questo, il
+      // revert pre-patch del loop (reset --hard + clean -fd, 05 §3) cancellerebbe
+      // i file di test non committati, facendo ricadere i controlli 3/4 in
+      // degradato. Committandola, ogni revert torna a uno SHA che la INCLUDE.
+      commitOnBranch(ws.dir, 'test(characterization): baseline comportamento corrente (M3)');
+    }
 
     // (3) raccogli i finding dalla copia.
     const all = collectFindings(ws.dir);
@@ -165,9 +257,29 @@ function main() {
       report.findings.push(res);
     }
 
+    // (4.5) RE-BASELINE post-fix delle assertion IMPACTED (06 §4 — il nodo):
+    //   le fix VERIFIED hanno cambiato LEGITTIMAMENTE il comportamento delle
+    //   assertion sulla stessa regione/tabella (es. S4/S5 -> documents/invoices).
+    //   Aggiorniamo la baseline SOLO per quelle (le GUARD restano congelate al
+    //   comportamento originale), poi committiamo: cosi' il checkpoint finale
+    //   "puro" (senza finding) trova GUARD invarianti e IMPACTED re-baselined ->
+    //   controlli 3/4 VERDI. Senza --characterize questo step e' no-op.
+    if (characterize) {
+      const verifiedFindings = inScope.filter((f) => {
+        const r = report.findings.find((x) => x.fingerprint === f.fingerprint);
+        return r && r.fix_state === 'verified';
+      });
+      const rb = rebaselineImpacted(ws.dir, verifiedFindings);
+      report.rebaseline = rb;
+      if (rb.rebaselined.length > 0) {
+        commitOnBranch(ws.dir, 'test(characterization): re-baseline IMPACTED post-fix (06 §4)');
+      }
+    }
+
     // (5) RI-VALUTA il checkpoint intero sulla copia (dopo le fix applicate),
-    //     col baseline-delta: gate-a sui finding NUOVI sopra soglia (04 §6).
-    //     I controlli 3/4 restano degradati (M3, niente test): documentato.
+    //     col baseline-delta: gate-a sui finding NUOVI sopra soglia (04 §6). Con
+    //     characterization presente i controlli 3/4 usano l'invarianza (06 §4):
+    //     GUARD invarianti (vs baseline originale), IMPACTED gia' re-baselined.
     const cp = runCheckpoint(ws.dir, { mode, runOpts: RUN_OPTS, withOsv: false, baseline });
     report.checkpoint = {
       green: cp.green, summary: cp.summary, degraded: cp.degraded,

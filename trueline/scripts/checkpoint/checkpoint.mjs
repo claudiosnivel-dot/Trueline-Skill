@@ -35,6 +35,7 @@ import { fileURLToPath } from 'node:url';
 
 import { normalize } from '../findings/normalize.mjs';
 import { validateMany } from '../findings/validate_finding.mjs';
+import { partition } from '../characterization/partition.mjs';
 import {
   GATE_SEVERITY, VERIFIED_ZERO_CATEGORIES, severityAtLeast,
 } from './thresholds.mjs';
@@ -187,15 +188,140 @@ export function control2Security(referenceApp, { baseline = new Set(), runOpts, 
 }
 
 // =============================================================================
-// CONTROLLO 3 — REGRESSIONI (test runner) — DEGRADATO in assenza di test (M3)
+// CHARACTERIZATION SNAPSHOT (06): baseline congelata + recompute corrente.
 // =============================================================================
-export function control3Regressions(referenceApp, { mode = 'remediate' } = {}) {
+//
+// La suite di characterization scrive:
+//   test/characterization/baseline.json = { assertions:[{id,...,observed}], ... }
+//   test/characterization/run.mjs       = recomputer -> { assertions:[{id,observed}] }
+// L'INVARIANZA (06 §4) confronta l'observed CORRENTE (recompute) con la baseline,
+// partizionando le assertion in GUARD vs IMPACTED rispetto a un finding (la fix
+// puo' cambiare legittimamente le IMPACTED, mai le GUARD).
+
+const CHARZ_REL_BASELINE = 'test/characterization/baseline.json';
+const CHARZ_REL_RUNNER = 'test/characterization/run.mjs';
+
+// deep-equal strutturale (ordine-insensibile sulle chiavi), per confrontare due
+// observed JSON. Niente dipendenze: confronto ricorsivo deterministico.
+function deepEqual(a, b) {
+  if (a === b) return true;
+  if (typeof a !== typeof b) return false;
+  if (a === null || b === null) return a === b;
+  if (typeof a !== 'object') return a === b;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) {
+    if (a.length !== b.length) return false;
+    return a.every((x, i) => deepEqual(x, b[i]));
+  }
+  const ka = Object.keys(a).sort();
+  const kb = Object.keys(b).sort();
+  if (ka.length !== kb.length) return false;
+  if (!ka.every((k, i) => k === kb[i])) return false;
+  return ka.every((k) => deepEqual(a[k], b[k]));
+}
+
+// Rileva se il progetto ha una suite di characterization VALUE-BASED (baseline +
+// runner). In assenza -> null (il chiamante ricade sul comportamento degradato,
+// preservando M1: un progetto senza characterization NON regredisce).
+export function loadCharacterization(referenceApp) {
+  const baselinePath = join(referenceApp, CHARZ_REL_BASELINE);
+  const runnerPath = join(referenceApp, CHARZ_REL_RUNNER);
+  if (!existsSync(baselinePath) || !existsSync(runnerPath)) return null;
+  let baseline;
+  try { baseline = JSON.parse(readFileSync(baselinePath, 'utf8')); } catch { return null; }
+  if (!baseline || !Array.isArray(baseline.assertions)) return null;
+  return { baseline, runnerPath };
+}
+
+// Esegue run.mjs (recomputer) sul codice CORRENTE e ritorna una Map id->observed.
+function recomputeObserved(referenceApp, runnerPath) {
+  const res = spawnSync(process.execPath, [runnerPath], {
+    cwd: referenceApp, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
+  });
+  if (res.error) return { ok: false, detail: `spawn run.mjs: ${res.error.message}` };
+  if (res.status !== 0) {
+    return { ok: false, detail: `run.mjs exit=${res.status}: ${(res.stderr || res.stdout || '').trim().slice(-300)}` };
+  }
+  const lines = (res.stdout || '').trim().split(/\r?\n/).filter(Boolean);
+  if (lines.length === 0) return { ok: false, detail: 'run.mjs: nessun output' };
+  let parsed;
+  try { parsed = JSON.parse(lines[lines.length - 1]); }
+  catch (e) { return { ok: false, detail: `run.mjs JSON invalido: ${e.message}` }; }
+  const map = new Map((parsed.assertions || []).map((a) => [a.id, a.observed]));
+  return { ok: true, map };
+}
+
+// characterizationInvariance — il NODO 06 §4. Confronta l'observed corrente con
+// la baseline, partizionato per finding:
+//   - control 3 (regressioni): ogni GUARD deve deep-equal il suo observed di
+//     baseline; una guard cambiata = regressione (red).
+//   - control 4 (invarianza): GUARD invariante; le IMPACTED sono RI-BASELINED al
+//     post-fix (la fix cambia legittimamente l'impacted). Green = guard invarianti.
+// Senza finding (partitionCtx null) -> invarianza PURA: TUTTE guard.
+//
+// Ritorna { ok, green, detail, guard, impacted, changedGuards }.
+export function characterizationInvariance(referenceApp, charz, finding) {
+  const recomputed = recomputeObserved(referenceApp, charz.runnerPath);
+  if (!recomputed.ok) {
+    return { ok: false, green: false, detail: `recompute KO: ${recomputed.detail}` };
+  }
+  const assertions = charz.baseline.assertions;
+  // partition() decide GUARD vs IMPACTED. Senza finding, tutte le assertion sono
+  // GUARD (invarianza pura): passiamo un finding "vuoto" che non impatta nulla
+  // (categoria sconosciuta, nessuna location) MA forziamo impacted=[] noi stessi.
+  let guardIds; let impactedIds;
+  if (finding) {
+    const part = partition(finding, assertions);
+    guardIds = new Set(part.guard);
+    impactedIds = new Set(part.impacted);
+  } else {
+    guardIds = new Set(assertions.map((a) => a.id));
+    impactedIds = new Set();
+  }
+
+  const changedGuards = [];
+  const missingGuards = [];
+  for (const a of assertions) {
+    if (!guardIds.has(a.id)) continue; // impacted: re-baselined, non vincola.
+    if (!recomputed.map.has(a.id)) { missingGuards.push(a.id); continue; }
+    if (!deepEqual(recomputed.map.get(a.id), a.observed)) changedGuards.push(a.id);
+  }
+
+  const green = changedGuards.length === 0 && missingGuards.length === 0;
+  const detail = green
+    ? `invarianza OK: ${guardIds.size} guard invarianti${impactedIds.size ? `, ${impactedIds.size} impacted re-baselined` : ''}`
+    : `invarianza VIOLATA: guard cambiate=[${changedGuards.join(',')}]`
+      + (missingGuards.length ? ` guard mancanti=[${missingGuards.join(',')}]` : '');
+  return {
+    ok: true, green, detail,
+    guard: [...guardIds], impacted: [...impactedIds], changedGuards, missingGuards,
+  };
+}
+
+// =============================================================================
+// CONTROLLO 3 — REGRESSIONI — characterization (06) o degradato (backward-compat).
+// =============================================================================
+//
+// Con una suite di characterization VALUE-BASED presente: ogni GUARD deve restare
+// invariante vs baseline (recompute observed deep-equal). Le IMPACTED dal finding
+// (se passato) sono ri-baselined: non vincolano (la fix le cambia legittimamente).
+// SENZA characterization: comportamento M1 invariato (degradato onesto, NON verde).
+export function control3Regressions(referenceApp, { mode = 'remediate', characterization = null, finding = null } = {}) {
+  const charz = characterization || loadCharacterization(referenceApp);
+  if (charz) {
+    const inv = characterizationInvariance(referenceApp, charz, finding);
+    if (!inv.ok) {
+      return { id: 3, name: 'regressions', status: 'error', green: false, detail: inv.detail };
+    }
+    return {
+      id: 3, name: 'regressions', status: inv.green ? 'green' : 'red', green: inv.green,
+      detail: `characterization (06 §4): ${inv.detail}`,
+      guard: inv.guard, impacted: inv.impacted, changedGuards: inv.changedGuards,
+    };
+  }
+  // BACKWARD-COMPAT: nessuna characterization -> M1 invariato.
   const runner = detectTestRunner(referenceApp);
   if (!runner.present) {
-    // FORWARD-DEP: in REMEDIATE l'oracolo sono i characterization test (06),
-    // che NON esistono ancora -> M3. In assenza, NON un falso verde: degradato.
-    // TODO M3: eseguire i characterization test (06) e asserire "nessun test
-    //   prima verde ora rosso".
     return {
       id: 3, name: 'regressions', status: 'degraded', green: false,
       detail: `nessun test runner (${mode}): controllo DEGRADATO, NON verde — characterization test = M3 (06)`,
@@ -209,13 +335,26 @@ export function control3Regressions(referenceApp, { mode = 'remediate' } = {}) {
 }
 
 // =============================================================================
-// CONTROLLO 4 — CONFORMITA-LOGICA — DEGRADATO in assenza di test (M3)
+// CONTROLLO 4 — CONFORMITA-LOGICA / INVARIANZA — characterization o degradato.
 // =============================================================================
-export function control4Conformance(referenceApp, { mode = 'remediate' } = {}) {
-  // BUILD: test di accettazione del task atomico (11 §3). REMEDIATE: invarianza
-  // characterization (06). Nessuno dei due esiste ancora -> M3.
-  // TODO M3: BUILD -> eseguire i test di accettazione del task atomico;
-  //   REMEDIATE -> asserire invarianza comportamentale via characterization.
+//
+// REMEDIATE: invarianza comportamentale (06 §4) — identica logica del controllo 3
+// con la partition (GUARD invarianti, IMPACTED re-baselined). Con una suite
+// presente, green = guard invarianti. SENZA characterization: M1 invariato.
+export function control4Conformance(referenceApp, { mode = 'remediate', characterization = null, finding = null } = {}) {
+  const charz = characterization || loadCharacterization(referenceApp);
+  if (charz) {
+    const inv = characterizationInvariance(referenceApp, charz, finding);
+    if (!inv.ok) {
+      return { id: 4, name: 'conformance', status: 'error', green: false, detail: inv.detail };
+    }
+    return {
+      id: 4, name: 'conformance', status: inv.green ? 'green' : 'red', green: inv.green,
+      detail: `invarianza characterization (06 §4): ${inv.detail}`,
+      guard: inv.guard, impacted: inv.impacted, changedGuards: inv.changedGuards,
+    };
+  }
+  // BACKWARD-COMPAT: nessuna characterization -> M1 invariato.
   const runner = detectTestRunner(referenceApp);
   if (!runner.present) {
     return {
@@ -225,7 +364,6 @@ export function control4Conformance(referenceApp, { mode = 'remediate' } = {}) {
         : 'nessuna baseline characterization: controllo DEGRADATO, NON verde — M3 (06)',
     };
   }
-  // Con un runner presente, in REMEDIATE controllo 4 collassa su 3 (invarianza).
   const res = runTests(referenceApp, runner);
   return {
     id: 4, name: 'conformance', status: res.green ? 'green' : 'red', green: res.green,
@@ -273,12 +411,21 @@ export function runCheckpoint(referenceApp, opts = {}) {
     baseline = new Set(),
     runOpts = { runId: 'checkpoint', createdAt: '1970-01-01T00:00:00.000Z' },
     withOsv = true,
+    // finding: contesto per la partition GUARD/IMPACTED dei controlli 3/4 (06 §4).
+    //   - presente (REMEDIATE su una fix): le assertion sulla stessa regione/tabella
+    //     sono IMPACTED (re-baselined); le altre GUARD (invarianti).
+    //   - assente (run_checkpoint "puro"): TUTTE le assertion sono GUARD
+    //     (invarianza pura: tutto deve restare invariato vs baseline).
+    finding = null,
+    // characterization: snapshot pre-caricato { baseline, runnerPath }. Se null,
+    // viene auto-rilevato da referenceApp (test/characterization/*).
+    characterization = null,
   } = opts;
 
   const c1 = control1DeadCode(referenceApp, { baseline, runOpts });
   const c2 = control2Security(referenceApp, { baseline, runOpts, withOsv });
-  const c3 = control3Regressions(referenceApp, { mode });
-  const c4 = control4Conformance(referenceApp, { mode });
+  const c3 = control3Regressions(referenceApp, { mode, characterization, finding });
+  const c4 = control4Conformance(referenceApp, { mode, characterization, finding });
 
   const controls = [c1, c2, c3, c4];
   const green = controls.every((c) => c.green === true);

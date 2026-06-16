@@ -25,13 +25,14 @@
 // Node ESM, solo built-in + oracoli M0 + checkpoint + git a strati.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve, dirname, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { normalize } from '../findings/normalize.mjs';
 import { validateMany } from '../findings/validate_finding.mjs';
 import { LOOP_BUDGET } from '../checkpoint/thresholds.mjs';
+import { loadCharacterization, characterizationInvariance } from '../checkpoint/checkpoint.mjs';
 import { commitOnBranch, revertToRef, headSha } from '../git/layered_git.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -92,19 +93,94 @@ function stillPresent(finding, findings) {
   return findings.some((f) => f.fingerprint === finding.fingerprint);
 }
 
-// --- Esegue i test pertinenti sulla copia (se esiste un runner) --------------
-function runTests(dir) {
+// RE-BASELINE IMMEDIATO post-verifica (06 §4 — il nodo): quando una fix viene
+// promossa a verified, l'observed delle assertion IMPACTED dal finding e'
+// cambiato LEGITTIMAMENTE. Aggiorniamo la baseline.json SOLO per quelle e
+// committiamo, COSI' il finding SUCCESSIVO (che le tratta come GUARD) le trova
+// gia' allineate al nuovo comportamento e non scambia un cambiamento legittimo
+// per una regressione. Le GUARD del finding corrente restano congelate. No-op se
+// non c'e' characterization (backward-compat M1). NON tocca git history: usa il
+// commit additivo/reversibile sul branch della copia.
+function rebaselineImpactedAfterVerify(dir, finding) {
+  const charz = loadCharacterization(dir);
+  if (!charz) return { rebaselined: [] };
+  const baselinePath = resolve(dir, 'test', 'characterization', 'baseline.json');
+  let baselineObj;
+  try { baselineObj = JSON.parse(readFileSync(baselinePath, 'utf8')); }
+  catch { return { rebaselined: [] }; }
+  const assertions = baselineObj.assertions || [];
+
+  // Recompute corrente.
+  const inv = characterizationInvariance(dir, charz, finding);
+  if (!inv.ok) return { rebaselined: [] };
+  const impacted = new Set(inv.impacted);
+  if (impacted.size === 0) return { rebaselined: [] };
+
+  const res = spawnSync(process.execPath, [charz.runnerPath], {
+    cwd: dir, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
+  });
+  if (res.status !== 0) return { rebaselined: [] };
+  const lines = (res.stdout || '').trim().split(/\r?\n/).filter(Boolean);
+  if (lines.length === 0) return { rebaselined: [] };
+  let current;
+  try { current = new Map((JSON.parse(lines[lines.length - 1]).assertions || []).map((a) => [a.id, a.observed])); }
+  catch { return { rebaselined: [] }; }
+
+  const rebaselined = [];
+  for (const a of assertions) {
+    if (impacted.has(a.id) && current.has(a.id)) {
+      a.observed = current.get(a.id);
+      rebaselined.push(a.id);
+    }
+  }
+  if (rebaselined.length === 0) return { rebaselined: [] };
+  writeFileSync(baselinePath, JSON.stringify(baselineObj, null, 2) + '\n');
+  commitOnBranch(dir, `test(characterization): re-baseline IMPACTED [${rebaselined.join(',')}] post-fix ${shortFp(finding)} (06 §4)`);
+  return { rebaselined };
+}
+
+// --- Esegue i test pertinenti sulla copia (RIESEGUI i test, 05 §3) -----------
+//
+// INVARIANZA per partition (06 §4 — il nodo): quando esiste una suite di
+// characterization VALUE-BASED, la parte "RIESEGUI i test" NON e' un nudo
+// `npm test` (che tratterebbe TUTTE le assertion come guard e quindi
+// segnalerebbe rosso anche per una assertion IMPACTED che la fix cambia
+// LEGITTIMAMENTE). Usa invece characterizationInvariance(dir, charz, finding):
+//   - GUARD    devono restare invarianti vs baseline (regressione = rosso);
+//   - IMPACTED dal `finding` corrente sono re-baselined (la fix le cambia per
+//     disegno) -> non vincolano.
+// Cosi' fixare S5 (invoices.observed cambia) NON fa fallire i test del loop,
+// mentre rompere una GUARD (es. /health o una tabella non toccata) li fa fallire.
+//
+// SENZA characterization: comportamento M1 invariato (degradato onesto se non
+// c'e' runner; `npm test` se un runner reale esiste).
+function runTests(dir, finding = null) {
+  const charz = loadCharacterization(dir);
+  if (charz) {
+    const inv = characterizationInvariance(dir, charz, finding);
+    if (!inv.ok) {
+      // recompute fallito: NON un falso verde -> rosso esplicito.
+      return { ran: true, green: false, detail: `characterization: ${inv.detail}` };
+    }
+    return {
+      ran: true, green: inv.green,
+      detail: inv.green
+        ? `characterization invarianza OK (${inv.detail})`
+        : `characterization invarianza VIOLATA (${inv.detail})`,
+      guard: inv.guard, impacted: inv.impacted,
+    };
+  }
+
   const pkgPath = resolve(dir, 'package.json');
   if (!existsSync(pkgPath)) return { ran: false, green: true, detail: 'nessun package.json' };
   let pkg;
   try { pkg = JSON.parse(readFileSync(pkgPath, 'utf8')); } catch { return { ran: false, green: true, detail: 'package.json illeggibile' }; }
   const t = pkg.scripts && pkg.scripts.test;
   if (!t || /no test specified/i.test(t)) {
-    // FORWARD-DEP M3: senza characterization test (06) la parte "RIESEGUI i
-    // test" del loop e' DEGRADATA, non un falso verde. Non blocca la
-    // promozione dell'oracolo, ma il checkpoint resta degradato sui controlli
-    // 3/4 (vedi checkpoint.mjs). // TODO M3.
-    return { ran: false, green: true, degraded: true, detail: 'nessun test runner: parte test DEGRADATA (M3)' };
+    // FORWARD-DEP: senza characterization test (06) la parte "RIESEGUI i test"
+    // del loop e' DEGRADATA, non un falso verde. Non blocca la promozione
+    // dell'oracolo, ma il checkpoint resta degradato sui controlli 3/4.
+    return { ran: false, green: true, degraded: true, detail: 'nessun test runner: parte test DEGRADATA' };
   }
   const res = spawnSync('npm', ['run', 'test', '--silent'], {
     cwd: dir, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, shell: true,
@@ -149,11 +225,14 @@ export function runFindingLoop(finding, ctx) {
   if (triage.category !== 'secret' || !/legacy\/credentials\.ts$/.test(triage.location.file)) {
     const pre = rerunOracleFor(triage, dir, runOpts);
     if (pre.ok && !stillPresent(triage, pre.findings)) {
-      const tests = runTests(dir);
+      // partition col finding corrente: l'assertion sulla stessa regione/tabella
+      // e' IMPACTED (re-baselined), le altre GUARD (invarianti) — 06 §4.
+      const tests = runTests(dir, triage);
       if (tests.green) {
+        const rb = rebaselineImpactedAfterVerify(dir, triage);
         return terminal('verified', triage, attempts,
           `gia' azzerato da una fix sorella; oracolo riesieguito pulito + test ${tests.detail}`,
-          { verified: true, resolvedBySibling: true });
+          { verified: true, resolvedBySibling: true, rebaselined: rb.rebaselined });
       }
     }
   }
@@ -219,9 +298,10 @@ export function runFindingLoop(finding, ctx) {
       + `[${patch.signature}]`;
     const commit = commitOnBranch(dir, commitMsg);
 
-    // RIESEGUI lo stesso oracolo (stesso rule_id) + RIESEGUI i test.
+    // RIESEGUI lo stesso oracolo (stesso rule_id) + RIESEGUI i test (invarianza
+    // per partition: GUARD invarianti, IMPACTED dal finding re-baselined — 06 §4).
     const rerun = rerunOracleFor(triage, dir, runOpts);
-    const tests = runTests(dir);
+    const tests = runTests(dir, triage);
 
     const oracleClean = rerun.ok && !stillPresent(triage, rerun.findings);
     const testsOk = tests.green; // degradato (M3) conta come non-rosso
@@ -234,10 +314,14 @@ export function runFindingLoop(finding, ctx) {
     });
 
     if (oracleClean && testsOk) {
+      // RE-BASELINE immediato delle assertion IMPACTED da QUESTA fix (06 §4): il
+      // finding successivo le tratta come GUARD e deve trovarle gia' allineate.
+      const rb = rebaselineImpactedAfterVerify(dir, triage);
       // SOLO l'oracolo promuove (L-COL-002): verified.
       return terminal('verified', triage, attempts,
-        `oracolo riesieguito pulito (${rerun.scope || ''}) + test ${tests.detail}`,
-        { verified: true });
+        `oracolo riesieguito pulito (${rerun.scope || ''}) + test ${tests.detail}`
+        + (rb.rebaselined.length ? `; impacted re-baselined=[${rb.rebaselined.join(',')}]` : ''),
+        { verified: true, rebaselined: rb.rebaselined });
     }
 
     // verification-failed: residui o test rotto. REVERT la patch prima del retry.
