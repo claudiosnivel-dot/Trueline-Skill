@@ -45,8 +45,14 @@
 //   node trueline/scripts/preflight.mjs [<project-dir>]         # report umano, exit 0/1
 //   node trueline/scripts/preflight.mjs --json [<project-dir>]  # JSON su stdout, exit 0
 //   node trueline/scripts/preflight.mjs --json --simulate-missing=gitleaks  # self-test
+//   node trueline/scripts/preflight.mjs --install              # propone + installa SOLO
+//                                                              # col consenso (TTY: y/N)
+//   node trueline/scripts/preflight.mjs --install --yes        # consenso esplicito dato
+//   node trueline/scripts/preflight.mjs --install --yes --dry-run  # mostra senza eseguire
+//   node trueline/scripts/preflight.mjs --install --yes --only=gitleaks  # un solo tool
 
 import { spawnSync } from 'node:child_process';
+import { createInterface } from 'node:readline';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, delimiter, resolve, dirname } from 'node:path';
 import { homedir, platform } from 'node:os';
@@ -66,6 +72,23 @@ const SIMULATE_MISSING = SIMULATE_MISSING_ARG
 
 // Argomento posizionale: directory del progetto target (per trovare knip locale).
 const PROJECT_DIR_ARG = argv.find((a) => !a.startsWith('--')) || null;
+
+// --- Flag di install CONSENT-GATED (09 §6, L-COL-005) ------------------------
+// La skill PROPONE sempre il comando; lo ESEGUE solo col consenso ESPLICITO,
+// MAI in autonomia. (--install vale nel flusso report umano/agente, non con --json.)
+//   --install      dopo la rilevazione, tenta di soddisfare i tool mancanti/
+//                  sotto-versione INSTALLABILI — solo col consenso esplicito.
+//   --yes | -y     consenso esplicito non-interattivo (es. l'agente lo passa DOPO
+//                  che l'utente ha approvato in chat). Senza, e con stdin NON-TTY,
+//                  NON installa: salta e lo dichiara (mai un install silenzioso).
+//   --dry-run      mostra i comandi che ESEGUIREBBE (consenso permettendo) senza
+//                  eseguirli. NON aggira il consenso.
+//   --only=<tool>  limita l'install a un solo tool (semgrep|gitleaks|osv-scanner|knip).
+const INSTALL_MODE = argv.includes('--install');
+const ASSUME_YES = argv.includes('--yes') || argv.includes('-y');
+const DRY_RUN = argv.includes('--dry-run');
+const ONLY_ARG = argv.find((a) => a.startsWith('--only='));
+const ONLY_TOOL = ONLY_ARG ? ONLY_ARG.replace('--only=', '').toLowerCase() : null;
 
 // --- Costanti di piattaforma -------------------------------------------------
 const IS_WIN = platform() === 'win32';
@@ -508,9 +531,107 @@ const RLS_CHECK_ENTRY = {
   note: 'rls_check viaggia con la skill (03 §5.4). Dipende solo dal runtime Node/JS. Sempre disponibile.',
 };
 
+// --- Install CONSENT-GATED (L-COL-005) ---------------------------------------
+
+// Un suggerimento d'install e' AUTO-ESEGUIBILE solo se, tolto l'eventuale commento
+// inline (" # ..."), resta un comando reale (non una nota che inizia per '#', tipo
+// "# Download binario da: ..."). Le note manuali NON si eseguono mai.
+function executableInstall(cmd) {
+  if (!cmd || typeof cmd !== 'string') return { executable: false, cmd: null };
+  const noInline = cmd.replace(/\s+#.*$/, '').trim();
+  if (!noInline || noInline.startsWith('#')) return { executable: false, cmd: null };
+  return { executable: true, cmd: noInline };
+}
+
+// Conferma interattiva (solo su TTY). Accetta s/si/y/yes (case-insensitive).
+function askYesNo(question) {
+  return new Promise((res) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(question, (ans) => { rl.close(); res(/^\s*(s|si|y|yes)\s*$/i.test(ans)); });
+  });
+}
+
+// Esegue gli install dei tool mancanti/sotto-versione INSTALLABILI, uno per uno,
+// SOLO col consenso esplicito (L-COL-005): mai in autonomia. Senza --yes e senza un
+// TTY su cui chiedere, salta e lo dichiara. rls_check non e' mai un target (built-in).
+// Ritorna un riepilogo { targets, installed, skipped, failed }.
+async function runInstall(results) {
+  const HR = '─'.repeat(64);
+  console.log('');
+  console.log(HR);
+  console.log(` TRUELINE — install oracoli (consenso esplicito, L-COL-005)${DRY_RUN ? '  [DRY-RUN]' : ''}`);
+  console.log(HR);
+
+  const targets = results.filter((r) => r.tool !== 'rls_check'
+    && (r.status === 'missing' || r.status === 'version-low')
+    && r.installable && r.install_cmd
+    && (!ONLY_TOOL || r.tool === ONLY_TOOL));
+
+  if (targets.length === 0) {
+    console.log(ONLY_TOOL
+      ? `  Niente da installare per --only=${ONLY_TOOL} (gia' pronto, non-installabile, o sconosciuto).`
+      : '  Niente da installare: gli oracoli esterni sono gia\' pronti (o non-installabili).');
+    console.log(HR);
+    return { targets: 0, installed: 0, skipped: 0, failed: 0 };
+  }
+
+  let installed = 0; let skipped = 0; let failed = 0;
+  for (const r of targets) {
+    const { executable, cmd } = executableInstall(r.install_cmd);
+    if (!executable) {
+      console.log(`  [manuale] ${r.tool}: passo manuale richiesto (nessun comando auto-eseguibile): ${r.install_cmd}`);
+      skipped++;
+      continue;
+    }
+
+    // CONSENSO ESPLICITO (L-COL-005): --yes, oppure conferma interattiva su TTY.
+    // Mai installare senza: senza --yes e senza TTY -> salta e lo dichiara.
+    let consented = ASSUME_YES;
+    if (!consented) {
+      if (process.stdin.isTTY) {
+        consented = await askYesNo(`  Installo ${r.tool} con:\n    ${cmd}\n  Procedo? [s/N] `);
+      } else {
+        console.log(`  [skip] ${r.tool}: consenso esplicito richiesto — ri-esegui con --yes (o conferma su un terminale interattivo).`);
+        console.log(`         comando proposto: ${cmd}`);
+        skipped++;
+        continue;
+      }
+    }
+    if (!consented) {
+      console.log(`  [skip] ${r.tool}: non confermato. comando proposto: ${cmd}`);
+      skipped++;
+      continue;
+    }
+
+    if (DRY_RUN) {
+      console.log(`  [dry-run] ${r.tool}: eseguirei: ${cmd}`);
+      installed++;
+      continue;
+    }
+
+    console.log(`  [install] ${r.tool}: eseguo: ${cmd}`);
+    const res = spawnSync(cmd, {
+      shell: true, stdio: 'inherit', env: ENV_WITH_GOBIN, timeout: 600_000,
+    });
+    if (!res.error && res.status === 0) {
+      console.log(`  [ok] ${r.tool}: installato.`);
+      installed++;
+    } else {
+      console.log(`  [fail] ${r.tool}: install fallito (status=${res.status}${res.error ? `, ${res.error.message}` : ''}).`);
+      failed++;
+    }
+  }
+
+  console.log(HR);
+  console.log(`  Esito install: ${installed} ${DRY_RUN ? 'pianificati (dry-run)' : 'eseguiti'}, ${skipped} saltati, ${failed} falliti.`);
+  if (!DRY_RUN && installed > 0) console.log('  Ri-esegui il preflight per confermare lo stato aggiornato.');
+  console.log(HR);
+  return { targets: targets.length, installed, skipped, failed };
+}
+
 // --- Punto di ingresso -------------------------------------------------------
 
-function main() {
+async function main() {
   const results = [
     detectSemgrep(SIMULATE_MISSING === 'semgrep'),
     detectGitleaks(SIMULATE_MISSING === 'gitleaks'),
@@ -588,8 +709,24 @@ function main() {
   }
   console.log(HR);
 
+  // Install CONSENT-GATED (L-COL-005): solo se richiesto, DOPO il report.
+  let exitCode = anyProblem ? 1 : 0;
+  if (INSTALL_MODE) {
+    const sum = await runInstall(results);
+    if (DRY_RUN) {
+      // dry-run non risolve nulla: se c'erano target, l'azione resta pendente.
+      exitCode = sum.targets > 0 ? 1 : exitCode;
+    } else {
+      // verde solo se non resta nulla di non-soddisfatto (saltato/fallito).
+      exitCode = (sum.failed > 0 || sum.skipped > 0) ? 1 : (sum.installed > 0 ? 0 : exitCode);
+    }
+  }
+
   // Exit 1 se almeno un tool esterno è non-ok (per i chiamanti che usano l'exit code).
-  process.exit(anyProblem ? 1 : 0);
+  process.exit(exitCode);
 }
 
-main();
+main().catch((e) => {
+  console.error(`preflight: errore inatteso — ${e && e.message ? e.message : e}`);
+  process.exit(2);
+});

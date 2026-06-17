@@ -130,9 +130,11 @@ faceva", non "e giusto". Detto in chiaro all'utente.
   tool dead-code `knip`/`ts-prune`/`depcheck`) con `command -v` / `npx --no-install`,
   e confronta la **versione minima pinnata** nel manifest;
 - per un tool assente **propone** l'install adatto all'OS, **mai lo esegue senza
-  consenso** *(L-COL-005)*. Un tool senza canale di install -> **dichiarato non
-  installabile** e il suo controllo **degrada a "non eseguito"**, mai un verde finto
-  *(L-COL-006)*;
+  consenso** *(L-COL-005)*. Sul tuo via esplicito l'install lo puo' eseguire il
+  preflight stesso (`scripts/preflight.mjs --install --yes` — consent-gated: senza
+  `--yes` e senza un terminale interattivo non installa nulla). Un tool senza canale
+  di install -> **dichiarato non installabile** e il suo controllo **degrada a "non
+  eseguito"**, mai un verde finto *(L-COL-006)*;
 - per il **push** verifica remote + auth gia configurati: assenti -> la skill
   **committa in locale** sul branch e lo **dichiara**, senza fallire in silenzio;
 - l'`rls_check` (`scripts/oracles/rls_check.mjs`) non ha dipendenze oltre il runtime
