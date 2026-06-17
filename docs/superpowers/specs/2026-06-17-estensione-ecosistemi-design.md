@@ -21,7 +21,7 @@ Il v1 di Trueline supporta **un solo ecosistema**: JavaScript/TypeScript su Supa
 
 - **Driver = roadmap di prodotto.** Nessun target obbligato adesso; si ottimizza valore/effort.
 - **Direzione = entrambe.** Sia nuovi *backend* (stesso JS/TS: Firebase, Next.js API, Cloudflare D1…) sia nuovi *linguaggi* (backend Postgres: Python, Go, Ruby…).
-- **Barra di supporto = B + pavimento minimo.** Fase 1: ogni ecosistema porta **detection** con una barra minima garantita (`secret` + `dependency-vuln` + `authz-surface`), coverage **sempre dichiarata** (`L-COL-006`). Fase 2: il **loop verificato** si promuove per ecosistema dove l'uso lo giustifica. È la generalizzazione dell'asimmetria già onesta del v1 (injection/authz sono già detection-only con coverage dichiarata).
+- **Barra di supporto = B + pavimento minimo.** Fase 1: ogni ecosistema porta **detection** con una barra minima garantita (`secret` + `dependency-vuln` + la superficie authz/RLS del backend, ruolo `authz-surface`), coverage **sempre dichiarata** (`L-COL-006`). Fase 2: il **loop verificato** si promuove per ecosistema dove l'uso lo giustifica. È la generalizzazione dell'asimmetria già onesta del v1 (injection/authz sono già detection-only con coverage dichiarata).
 
 ## 3. Decomposizione del programma
 
@@ -65,19 +65,20 @@ Bozza dei campi di `ecosystem.json`:
     "dependency-vuln": { "tool": "osv", "lockfiles": ["package-lock.json", "pnpm-lock.yaml"] },
     "injection|authz|crypto": { "tool": "semgrep", "ruleset": "ruleset/" },
     "dead-code":       { "tool": "knip" },
-    "authz-surface":   { "tool": "rls_check", "kind": "postgres-rls", "finding_category": "rls" }
+    "rls":             { "tool": "rls_check", "kind": "postgres-rls", "role": "authz-surface" }
   },
   "test_runner": { "detect": ["vitest", "jest", "node:test"] },
-  // floor/verified_set referenziano le CATEGORIE-CONTRATTO (le chiavi di "oracles").
-  // Il binding mappa la categoria-contratto alla finding-category concreta
-  // (es. authz-surface -> "rls" per postgres) — vedi §10.
-  "floor":        ["secret", "dependency-vuln", "authz-surface"],
-  "verified_set": ["secret", "authz-surface", "dead-code"],
+  // oracles, floor e verified_set usano le FINDING-CATEGORY di 04 (vocabolario unico).
+  // "role": "authz-surface" marca l'UNICO oracolo che copre il modello di
+  // autorizzazione-dati del backend (qui rls_check -> finding-category "rls");
+  // l'engine lo referenzia per RUOLO, non per nome. Nessuna categoria nuova in 04.
+  "floor":        ["secret", "dependency-vuln", "rls"],
+  "verified_set": ["secret", "rls", "dead-code"],
   "coverage_policy": "declared"
 }
 ```
 
-Il manifest è il **contratto** fra l'engine generico e l'ecosistema. "Supportare uno stack" = scrivere un manifest valido + i suoi oracoli specifici.
+Il manifest è il **contratto** fra l'engine generico e l'ecosistema, validato contro uno schema JSON condiviso (`scripts/ecosystem/ecosystem.schema.json`, gemello di `finding.schema.json`). "Supportare uno stack" = scrivere un manifest valido + i suoi oracoli specifici.
 
 ### 5.2 Engine generalizzato
 
@@ -91,11 +92,11 @@ Principio: **il codice dell'engine smette di nominare oracoli/tool/categorie; li
 - **`SKILL.md` §1–§2**: classificazione e caricamento per-modalità diventano parametrici sull'ecosistema attivo (carica `ecosystems/<attivo>/guide.md`); `detect`/`triggers` vivono nei manifest. **Il corpo resta generico** (< 500 righe, nessuna logica di ecosistema).
 - **`normalize.mjs`**: resta generico; namespacing del `rule_id` per ecosistema.
 
-**Astrazione chiave — `authz-surface` (l'"RLS-equivalente").** Categoria che rappresenta *il modello di autorizzazione-dati del backend*: Postgres→RLS (`rls_check`), Firebase→security rules (nuovo `firestore_rules_check`), REST generico→authz-di-rotta (semgrep). Il manifest **lega** quale oracolo la copre: è ciò che fa generalizzare "RLS" senza cablarlo.
+**Astrazione chiave — il ruolo `authz-surface` (l'"RLS-equivalente").** *Non* è una categoria nuova (il finding model `04` resta invariato): è un **ruolo** che il manifest assegna a **un** binding — l'oracolo che copre il modello di autorizzazione-dati del backend. Postgres→RLS (`rls_check`, emette finding-category `rls`), Firebase→security rules (`firestore_rules_check`), REST generico→authz-di-rotta (semgrep). L'engine chiede "l'oracolo con `role: authz-surface`" senza cablare quale sia: è ciò che fa generalizzare "RLS" senza un rename di categorie.
 
 ### 5.3 Barra B + coverage (tre tier dichiarati e gate-enforced)
 
-- **`floor`**: categorie che ogni ecosistema **deve** almeno *rilevare*. Il gate di conformità rifiuta un pack se una categoria del floor non è legata a un oracolo **e** colta sulla fixture.
+- **`floor`**: finding-category che ogni ecosistema **deve** almeno *rilevare* — proposta: `secret` + `dependency-vuln` + la categoria coperta dal ruolo `authz-surface` (per Postgres = `rls`). Il gate di conformità rifiuta un pack se una categoria del floor non è legata a un oracolo **e** colta sulla fixture.
 - **`verified_set`**: categorie che il loop può portare a `verified` (fase 2). `selectInScope` lo legge dal manifest. Un ecosistema può partire con `verified_set: []` (detection puro) purché il floor sia coperto e la coverage lo dichiari.
 - **`coverage_policy: declared`**: il report, per **ogni** categoria, dice `verified` | `detection-only` | `not-covered`. Mai "sicuro".
 
@@ -107,7 +108,7 @@ Relazione: `floor` e `verified_set` sono entrambi sottoinsiemi delle categorie *
 
 - **Fixture per ecosistema**: ogni pack porta la sua reference app vulnerabile (nel suo linguaggio/backend) con difetti seminati mappati alle categorie del manifest; minimo di fase 1 = il `floor`. `registry.json` atteso per-ecosistema.
 - **Nuovo `eval/harness/ecosystem_conformance.mjs <id>`** che, leggendo il manifest, asserisce:
-  1. **Manifest valido** (nuovo `validate_ecosystem.mjs`, gemello di `validate_blueprint`): schema ok; ogni categoria del `floor` legata a un oracolo; `verified_set ⊆ rilevate`; `coverage_policy` presente.
+  1. **Manifest valido** (nuovo `validate_ecosystem.mjs`, gemello di `validate_blueprint`): valido contro `ecosystem.schema.json` (JSON Schema); ogni categoria del `floor` legata a un oracolo; **esattamente un** binding con `role: authz-surface`; `verified_set ⊆` categorie legate; `coverage_policy` presente.
   2. **DETECTION parity** *(sempre)*: ogni difetto seminato è colto **dall'oracolo legato** (non da ispezione LLM); il `floor` è tra questi; coverage dichiarata; mai "sicuro".
   3. **VERIFIED parity** *(solo categorie in `verified_set`)*: raggiungono `verified` (oracolo ri-eseguito pulito + test verdi); le non-`verified_set` mai auto-promosse. `verified_set: []` → soddisfatto a vuoto.
   4. **BUILD parity** *(dove l'ecosistema supporta BOOTSTRAP/BUILD)*: `validate_blueprint` + checkpoint + git-a-strati — agnostici, riusano la logica esistente.
@@ -137,13 +138,11 @@ Relazione: `floor` e `verified_set` sono entrambi sottoinsiemi delle categorie *
 - `validate_ecosystem.mjs` + `ecosystem_conformance.mjs` esistono, test-first, e sono verdi.
 - Nessuna regressione sui gate `m1…m4` + run_eval; `package_skill` lint VERDE con l'albero `ecosystems/<id>/`.
 
-## 8. Ordine verso SP-1
+## 8. Ordine verso SP-1 / SP-2
 
-SP-1 = primo pack detection più economico-ad-alto-valore. Candidati da valutare nel piano di SP-1:
-- **Next.js API / REST generico su Postgres**: riusa **tutti** gli oracoli JS/TS; `authz-surface` = authz-di-rotta via semgrep; ~zero oracoli nuovi → il più economico.
-- **Python su Postgres**: riusa `rls_check` + gitleaks + osv; serve un wrapper `vulture` (dead-code) + regole Semgrep Python.
+**SP-1 (fissato) = JS/TS + Postgres "non-Supabase"** (stile Next.js / Node API, client `pg`/Prisma/Drizzle). È la scelta a più alto segnale per *provare* SP-0: riusa **tutti** gli oracoli JS/TS (knip, semgrep+regole JS, gitleaks, osv) → ~zero tooling nuovo, ma **stressa proprio il ruolo `authz-surface`**, che passa da RLS-al-DB a *authz-di-rotta nell'app*. Isola il meccanismo-manifest (nessuna toolchain di linguaggio nuovo da debuggare in parallelo) ed è ad alto valore roadmap.
 
-La scelta del primo stack si fissa nel piano di SP-1.
+**SP-2 = primo linguaggio nuovo: Python su Postgres** — riusa `rls_check` + gitleaks + osv; introduce un wrapper `vulture` (dead-code) + regole Semgrep Python. Un asse nuovo alla volta: prima il backend (SP-1), poi il linguaggio (SP-2).
 
 ## 9. Come si costruisce SP-0
 
@@ -151,7 +150,7 @@ Col metodo del progetto: **milestone via Dynamic Workflows**, **test-first** (og
 
 ## 10. Rischi / questioni aperte
 
-- **Forma del manifest** (JSON vs YAML vs modulo JS dati): bozza in JSON; da confermare in fase di piano (coerenza con `validate_blueprint`/finding schema).
-- **Due vocabolari di categorie** (da finalizzare nel piano): il manifest usa **categorie-contratto** come chiavi (`secret`, `dependency-vuln`, `authz-surface`, `dead-code`, …); il loop e il finding model (`04`) usano **finding-category** concrete (`secret`, `rls`, `authz`, `dead-code`, …). Il ponte è il campo `finding_category` del binding (es. `authz-surface → rls` per postgres). `floor`/`verified_set` referenziano le categorie-contratto; `selectInScope` le risolve in finding-category via i binding. Da verificare che `authz-surface` come categoria-contratto non confligga coi nomi esistenti in `04`.
+- **Forma del manifest — RISOLTO:** JSON + `ecosystem.schema.json` (JSON Schema, gemello di `finding.schema.json`); `validate_ecosystem` = schema-check + controlli semantici. Niente YAML (eviterebbe il parser-subset custom dei blueprint, già fonte di bug in M2) né modulo-JS (config eseguibile = peggio per security/validazione).
+- **Vocabolario delle categorie — RISOLTO:** vocabolario unico = le finding-category di `04`. `authz-surface` è un **ruolo** (tag su un binding), non una categoria → nessuna categoria nuova in `04`, nessun ponte di mapping, `floor`/`verified_set`/`selectInScope` parlano tutte la stessa lingua (vedi §5.2). Resta da progettare nel piano: come `selectInScope` legge `verified_set` dal manifest al posto della costante cablata.
 - **Fixture multi-linguaggio**: ogni pack porta una piccola reference app nel suo linguaggio → costo di manutenzione delle fixture (mitigato dalla barra B: fixture minime in fase 1).
 - **`detect` ambiguo** quando un repo combacia più ecosistemi → regola di precedenza/`chiedi conferma` (coerente con la regola dura di `SKILL.md` §1).
