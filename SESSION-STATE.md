@@ -6,9 +6,9 @@
 |---|---|
 | **Progetto** | Trueline (`COL`) — ex codename *Collaudo*, nome bloccato in `O-COL-001` |
 | **Versione suite** | **v1.0** |
-| **Ultima sessione** | Impl. — **M5** (packaging & collaudo finale `09`+`10`): **ripresa dopo blackout**. Il workflow M5 precedente fu interrotto da un'interruzione di corrente dopo BUILD ma prima di verify+integrate; gli 8 artefatti erano su disco (untracked), `main`/`origin` **mai toccati** (il guardrail `assertIsolatedRepo` di M4 ha retto: **0 contaminazione**, 5ª prova). Verifica di ripresa: gate v1-acceptance **56/56, k=2** (DB live + semgrep pinnato) + audit avversariale (5 auditor) = sostanza **reale, non gamed**. Unico gap (**pin budget `O-COL-006`**, interrotto dal blackout) **risolto e gate-enforced**: `GLOBAL_WALL_CLOCK_MS=242401`=round(p95 193921×1.25), 12 campioni; criterio 4 del gate rafforzato. **v1 "fatto"** (VISION §10). M-1…M5 su `main`. |
+| **Ultima sessione** | Impl. — **M5** (packaging & collaudo finale `09`+`10`): **ripresa dopo blackout**. Il workflow M5 precedente fu interrotto da un'interruzione di corrente dopo BUILD ma prima di verify+integrate; gli 8 artefatti erano su disco (untracked), `main`/`origin` **mai toccati** (il guardrail `assertIsolatedRepo` di M4 ha retto: **0 contaminazione**, 5ª prova). Verifica di ripresa: gate v1-acceptance **56/56, k=2** (DB live + semgrep pinnato) + audit avversariale (5 auditor) = sostanza **reale, non gamed**. Unico gap (**pin budget `O-COL-006`**, interrotto dal blackout) **risolto e gate-enforced**: `GLOBAL_WALL_CLOCK_MS=242401`=round(p95 193921×1.25), 12 campioni; criterio 4 del gate rafforzato. **v1 "fatto"** (VISION §10). M-1…M5 su `main`. **Post-v1 (stessa sessione):** `preflight --install` consent-gated (test 7/7, gate 56/56, su `main`); `.skill` emesso (`dist/`, gitignored) + Trueline **installata globalmente** (`~/.claude/skills/trueline`); **design+piano estensione multi-ecosistema (SP-0)** mergeati su `main` (`8709ba1`) — **non costruita**. |
 | **Data** | 17 giugno 2026 |
-| **Fase** | **Implementazione COMPLETA** via Dynamic Workflows. **M-1 ✅ · M0 ✅ · M1 ✅ · M2 ✅ · M3 ✅ · M4 ✅ · M5 ✅ (tutte su `main`)**. I due parity gate verdi = **v1 "fatto"** (VISION §10). |
+| **Fase** | **Implementazione COMPLETA** via Dynamic Workflows. **M-1 ✅ · M0 ✅ · M1 ✅ · M2 ✅ · M3 ✅ · M4 ✅ · M5 ✅ (tutte su `main`)**. I due parity gate verdi = **v1 "fatto"** (VISION §10). **Post-v1:** estensione multi-ecosistema **progettata e pianificata** (SP-0, `docs/superpowers/`), implementazione **differita**. |
 
 ---
 
@@ -122,8 +122,8 @@ Prossimo: **M3 — Characterization & REMEDIATE** (`06`): baseline, partizione g
 Ledger completo in `00-INDEX` §4–§5. Sintesi:
 
 - **Locked**: `L-COL-001 … 028`. Chat E ha coniato **`L-COL-027`** (build via Dynamic Workflows) e **`L-COL-028`** (policy conservativa FP, ex meccanismo di `L-COL-002/006/021`). `validate_blueprint` resta **meccanismo** di `L-COL-019`. `L-COL-026` (OWASP 2025) emendato in `03`/`04`.
-- **Aperte**: `O-COL-005` (2° ecosistema → v2); `O-COL-010` (piano Max per i Dynamic Workflows; default assunti disponibili, fallback loop sequenziale `12`).
-- **Chiuse**: `O-COL-001` (nome = **Trueline**); `O-COL-002` (GitHub + manuale); `O-COL-003` (MIT); `O-COL-004` (preflight); `O-COL-006` (retry/scarto; numero tarato in `10` §6); `O-COL-007` (DAST → v2); `O-COL-008` (chiusa da `L-COL-024`); `O-COL-009` (nessuna telemetria).
+- **Aperte**: `O-COL-005` (2° ecosistema → v2) — ora **progettata e pianificata** (SP-0, `docs/superpowers/`); da **sciogliere al build di SP-0** coi lock **proposti** `L-COL-029` (engine manifest-driven) / `L-COL-030` (barra B), **non ancora applicati al ledger**.
+- **Chiuse**: `O-COL-001` (nome = **Trueline**); `O-COL-002` (GitHub + manuale); `O-COL-003` (MIT); `O-COL-004` (preflight); `O-COL-006` (retry/scarto; numero **pinnato a M5**, `10` §6 → `thresholds.md`); `O-COL-007` (DAST → v2); `O-COL-008` (chiusa da `L-COL-024`); `O-COL-009` (nessuna telemetria); **`O-COL-010`** (Workflow Max **confermato disponibile**: i workflow M-1…M5 + l'audit `m5-completeness-audit` di questa sessione sono girati).
 
 ## 4. Da congelare
 
@@ -151,10 +151,14 @@ Ledger completo in `00-INDEX` §4–§5. Sintesi:
 - **Eval (Chat E)**: reference app con `S1–S8` (mix verificato-a-zero + detection-only + segreto-in-history); DB di test per RLS a runtime (integration locale, non DAST); due parity gate = definizione di "fatto" (VISION §10); suite di regressione = l'harness che i gate dei Dynamic Workflows chiamano.
 - **Dynamic Workflows (Chat E)**: opt-in esplicito ("usa lo strumento Workflow"); concorrenza `min(16, core−2)`/workflow, 1.000 agent/run; verifier sempre Opus, builder Opus per la logica delicata / Sonnet per il meccanico; gate = oracoli/`validate_blueprint`/harness di `10`; mappa M-1…M5.
 - **Uso reale previsto**: AppuntamentiChirsan in REMEDIATE; Gestionale Officina come disciplina build+gate (caso concreto di `main` deploy-coupled, Supabase+Cloudflare live → `L-COL-025`).
+- **Estensione multi-ecosistema (17 giu — progettata, NON costruita)**: spec `docs/superpowers/specs/2026-06-17-estensione-ecosistemi-design.md` + piano `docs/superpowers/plans/2026-06-17-sp0-ecosystem-contract.md` (mergeati su `main`, `8709ba1`). Prossimo build = **SP-0** (contratto-manifest JSON + `validate_ecosystem`/`resolve` + engine manifest-driven + gate `ecosystem_conformance`; `supabase-jsts` retro-descritto riproduce **56/56** invariato). Barra **B** (detection-first + floor + coverage dichiarata; verified=fase 2). `authz-surface` = **ruolo**, non categoria. SP-1 = JS/TS+Postgres non-Supabase; SP-2 = Python. SP-0 **non** aggiunge ecosistemi nuovi.
+- **Packaging/install (17 giu)**: `.skill` emesso in `dist/trueline.skill` (`dist/` gitignorato; si rigenera con `trueline/scripts/packaging/package_skill.mjs`); Trueline **installata globalmente** in `~/.claude/skills/trueline/` (+ dep `pgsql-ast-parser`), attiva e triggerabile.
 
 ## 7. Avvio implementazione (promemoria)
 
 Il blueprint è chiuso: da qui si scrive codice, orchestrando con i Dynamic Workflows.
+
+> **Aggiornamento (17 giu): v1 COMPLETO (M-1…M5, su `origin/main`).** Le note sotto sono il promemoria **storico** di bootstrap (M-1→M5), conservato per riferimento. Il prossimo build è **SP-0** (estensione multi-ecosistema): apri `PROMPT-SESSION-START` e riparti dal piano `docs/superpowers/plans/2026-06-17-sp0-ecosystem-contract.md` (test-first, gate = `ecosystem_conformance`, `supabase-jsts` 56/56 invariato).
 
 - **Prima sessione = banco di prova M-1** (`DYNAMIC-WORKFLOWS` §8): costruire le fixture di gate di `10` (reference app + `S1–S8`, DB di test RLS, blueprint seminato, harness), perché sono il prerequisito di gate di tutte le milestone. Poi **M0 — Oracoli & finding**: wrapper oracoli + `rls_check` + `normalize` + schema del finding, con gate = detection di `S1–S8` sull'harness di `10` §3.
 - Aprire la sessione con l'**opt-in esplicito** *"usa lo strumento Workflow"* (altrimenti l'orchestratore non parte).
