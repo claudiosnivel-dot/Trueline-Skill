@@ -55,6 +55,8 @@ Prossimo: **M3 — Characterization & REMEDIATE** (`06`): baseline, partizione g
 - **Pin budget `O-COL-006`** (10 §6): `trueline/scripts/checkpoint/thresholds.mjs` (`WALL_CLOCK_DERIVATION` + `LOOP_BUDGET.GLOBAL_WALL_CLOCK_MS=242401`) + `references/oracles/thresholds.md` §5/§5.1; ruleset `# version: 1.0.0`. `eval/harness/measure_budget.mjs` — strumento di taratura riproducibile (ex `.tmp-`).
 - `eval/harness/m5_gate_check.mjs` (**56/56**) — gate di accettazione/regressione del v1, criterio 4 anti-gaming.
 
+> **Post-v1 (17 giu): preflight `--install` consent-gated.** Aggiunto a `trueline/scripts/preflight.mjs` il flag `--install` (+ `--yes`/`--dry-run`/`--only`) che **esegue** l'install proposto **solo col consenso esplicito** (`L-COL-005`): senza `--yes` e senza un TTY non installa — propone e si ferma, mai un install silenzioso. Le note manuali (comandi che iniziano per `#`) non si eseguono mai; `rls_check` non è mai un target. Test-first `trueline/scripts/preflight.test.mjs` **7/7** (T3 prova il no-install-senza-consenso); `SKILL.md` §4 nomina il meccanismo. Gate M5 **56/56** (nessuna regressione). Branch `feat/preflight-consent-install` → su `main`.
+
 **Artefatti M4** (branch `m4/conventions-triage` `d720518`+`5bdd866` → su `main`):
 - `trueline/references/oracles/semgrep-ai-ruleset/trueline-ai-ruleset.yml` — ruleset curato (07 §4, 13 regole secrets/injection/authz/crypto/sink); `run_semgrep.mjs` lo usa (via Docker, pinnato 1.165.0).
 - `trueline/references/conventions/` — `named-standards.md` (OWASP25 + mappa §3.1 + ASVS + RLS R1..R9), `forbidden-patterns.md`, `threat-model.md`, `seeded-defect-map.md` (S1..S8→pattern/RLS/superficie).

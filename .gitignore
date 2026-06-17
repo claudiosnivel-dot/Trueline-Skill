@@ -3,3 +3,4 @@ eval/reference-app/
 eval/.tmp-*/
 .trueline/
 *.log
+dist/
