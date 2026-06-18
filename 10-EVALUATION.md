@@ -88,7 +88,7 @@ Il `description` del frontmatter è l'**unico gancio di triggering cross-tool**:
 
 - **Non è un benchmark** contro altri strumenti, né una **certificazione** di sicurezza: prova che i difetti seminati sono colti/corretti, non che "l'app è sicura" *(L-COL-006)*.
 - La reference app è **rappresentativa, non esaustiva**: ciò che non semina, non testa.
-- **Niente DAST/runtime** oltre il DB di test (`06` §6.1, `O-COL-007 → v2`); **eval del 2° ecosistema** rinviata a v2 (`O-COL-005`).
+- **Niente DAST/runtime** oltre il DB di test (`06` §6.1, `O-COL-007 → v2`). **Eval per-ecosistema resa parametrica in SP-0** (`O-COL-005` sciolta): `eval/harness/ecosystem_conformance.mjs <id>` legge il manifest e asserisce i criteri di conformità (manifest valido via `validate_ecosystem` + detection-parity del `floor` + verified-parity del `verified_set` + triggering + igiene/0-contaminazione); per `supabase-jsts` la sua istanza è l'attuale `m5_gate_check.mjs` (**56/56**). Ogni stack nuovo (SP-1+) porta la propria fixture + `registry.json`.
 - Non fissa policy: **opera** quelle di `03`/`04`/`05`/`06`/`07`/`11` su un banco di prova.
 
 ## 9. Eredità / chiusura

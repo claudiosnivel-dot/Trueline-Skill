@@ -88,7 +88,9 @@ trueline/                              # nome = O-COL-001
 │   ├── findings/
 │   │   └── finding-model.md           # schema del finding (04)
 │   └── ecosystems/
-│       └── supabase-jsts.md           # v1; v2 aggiunge firebase.md, nextjs-api.md… (O-COL-005)
+│       └── supabase-jsts/             # ecosistema v1 = pack manifest-driven (SP-0, L-COL-029)
+│           ├── ecosystem.json         #   contratto-macchina (validato da validate_ecosystem)
+│           └── guide.md               #   prosa per-modalità (+ futuro ruleset/ per stack)
 └── assets/
     └── prompts/                       # L-COL-022: OUTPUT di BOOTSTRAP, non runtime
         ├── project-start.md
@@ -98,7 +100,7 @@ trueline/                              # nome = O-COL-001
 
 Note:
 - **`scripts/` = oracoli ed esecutori.** Girano deterministici; nel contesto entra solo il loro output normalizzato.
-- **`references/ecosystems/`** è il punto di estensione v2: aggiungere un ecosistema = aggiungere un file qui + il suo ruleset, senza toccare il corpo.
+- **`references/ecosystems/`** è il punto di estensione **reso un fatto in SP-0** *(L-COL-029)*: un ecosistema è una cartella `<id>/` con `ecosystem.json` (contratto-macchina, validato da `validate_ecosystem`) + `guide.md` (+ ruleset). L'engine lo risolve via `scripts/ecosystem/resolve.mjs`; aggiungere uno stack = **dati + (dove serve) un oracolo**, senza toccare il corpo.
 - **`assets/prompts/`** sono *template* che BOOTSTRAP parametrizza ed emette; la skill non li esegue come parte del proprio runtime *(L-COL-022)*.
 
 ## 5. Il corpo del `SKILL.md` (livello 2)
@@ -132,7 +134,7 @@ Ogni modalità tira **solo** i reference che le servono. Questo è il cuore dell
 | `oracles/*` (ruleset, soglie) | | ● | ● |
 | `conventions/*` (standard, vietati, threat model) | ○ (per scrivere i task) | ● | ● |
 | `findings/finding-model.md` | | ● | ● |
-| `ecosystems/supabase-jsts.md` | ● | ● | ● |
+| `ecosystems/<attivo>/guide.md` (risolto da `resolve.mjs`) | ● | ● | ● |
 
 ● = caricato · ○ = caricato parzialmente / solo la parte rilevante.
 
