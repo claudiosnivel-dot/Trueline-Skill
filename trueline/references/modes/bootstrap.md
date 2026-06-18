@@ -23,7 +23,7 @@ costruire alcunché (`01` §2, `L-COL-005`).
 | `references/blueprint/self-check-checklist.md` | checklist semantica punti 6–10 (`11` §5.2) |
 | `references/blueprint/template/` | suite parametrica (00-INDEX, VISION, moduli, SESSION-STATE, task) |
 | `references/conventions/named-standards.md` | vocabolario OWASP/ASVS/CWE + standard RLS per scrivere le `security_notes` dei task |
-| `references/ecosystems/supabase-jsts.md` | specifiche v1: ecosistema, client, oracle set |
+| `references/ecosystems/supabase-jsts/guide.md` | specifiche dell'ecosistema attivo (risolto da `scripts/ecosystem/resolve.mjs`; esempio v1: supabase-jsts) |
 
 Non si caricano in BOOTSTRAP: `references/oracles/` (ruleset, soglie),
 `references/conventions/forbidden-patterns.md` e `threat-model.md` in pieno,

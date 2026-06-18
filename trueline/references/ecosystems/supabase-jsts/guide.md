@@ -1,4 +1,4 @@
-# ecosystems/supabase-jsts.md — Trueline · ecosistema v1 (JS/TS su Supabase)
+# ecosystems/supabase-jsts/guide.md — Trueline · ecosistema v1 (JS/TS su Supabase)
 
 > Caricato in **tutte e tre** le modalità (`02` §6). È il punto di estensione v2:
 > aggiungere un ecosistema = aggiungere un file qui (`firebase.md`, `nextjs-api.md`…)

@@ -48,6 +48,7 @@ import {
 import { join, dirname, resolve, relative, sep, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
+import { validateEcosystem } from '../ecosystem/validate_ecosystem.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Radice della SKILL SORGENTE: trueline/ (questo file vive in trueline/scripts/packaging/).
@@ -276,6 +277,25 @@ function structuralLint(treeRoot, { injectedMissing } = {}) {
     }
   }
 
+  // (6) ogni manifest ecosistema valido (validateEcosystem); manifest ROTTO -> FAIL
+  // Scansiona references/ecosystems/<id>/ecosystem.json nell'albero assemblato.
+  const ecosystemsDir = join(treeRoot, 'references', 'ecosystems');
+  if (existsSync(ecosystemsDir) && statSync(ecosystemsDir).isDirectory()) {
+    const ecoEntries = readdirSync(ecosystemsDir, { withFileTypes: true });
+    for (const ee of ecoEntries.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (!ee.isDirectory()) continue;
+      const mfAbs = join(ecosystemsDir, ee.name, 'ecosystem.json');
+      if (!existsSync(mfAbs)) continue;
+      let em = null;
+      try { em = JSON.parse(readFileSync(mfAbs, 'utf8')); }
+      catch (e) { errors.push(`ecosistema "${ee.name}": ecosystem.json non e JSON valido: ${e.message}`); continue; }
+      const vr = validateEcosystem(em);
+      if (!vr.ok) {
+        for (const ve of vr.errors) errors.push(`ecosistema "${ee.name}": ${ve}`);
+      }
+    }
+  }
+
   if (injectedMissing) {
     // verifica difensiva: l'iniezione DEVE aver prodotto almeno un orfano
     const orphanSeen = errors.some((e) => e.startsWith('riferimento ORFANO'));
@@ -344,11 +364,28 @@ function oracleMinVersions() {
   return out;
 }
 
-// Ecosistemi supportati: i file in references/ecosystems/ (v1: supabase-jsts).
+// Ecosistemi supportati: sottocartelle di references/ecosystems/ con ecosystem.json.
+// Ritorna array di { id, version, tier } in ordine deterministico.
+// tier = "verified" se verified_set non vuoto, altrimenti "detection".
+// Un manifest ROTTO (validateEcosystem fallisce) non viene incluso (già bloccato
+// dal lint, ma difensivamente escluso anche qui).
 function ecosystems() {
   const dir = join(SKILL_SRC, 'references', 'ecosystems');
   if (!existsSync(dir)) return [];
-  return readdirSync(dir).filter((f) => f.endsWith('.md')).map((f) => f.replace(/\.md$/, '')).sort();
+  const entries = readdirSync(dir, { withFileTypes: true });
+  const result = [];
+  for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!e.isDirectory()) continue;
+    const mfPath = join(dir, e.name, 'ecosystem.json');
+    if (!existsSync(mfPath)) continue;
+    let m = null;
+    try { m = JSON.parse(readFileSync(mfPath, 'utf8')); } catch { continue; }
+    const v = validateEcosystem(m);
+    if (!v.ok) continue; // manifest rotto: escluso (il lint lo avrà già bloccato)
+    const tier = m.verified_set && m.verified_set.length > 0 ? 'verified' : 'detection';
+    result.push({ id: m.id, version: m.version, tier });
+  }
+  return result;
 }
 
 function buildManifest(treeRoot) {
@@ -546,7 +583,10 @@ if (jsonMode) {
   console.log(`   ruleset:      ${manifest.ruleset_version}`);
   console.log(`   oracoli (min): ${Object.entries(manifest.oracle_min_versions).map(([k, v]) => `${k}>=${v}`).join(', ') || '(nessuno)'}`);
   console.log(`   semgrep image: ${manifest.semgrep_image || '(n/d)'}`);
-  console.log(`   ecosistemi:   ${manifest.ecosystems.join(', ') || '(nessuno)'}`);
+  const ecoStr = manifest.ecosystems.length > 0
+    ? manifest.ecosystems.map((e) => `${e.id} ${e.version} (${e.tier})`).join(', ')
+    : '(nessuno)';
+  console.log(`   ecosistemi:   ${ecoStr}`);
   console.log(`   licenza:      ${manifest.license} · telemetria: ${manifest.telemetry}`);
   console.log('');
   console.log('4) ARCHIVIO .skill:');

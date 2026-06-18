@@ -74,3 +74,17 @@ export function severityAtLeast(sev, floor) {
   if (j === -1) return false;
   return i <= j; // indice minore = piu' grave
 }
+
+// Deriva da un manifest (SP-0): le categorie che il loop può portare a verified.
+export function verifiedSetFrom(manifest) {
+  return new Set((manifest && manifest.verified_set) || [...VERIFIED_ZERO_CATEGORIES]);
+}
+// Categorie che bloccano il controllo 2: verified_set "di sicurezza" (secret/rls)
+// + le detection-blocking injection/authz SE legate nel manifest. Default = costante.
+export function control2CategoriesFrom(manifest) {
+  if (!manifest || !manifest.oracles) return new Set(CONTROL2_GATE_CATEGORIES);
+  const cats = new Set();
+  for (const key of Object.keys(manifest.oracles)) for (const c of key.split('|')) cats.add(c.trim());
+  // mantieni solo le categorie "di sicurezza" gate-abili (no dead-code/dependency-vuln-here)
+  return new Set([...cats].filter((c) => CONTROL2_GATE_CATEGORIES.has(c)));
+}

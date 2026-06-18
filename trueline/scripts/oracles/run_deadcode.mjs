@@ -30,17 +30,46 @@ import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // ── Argomenti CLI ────────────────────────────────────────────────────────────
+// Sintassi:
+//   node run_deadcode.mjs <project-dir> [--tool=<nome>]
+//
+// --tool=<nome>  Seleziona il dead-code tool. Default: knip.
+//                Valori supportati: knip
+//                Tool sconosciuto: esce con JSON vuoto + nota (mai falso verde).
 
 const args = process.argv.slice(2);
-if (args.length < 1) {
+
+// Estrai --tool=<nome> (flag opzionale; posizione libera dopo il primo arg)
+const toolFlagArg = args.find((a) => a.startsWith('--tool='));
+const toolName = toolFlagArg ? toolFlagArg.slice('--tool='.length) : 'knip';
+
+// Filtra i flag per ottenere i positional args
+const positionalArgs = args.filter((a) => !a.startsWith('--'));
+
+if (positionalArgs.length < 1) {
   process.stderr.write(
-    'uso: node run_deadcode.mjs <project-dir>\n' +
+    'uso: node run_deadcode.mjs <project-dir> [--tool=<nome>]\n' +
     'esempio: node trueline/scripts/oracles/run_deadcode.mjs eval/reference-app\n'
   );
   process.exit(1);
 }
 
-const projectDir = resolve(args[0]);
+const projectDir = resolve(positionalArgs[0]);
+
+// ── Dispatch: tool sconosciuto → JSON vuoto + nota (mai falso verde) ─────────
+// I tool concreti aggiuntivi (es. vulture per Python) sono SP-2, non qui.
+// Un tool non supportato non deve mai sembrare "nessun dead code trovato" —
+// per questo si emette una nota esplicita accanto all'array vuoto.
+
+const SUPPORTED_TOOLS = new Set(['knip']);
+
+if (!SUPPORTED_TOOLS.has(toolName)) {
+  const safeNote = `tool ${toolName} non supportato`;
+  process.stdout.write(
+    JSON.stringify({ issues: [], note: safeNote }, null, 2) + '\n'
+  );
+  process.exit(0);
+}
 
 if (!existsSync(projectDir)) {
   process.stderr.write(`ERRORE: la directory del progetto non esiste: ${projectDir}\n`);

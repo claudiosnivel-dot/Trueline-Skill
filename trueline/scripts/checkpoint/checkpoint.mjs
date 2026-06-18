@@ -38,7 +38,9 @@ import { validateMany } from '../findings/validate_finding.mjs';
 import { partition } from '../characterization/partition.mjs';
 import {
   GATE_SEVERITY, VERIFIED_ZERO_CATEGORIES, CONTROL2_GATE_CATEGORIES, severityAtLeast,
+  control2CategoriesFrom,
 } from './thresholds.mjs';
+import { classify, loadManifest } from '../ecosystem/resolve.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..', '..', '..');
@@ -135,86 +137,127 @@ export function control1DeadCode(referenceApp, { baseline = new Set(), runOpts }
 // =============================================================================
 // CONTROLLO 2 — SICUREZZA (gitleaks working-tree + rls_check + osv)
 // =============================================================================
-export function control2Security(referenceApp, { baseline = new Set(), runOpts, withOsv = true }) {
+export function control2Security(referenceApp, { baseline = new Set(), runOpts, withOsv = true, manifest = null }) {
   const migrations = resolve(referenceApp, 'supabase', 'migrations');
+  const lockfile = resolve(referenceApp, 'package-lock.json');
   const all = [];
   const sub = [];
+  const notes = [];
 
-  // gitleaks working-tree (scope BUILD; S1 vive qui). cwd = referenceApp per
-  // allineare i path normalizzati (e quindi i fingerprint) a collectFindings
-  // del loop: e' la chiave del baseline-delta (04 §6).
-  const g = runOracle(RUN_GITLEAKS, [referenceApp, 'working-tree'], referenceApp);
-  if (g.ok) {
-    const n = normFindings('gitleaks', g.json, { ...runOpts, scope: 'working-tree' });
-    if (n.ok) { all.push(...n.findings); sub.push(`gitleaks:${n.findings.length}`); }
-    else return secErr('gitleaks normalize', n.detail);
-  } else return secErr('gitleaks', g.detail);
-
-  // rls_check (DDL; S3/S4/S5 vivono qui).
-  const r = runOracle(RLS_CHECK, [migrations], referenceApp);
-  if (r.ok) {
-    const n = normFindings('rls-check', r.json, { ...runOpts, scope: 'static-ddl' });
-    if (n.ok) { all.push(...n.findings); sub.push(`rls:${n.findings.length}`); }
-    else return secErr('rls normalize', n.detail);
-  } else return secErr('rls-check', r.detail);
-
-  // osv-scanner (dependency-vuln). Prende un LOCKFILE (non una dir) e richiede
-  // rete. Best-effort: se l'oracolo non gira (offline/lock assente) NON
-  // falsifichiamo il verde, ma lo dichiariamo degradato per osv (la fixture M-1
-  // NON ha CVE seminate, vedi run_osv §smoke).
-  const lockfile = resolve(referenceApp, 'package-lock.json');
-  let osvNote = '';
-  if (withOsv && existsSync(RUN_OSV) && existsSync(lockfile)) {
-    const o = runOracle(RUN_OSV, [lockfile], referenceApp);
-    if (o.ok) {
-      const n = normFindings('osv', o.json, { ...runOpts, scope: 'deps' });
-      if (n.ok) { all.push(...n.findings); sub.push(`osv:${n.findings.length}`); }
-      else osvNote = ' (osv: output non normalizzabile, degradato)';
-    } else {
-      osvNote = ' (osv: non eseguibile offline, degradato)';
+  // --- Per-tool runner (un oracolo nominato) ---------------------------------
+  // Ogni tool sa come invocare il proprio wrapper, con quale `oracle`/`scope`
+  // normalizzare e se e' BEST-EFFORT (un oracolo che non gira -> DEGRADATO con
+  // nota, MAI falso verde — L-COL-006/L-COL-002) o HARD (errore di sicurezza).
+  // Ritorna { fatal, note } — fatal => secErr immediato; note => degradato.
+  function runTool(tool) {
+    switch (tool) {
+      // gitleaks working-tree (scope BUILD; S1 vive qui). cwd = referenceApp per
+      // allineare i path normalizzati (e quindi i fingerprint) a collectFindings
+      // del loop: e' la chiave del baseline-delta (04 §6). HARD.
+      case 'gitleaks': {
+        const g = runOracle(RUN_GITLEAKS, [referenceApp, 'working-tree'], referenceApp);
+        if (!g.ok) return { fatal: secErr('gitleaks', g.detail) };
+        const n = normFindings('gitleaks', g.json, { ...runOpts, scope: 'working-tree' });
+        if (!n.ok) return { fatal: secErr('gitleaks normalize', n.detail) };
+        all.push(...n.findings); sub.push(`gitleaks:${n.findings.length}`);
+        return {};
+      }
+      // rls_check (DDL; S3/S4/S5 vivono qui). HARD.
+      case 'rls_check': {
+        const r = runOracle(RLS_CHECK, [migrations], referenceApp);
+        if (!r.ok) return { fatal: secErr('rls-check', r.detail) };
+        const n = normFindings('rls-check', r.json, { ...runOpts, scope: 'static-ddl' });
+        if (!n.ok) return { fatal: secErr('rls normalize', n.detail) };
+        all.push(...n.findings); sub.push(`rls:${n.findings.length}`);
+        return {};
+      }
+      // osv-scanner (dependency-vuln). Prende un LOCKFILE (non una dir) e richiede
+      // rete. Best-effort: se l'oracolo non gira (offline/lock assente) NON
+      // falsifichiamo il verde, ma lo dichiariamo degradato per osv (la fixture
+      // M-1 NON ha CVE seminate, vedi run_osv §smoke). Gated da `withOsv`.
+      case 'osv': {
+        if (!withOsv || !existsSync(RUN_OSV) || !existsSync(lockfile)) return {};
+        const o = runOracle(RUN_OSV, [lockfile], referenceApp);
+        if (!o.ok) return { note: ' (osv: non eseguibile offline, degradato)' };
+        const n = normFindings('osv', o.json, { ...runOpts, scope: 'deps' });
+        if (!n.ok) return { note: ' (osv: output non normalizzabile, degradato)' };
+        all.push(...n.findings); sub.push(`osv:${n.findings.length}`);
+        return {};
+      }
+      // semgrep (07 §4) — oracolo AI curato per i pattern vietati injection/authz/
+      // crypto/sink (S6 injection, S7 authz). Gira VIA DOCKER (run_semgrep.mjs):
+      // la SKILL resta dep-free, il container ha semgrep pinnato. BEST-EFFORT come
+      // osv: se docker/l'immagine non e' disponibile NON falsifichiamo il verde,
+      // ma lo dichiariamo DEGRADATO (un oracolo che non gira NON e' verde) — MAI
+      // contato come pulito. Il path normalizzato (stripContainerSrc -> base
+      // "eval/reference-app") coincide con gitleaks/rls: fingerprint coerenti col
+      // baseline-delta.
+      case 'semgrep': {
+        if (!existsSync(RUN_SEMGREP)) return { note: ' (semgrep: wrapper assente, degradato)' };
+        const s = runOracle(RUN_SEMGREP, [referenceApp], referenceApp);
+        if (!(s.ok && s.json && Array.isArray(s.json.results))) {
+          // docker assente / immagine non pinnata / JSON non valido: DEGRADATO.
+          return { note: ` (semgrep: oracolo non disponibile via docker, degradato — ${s.detail})` };
+        }
+        const n = normFindings('semgrep', s.json, { ...runOpts, scope: 'working-tree' });
+        if (!n.ok) return { note: ` (semgrep: output non normalizzabile, degradato — ${n.detail})` };
+        all.push(...n.findings); sub.push(`semgrep:${n.findings.length}`);
+        return {};
+      }
+      default:
+        // tool sconosciuto: lo SALTIAMO DICHIARANDO (mai falso verde). Il gate di
+        // conformita (Fase D) coglie un manifest che nomina un tool senza wrapper.
+        return { note: ` (${tool}: tool sconosciuto, saltato — DICHIARATO, mai falso verde)` };
     }
   }
 
-  // semgrep (07 §4) — oracolo AI curato per i pattern vietati injection/authz/
-  // crypto/sink (S6 injection, S7 authz). Gira VIA DOCKER (run_semgrep.mjs): la
-  // SKILL resta dep-free, il container ha semgrep pinnato. BEST-EFFORT come osv:
-  // se docker/l'immagine non e' disponibile NON falsifichiamo il verde, ma lo
-  // dichiariamo DEGRADATO per semgrep (un oracolo che non gira NON e' verde,
-  // L-COL-006/L-COL-002) — MAI contato come pulito. Il path normalizzato dei
-  // finding semgrep (stripContainerSrc -> base "eval/reference-app") coincide con
-  // quello di gitleaks/rls, quindi i fingerprint sono coerenti col baseline-delta.
-  let semgrepNote = '';
-  if (existsSync(RUN_SEMGREP)) {
-    // run_semgrep.mjs emette il JSON nativo su stdout (diagnostiche su stderr) e
-    // monta la dir target in /src. Gli passiamo la dir target (la copia temp del
-    // checkpoint), eseguito con cwd=referenceApp come gli altri oracoli.
-    const s = runOracle(RUN_SEMGREP, [referenceApp], referenceApp);
-    if (s.ok && s.json && Array.isArray(s.json.results)) {
-      // NIENTE override di base: i path semgrep arrivano come "/src/<rel>" e
-      // normalize li strippa a "eval/reference-app/<rel>" (DEFAULT_BASE), ESATTAMENTE
-      // come gitleaks/rls. Cosi i fingerprint sono coerenti col baseline-delta e col
-      // run di sezione 2 del gate (che usa base eval/reference-app).
-      const n = normFindings('semgrep', s.json, { ...runOpts, scope: 'working-tree' });
-      if (n.ok) { all.push(...n.findings); sub.push(`semgrep:${n.findings.length}`); }
-      else semgrepNote = ` (semgrep: output non normalizzabile, degradato — ${n.detail})`;
-    } else {
-      // docker assente / immagine non pinnata / JSON non valido: DEGRADATO, non verde.
-      semgrepNote = ` (semgrep: oracolo non disponibile via docker, degradato — ${s.detail})`;
+  // --- Lista degli oracoli da eseguire ---------------------------------------
+  // Con `manifest`: i tool nominati dai binding `manifest.oracles`, DEDUP per tool
+  // (un wrapper gira una volta sola anche se piu' categorie vi puntano, es.
+  // injection/authz/crypto -> semgrep). Mappa tool->wrapper noto in runTool;
+  // gateCategories derivato dal manifest. Senza `manifest` (chiamata legacy): la
+  // sequenza cablata v1 (gitleaks, rls, osv, semgrep) — INVARIATA.
+  let tools;
+  let gateCategories;
+  if (manifest && manifest.oracles) {
+    const seen = new Set();
+    tools = [];
+    // mappa nome-tool-del-manifest -> chiave-wrapper interna.
+    const toWrapper = { gitleaks: 'gitleaks', rls_check: 'rls_check', osv: 'osv', semgrep: 'semgrep' };
+    for (const b of Object.values(manifest.oracles)) {
+      const t = b && b.tool;
+      if (!t) continue;
+      // knip e' il controllo 1 (dead-code), non il 2: NON entra nel controllo
+      // sicurezza. Ogni altro tool noto/ignoto passa per runTool (dedup per tool).
+      if (t === 'knip') continue;
+      const wrapper = toWrapper[t] || t; // ignoto: runTool lo dichiara saltato.
+      if (seen.has(wrapper)) continue;
+      seen.add(wrapper);
+      tools.push(wrapper);
     }
+    gateCategories = control2CategoriesFrom(manifest);
   } else {
-    semgrepNote = ' (semgrep: wrapper assente, degradato)';
+    tools = ['gitleaks', 'rls_check', 'osv', 'semgrep'];
+    gateCategories = CONTROL2_GATE_CATEGORIES;
   }
 
-  // CONTROL2_GATE_CATEGORIES (thresholds): secret/rls (verificato-a-zero) PIU' le
-  // detection-blocking injection/authz (M4). Un NUOVO finding semgrep injection/
-  // authz sopra soglia BLOCCA; un S6/S7 PRE-ESISTENTE (gia' in baseline) no.
-  const blockers = deltaBlockers(all, baseline, { deadcode: false, gateCategories: CONTROL2_GATE_CATEGORIES });
+  for (const t of tools) {
+    const r = runTool(t);
+    if (r.fatal) return r.fatal;
+    if (r.note) notes.push(r.note);
+  }
+
+  // gateCategories: secret/rls (verificato-a-zero) PIU' le detection-blocking
+  // injection/authz (M4). Un NUOVO finding semgrep injection/authz sopra soglia
+  // BLOCCA; un S6/S7 PRE-ESISTENTE (gia' in baseline) no.
+  const blockers = deltaBlockers(all, baseline, { deadcode: false, gateCategories });
   const green = blockers.length === 0;
+  const noteStr = notes.join('');
   return {
     id: 2, name: 'security', status: green ? 'green' : 'red', green,
     detail: green
-      ? `nessun finding di sicurezza NUOVO >= ${GATE_SEVERITY} [${sub.join(' ')}]${osvNote}${semgrepNote}`
-      : `${blockers.length} finding NUOVO >= ${GATE_SEVERITY} [${sub.join(' ')}]${osvNote}${semgrepNote}`,
+      ? `nessun finding di sicurezza NUOVO >= ${GATE_SEVERITY} [${sub.join(' ')}]${noteStr}`
+      : `${blockers.length} finding NUOVO >= ${GATE_SEVERITY} [${sub.join(' ')}]${noteStr}`,
     findings: all, blockers,
   };
 
@@ -408,14 +451,36 @@ export function control4Conformance(referenceApp, { mode = 'remediate', characte
 }
 
 // Rileva un test runner nel package.json del progetto target.
-function detectTestRunner(referenceApp) {
+// manifest (opzionale, SP-0): se ha test_runner.detect, quella lista di candidati
+// arricchisce la detection (in ordine di priorita'). Senza manifest: comportamento
+// v1 invariato (controlla solo scripts.test non-placeholder).
+function detectTestRunner(referenceApp, manifest = null) {
   const pkgPath = join(referenceApp, 'package.json');
   if (!existsSync(pkgPath)) return { present: false };
   let pkg;
   try { pkg = JSON.parse(readFileSync(pkgPath, 'utf8')); } catch { return { present: false }; }
-  const testScript = pkg.scripts && pkg.scripts.test;
+  const testScript = (pkg.scripts && pkg.scripts.test) || '';
   // Un "test" placeholder ("no test specified") NON conta come runner.
   if (!testScript || /no test specified/i.test(testScript)) return { present: false };
+
+  // Con manifest.test_runner.detect: controlla se uno dei candidati e' nello script.
+  if (manifest && manifest.test_runner && Array.isArray(manifest.test_runner.detect) && manifest.test_runner.detect.length > 0) {
+    const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+    for (const candidate of manifest.test_runner.detect) {
+      if (candidate === 'node:test') {
+        if (/node\s+--test\b/.test(testScript) || /\bnode:test\b/.test(testScript)) return { present: true, script: 'test' };
+      } else {
+        const re = new RegExp(`\\b${candidate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+        if (deps[candidate] || re.test(testScript)) return { present: true, script: 'test' };
+      }
+    }
+    // Nessun candidato del manifest trovato ma scripts.test non-placeholder esiste:
+    // non e' degradato, ma il runner specifico non e' riconosciuto -> present=true
+    // (lo script test esiste comunque; il fallback e' "npm test").
+    return { present: true, script: 'test' };
+  }
+
+  // Ramo legacy v1 invariato: scripts.test non-placeholder -> presente.
   return { present: true, script: 'test' };
 }
 
@@ -425,6 +490,17 @@ function runTests(referenceApp, runner) {
   });
   const green = !res.error && res.status === 0;
   return { green, detail: green ? 'test verdi' : `test rossi (exit=${res.status})` };
+}
+
+// Risolve l'ecosistema attivo dal progetto target (SP-0): classify -> manifest.
+// Una dir non classificabile -> null (fallback al ramo cablato v1 in
+// control2Security). Difensivo: qualunque errore della risoluzione -> null
+// (mai un crash del checkpoint per colpa della risoluzione dell'ecosistema).
+function resolveManifest(referenceApp) {
+  try {
+    const id = classify(referenceApp);
+    return id ? loadManifest(id) : null;
+  } catch { return null; }
 }
 
 // =============================================================================
@@ -456,10 +532,15 @@ export function runCheckpoint(referenceApp, opts = {}) {
     // characterization: snapshot pre-caricato { baseline, runnerPath }. Se null,
     // viene auto-rilevato da referenceApp (test/characterization/*).
     characterization = null,
+    // manifest: ecosistema attivo (SP-0). Se non passato, lo risolviamo dal
+    // referenceApp (classify -> loadManifest); fallback null -> control2Security
+    // usa il ramo cablato v1 INVARIATO. Mai inventato: una dir non classificabile
+    // resta null (la skill dichiara "non supportato", non finge un ecosistema).
+    manifest = resolveManifest(referenceApp),
   } = opts;
 
   const c1 = control1DeadCode(referenceApp, { baseline, runOpts });
-  const c2 = control2Security(referenceApp, { baseline, runOpts, withOsv });
+  const c2 = control2Security(referenceApp, { baseline, runOpts, withOsv, manifest });
   const c3 = control3Regressions(referenceApp, { mode, characterization, finding });
   const c4 = control4Conformance(referenceApp, { mode, characterization, finding });
 
