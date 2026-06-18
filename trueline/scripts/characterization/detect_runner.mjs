@@ -26,33 +26,45 @@ function isPlaceholder(script) {
   return !script || /no test specified/i.test(script);
 }
 
+// Lista di candidati di default (ordine di preferenza invariato con v1).
+const DEFAULT_DETECT = ['vitest', 'jest', 'node:test'];
+
 // Cerca un runner tra le dipendenze dichiarate (dev + prod) e gli script.
-function detectDeclared(pkg) {
+// candidates: lista di nomi di runner da cercare (dal manifest o default).
+function detectDeclared(pkg, candidates = DEFAULT_DETECT) {
   const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
   const testScript = (pkg.scripts && pkg.scripts.test) || '';
 
-  // vitest: dipendenza o invocato nello script test.
-  if (deps.vitest || /\bvitest\b/.test(testScript)) return 'vitest';
-  // jest: dipendenza o invocato nello script test.
-  if (deps.jest || /\bjest\b/.test(testScript)) return 'jest';
-  // node:test: invocato esplicitamente (node --test) nello script.
-  if (/node\s+--test\b/.test(testScript) || /\bnode:test\b/.test(testScript)) return 'node:test';
+  for (const candidate of candidates) {
+    if (candidate === 'node:test') {
+      // node:test: invocato esplicitamente (node --test) nello script.
+      if (/node\s+--test\b/.test(testScript) || /\bnode:test\b/.test(testScript)) return 'node:test';
+    } else {
+      // altri runner: dipendenza dichiarata o invocato nello script test.
+      const re = new RegExp(`\\b${candidate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+      if (deps[candidate] || re.test(testScript)) return candidate;
+    }
+  }
   return null;
 }
 
-// detectRunner(projectDir) -> { present, runner, degraded, detail }
+// detectRunner(projectDir, manifest?) -> { present, runner, degraded, detail }
 //
 //   present   true se un runner REALE e' gia' dichiarato dal progetto.
-//   runner    'vitest' | 'jest' | 'node:test' | null
+//   runner    nome del runner rilevato | 'node:test' (fallback) | null
 //   degraded  true se NON c'e' runner reale E nemmeno e' impalcabile node:test
 //             (es. nessun package.json) -> il generatore deve dichiarare il limite.
 //   detail    spiegazione leggibile (per il report di copertura).
+//
+// manifest (opzionale, SP-0): se fornito e ha test_runner.detect, quella lista
+// diventa i candidati (in ordine di priorita'). Default = DEFAULT_DETECT
+// (vitest > jest > node:test), invarianza v1.
 //
 // Politica: se il progetto NON dichiara un runner ma esiste un package.json
 // scrivibile, NON e' degradato: il generatore puo' impalcare `node:test`
 // (runner='node:test', present=false). La degradazione vera scatta solo quando
 // non c'e' nemmeno un package.json su cui agganciare lo script test.
-export function detectRunner(projectDir) {
+export function detectRunner(projectDir, manifest = null) {
   const pkg = readPkg(projectDir);
   if (!pkg) {
     return {
@@ -63,7 +75,13 @@ export function detectRunner(projectDir) {
     };
   }
 
-  const declared = detectDeclared(pkg);
+  // Risolvi la lista di candidati: manifest.test_runner.detect se disponibile,
+  // altrimenti DEFAULT_DETECT (comportamento v1 invariato).
+  const candidates = (manifest && manifest.test_runner && Array.isArray(manifest.test_runner.detect) && manifest.test_runner.detect.length > 0)
+    ? manifest.test_runner.detect
+    : DEFAULT_DETECT;
+
+  const declared = detectDeclared(pkg, candidates);
   if (declared) {
     return {
       present: true,
