@@ -33,11 +33,12 @@ import { deterministicFixProvider } from './fix_provider.mjs';
 import { runFindingLoop } from './loop.mjs';
 import { runCheckpoint, loadCharacterization } from '../checkpoint/checkpoint.mjs';
 import { partition } from '../characterization/partition.mjs';
-import { LOOP_BUDGET } from '../checkpoint/thresholds.mjs';
+import { LOOP_BUDGET, verifiedSetFrom } from '../checkpoint/thresholds.mjs';
 import { generate as generateCharacterization } from '../characterization/generate.mjs';
 import {
   createWorkBranch, decideMerge, requestDestructive, currentBranch, commitOnBranch,
 } from '../git/layered_git.mjs';
+import { classify, loadManifest } from '../ecosystem/resolve.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ORACLES = resolve(__dirname, '..', 'oracles');
@@ -174,12 +175,20 @@ function rebaselineImpacted(dir, verifiedFindings) {
 //     dead-code incidentale (es. db.ts, legato a S6 detection-only) NON e' nel
 //     set seminato in-scope di M1: e' baseline/pre-existing (resta nel report,
 //     non entra nel loop di M1). // TODO M3+: remediation piena del residuo.
-function selectInScope(findings) {
+function selectInScope(findings, manifest = null) {
   const result = [];
   const fpSeen = new Set();
   const push = (f) => { if (!fpSeen.has(f.fingerprint)) { fpSeen.add(f.fingerprint); result.push(f); } };
 
+  // Set IN-SCOPE per il loop = verified_set del manifest attivo (SP-0). SENZA
+  // manifest, verifiedSetFrom ritorna il DEFAULT v1 {secret, rls, dead-code}:
+  // stesso comportamento del cablato. Le categorie fuori dal verified_set NON
+  // entrano nel loop (mai auto-promosse a verificata-a-zero, L-COL-010).
+  const inScope = verifiedSetFrom(manifest);
+
   for (const f of findings) {
+    if (!inScope.has(f.category)) continue;
+
     if (f.category === 'rls') { push(f); continue; }
 
     if (f.category === 'dead-code') {
@@ -255,8 +264,14 @@ function main() {
     }
 
     // (3) raccogli i finding dalla copia.
+    //   Risolvi l'ecosistema attivo (classify -> manifest) e passalo a
+    //   selectInScope: il set IN-SCOPE per il loop e' il verified_set del
+    //   manifest. Nessun manifest combacia -> null -> default v1 (SP-0).
+    const activeId = classify(ws.dir);
+    const manifest = activeId ? loadManifest(activeId) : null;
+    report.ecosystem = activeId;
     const all = collectFindings(ws.dir);
-    const inScope = selectInScope(all);
+    const inScope = selectInScope(all, manifest);
 
     // BASELINE (04 §6): fingerprint di TUTTO cio' che e' pre-esistente PRIMA
     // delle fix. Il checkpoint finale gate-a sui finding NUOVI (delta): il
