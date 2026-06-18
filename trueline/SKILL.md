@@ -53,6 +53,14 @@ nella radice del blueprint; conteggio e maturita dei sorgenti; presenza di una
 directory di blueprint riconoscibile. Gli indizi alimentano la *proposta*; non
 sostituiscono la conferma nei casi ambigui.
 
+**Classificazione dell'ecosistema.** La skill rileva l'ecosistema attivo del repo
+tramite `scripts/ecosystem/resolve.mjs`: ogni manifest in `references/ecosystems/`
+dichiara un campo `detect` (file sentinella, es. `supabase/config.toml`) e un campo
+`triggers` (parole chiave nell'intento). Il risolutore classifica il repo nel manifest
+che combacia per primo (segnale forte = file sentinella; segnale debole = trigger
+lessicale). Nessun manifest combacia -> ecosistema non supportato, dichiarato in
+chiaro *(L-COL-006)*; mai inventato.
+
 ---
 
 ## 2. Tabella di dispatch — caricamento per modalita *(L-COL-014)*
@@ -75,9 +83,14 @@ rimanda. Carica **solo** la riga della modalita attiva.
 | `references/conventions/forbidden-patterns.md` | ○ | ● | ● |
 | `references/conventions/threat-model.md` | ○ | ● | ● |
 | `references/finding-model.md` | | ● | ● |
-| `references/ecosystems/supabase-jsts.md` | ● | ● | ● |
+| `references/ecosystems/supabase-jsts/guide.md` (ecosistema attivo, risolto da `scripts/ecosystem/resolve.mjs`) | ● | ● | ● |
 
 ● = caricato · ○ = caricato parzialmente / solo la parte rilevante.
+
+La riga "ecosistema attivo" indica il percorso references/ecosystems/\<attivo\>/guide.md risolto
+a runtime da `scripts/ecosystem/resolve.mjs` in base ai `detect`/`triggers` del manifest. L'esempio
+letterale in tabella usa `supabase-jsts` perche e l'ecosistema v1 incluso; ecosistemi futuri
+aggiungeranno la propria cartella con lo stesso schema.
 
 In **BUILD** lo schema del task atomico e gia "speso" nel blueprint: BUILD non
 rilegge l'intero schema, **consuma i criteri di accettazione** del task come oracolo
@@ -245,7 +258,7 @@ autonomo su `main` deploy-coupled = deploy autonomo in produzione, quindi sospes
   `references/conventions/forbidden-patterns.md`,
   `references/conventions/threat-model.md`.
 - **Finding model** *(L-COL-011)*: `references/finding-model.md`.
-- **Ecosistema** (v1): `references/ecosystems/supabase-jsts.md`.
+- **Ecosistema attivo** (risolto da `scripts/ecosystem/resolve.mjs`): `references/ecosystems/supabase-jsts/guide.md` (esempio v1; il percorso effettivo e references/ecosystems/\<attivo\>/guide.md).
 - **Prompt di lifecycle** (output di BOOTSTRAP, `L-COL-022`):
   `assets/prompts/project-start.md`, `assets/prompts/session-start.md`,
   `assets/prompts/session-end.md`.

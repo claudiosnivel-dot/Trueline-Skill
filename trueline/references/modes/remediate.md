@@ -30,7 +30,7 @@ correttezza. Detto in chiaro all'utente; niente falso "via libera" (`L-COL-006`)
 | `references/conventions/forbidden-patterns.md` | catalogo dei pattern vietati (spec del ruleset) |
 | `references/conventions/threat-model.md` | enumerazione adversariale per delimitare il percorso critico dei characterization test |
 | `references/finding-model.md` | schema dei finding: contratto tra oracoli, loop e triage (`04`) |
-| `references/ecosystems/supabase-jsts.md` | specifiche v1: Supabase RLS, supabase-js, oracle set |
+| `references/ecosystems/supabase-jsts/guide.md` | specifiche dell'ecosistema attivo (risolto da `scripts/ecosystem/resolve.mjs`; esempio v1: supabase-jsts) |
 
 Non si caricano in REMEDIATE: `references/blueprint/` (non c'è un blueprint),
 `references/blueprint/template/` (non si genera un piano), `references/blueprint/self-check-checklist.md`.

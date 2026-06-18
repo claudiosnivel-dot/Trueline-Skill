@@ -26,7 +26,7 @@ task atomico diceva, niente morto, niente vuln note, niente regressioni
 | `references/conventions/forbidden-patterns.md` | catalogo dei pattern vietati (spec del ruleset) |
 | `references/conventions/threat-model.md` | procedura di enumerazione adversariale per puntare gli oracoli |
 | `references/finding-model.md` | schema dei finding: contratto tra oracoli, loop e triage (`04`) |
-| `references/ecosystems/supabase-jsts.md` | specifiche v1: Supabase RLS, supabase-js, oracle set |
+| `references/ecosystems/supabase-jsts/guide.md` | specifiche dell'ecosistema attivo (risolto da `scripts/ecosystem/resolve.mjs`; esempio v1: supabase-jsts) |
 
 Lo schema del task (`references/blueprint/atomic-task-schema.md`) non si ri-carica
 in pieno in BUILD: i `acceptance_criteria` + `target_tests` del task corrente
