@@ -63,6 +63,66 @@ mkdirSync(join(pgPure, 'src'), { recursive: true });
 writeFileSync(join(pgPure, 'src', 'index.ts'), '');
 check('classify(package.json + src/, NESSUNA dir supabase/) = postgres-jsts (marker-dir non troppo lasco)', classify(pgPure) === 'postgres-jsts');
 
+// ── SP-2 T2.1 — classificazione Python (postgres-py) ────────────────────────
+
+// Caso A: repo con SOLO pyproject.toml (niente package.json, niente supabase/)
+// -> passata 2 lang_any-only: postgres-py vince (hits=1), postgres-jsts hits=0.
+const pyPrj = mkdtempSync(join(tmpdir(), 'eco-pyprj-'));
+writeFileSync(join(pyPrj, 'pyproject.toml'), '[tool.poetry]\nname = "myapp"\n');
+check(
+  'classify(solo pyproject.toml) = postgres-py (lang_any-only, passata 2)',
+  classify(pyPrj) === 'postgres-py',
+);
+
+// Caso B: repo con SOLO requirements.txt (niente package.json, niente supabase/)
+// -> passata 2: postgres-py hits=1, postgres-jsts hits=0 -> postgres-py.
+const pyReq = mkdtempSync(join(tmpdir(), 'eco-pyreq-'));
+writeFileSync(join(pyReq, 'requirements.txt'), 'psycopg2==2.9.9\n');
+check(
+  'classify(solo requirements.txt) = postgres-py (lang_any-only, passata 2)',
+  classify(pyReq) === 'postgres-py',
+);
+
+// Caso C (anti-regressione): repo con supabase/config.toml -> resta supabase-jsts
+// (segnale forte, passata 1 — non interferisce con postgres-py).
+const sbAntiReg = mkdtempSync(join(tmpdir(), 'eco-sbanti-'));
+mkdirSync(join(sbAntiReg, 'supabase'), { recursive: true });
+writeFileSync(join(sbAntiReg, 'supabase', 'config.toml'), '');
+check(
+  'classify(supabase/config.toml) = supabase-jsts (anti-regressione con postgres-py caricato)',
+  classify(sbAntiReg) === 'supabase-jsts',
+);
+
+// Caso D (anti-regressione): repo con SOLO package.json -> postgres-jsts (non postgres-py).
+const pkgAntiReg = mkdtempSync(join(tmpdir(), 'eco-pkganti-'));
+writeFileSync(join(pkgAntiReg, 'package.json'), '{}');
+check(
+  'classify(solo package.json) = postgres-jsts (anti-regressione con postgres-py caricato)',
+  classify(pkgAntiReg) === 'postgres-jsts',
+);
+
+// Caso E (ambiguità): repo con SIA package.json SIA requirements.txt.
+// Passata 2: postgres-jsts hits=1 (package.json), postgres-py hits=1 (requirements.txt).
+// Pari merito -> ambiguous. Mai un verde silenzioso.
+const ambig = mkdtempSync(join(tmpdir(), 'eco-ambig-'));
+writeFileSync(join(ambig, 'package.json'), '{}');
+writeFileSync(join(ambig, 'requirements.txt'), 'psycopg2==2.9.9\n');
+const ambigResult = classify(ambig);
+check(
+  'classify(package.json + requirements.txt) = {ambiguous:true} (pari merito, proponi+conferma)',
+  ambigResult && ambigResult.ambiguous === true &&
+  Array.isArray(ambigResult.candidates) &&
+  ambigResult.candidates.includes('postgres-jsts') &&
+  ambigResult.candidates.includes('postgres-py'),
+);
+
+// Caso F (repo vuoto, ribadito con postgres-py caricato) -> null.
+const emptyPy = mkdtempSync(join(tmpdir(), 'eco-emptpy-'));
+check(
+  'classify(repo vuoto, con postgres-py caricato) = null',
+  classify(emptyPy) === null,
+);
+
 const failed = results.filter((r) => !r.ok);
 console.log(`\n${failed.length === 0 ? 'OK' : 'FAIL'} — ${results.length - failed.length}/${results.length}`);
 process.exit(failed.length === 0 ? 0 : 1);
