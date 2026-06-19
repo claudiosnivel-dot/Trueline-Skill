@@ -1,0 +1,81 @@
+{
+  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack postgres-py (SP-2, T1.2). Stesso schema di eval/ecosystems/postgres-jsts/registry.json. Per ogni difetto seminato PY-S1..PY-S5: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso (tier detection, fase 1 L-COL-030: tutti detection-only, verified_set vuoto), ancora ispezionabile (file+marker | lockfile+symbol | table+policy), scope di scansione dell'oracolo, e note. Il floor [secret, dependency-vuln, rls] e' obbligatorio; PY-S4 (injection) e PY-S5 (dead-code) sono bonus non-floor. authz-surface qui = RLS-al-DB (Postgres non-Supabase, current_setting).",
+  "schema_version": "1.0",
+  "milestone": "SP-2",
+  "ecosystem": "postgres-py",
+  "reference_app": "eval/ecosystems/postgres-py/reference-app",
+  "defects": [
+    {
+      "id": "PY-S1",
+      "category": "secret",
+      "source_oracle": "gitleaks",
+      "owasp": "A07:2025",
+      "cwe": "CWE-798",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "app/config.py",
+        "marker": "SEED:PY-S1"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Credenziali hardcoded nel sorgente (DATABASE_URL Postgres con password live + API_KEY sk_live ad alta entropia), PRESENTI nel working tree. Tier detection (fase 1): trovate dall'oracolo legato (gitleaks working-tree), non auto-fixate. Andrebbero lette da os.environ."
+    },
+    {
+      "id": "PY-S2",
+      "category": "dependency-vuln",
+      "source_oracle": "osv",
+      "owasp": "A06:2025",
+      "cwe": "CWE-20",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "requirements.txt",
+        "lockfile": "requirements.txt",
+        "symbol": "pyyaml@5.3.1"
+      },
+      "scan_scope": "lockfile",
+      "notes": "Dipendenza vulnerabile reale pinnata: PyYAML==5.3.1 (osv emette il package come pyyaml@5.3.1; flagga GHSA-8q59-q68h-6hv4 / CVE-2020-14343, arbitrary code execution via yaml.load di input non fidato; anche PYSEC-2021-142). Rilevata dall'oracolo legato (osv) sul lockfile. owasp/cwe come riportati da osv = confronto SOFT/esterno (CWE-20 e' il cwe nativo emesso da osv-scanner per questi advisory; A06:2025 = Vulnerable and Outdated Components). Tier detection: trovata, prioritizzata, non auto-bumpata nel set verificato (fase 1, verified_set vuoto)."
+    },
+    {
+      "id": "PY-S3",
+      "category": "rls",
+      "source_oracle": "rls-check",
+      "owasp": "A01:2025",
+      "cwe": "CWE-285",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "migrations/0001_init.sql",
+        "table": "public.invoices",
+        "policy": "invoices_select"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Policy USING (true) su public.invoices: isolamento multi-tenant finto (rls-check emette RLS003_PERMISSIVE_TRUE; normalize -> CWE-285/A01:2025, valori enforced dal conformance). La tabella di contrasto public.notes usa una policy con current_setting('app.current_tenant') (isolamento reale, Postgres non-Supabase) e NON deve produrre finding (precisione): rls-check emette ESATTAMENTE 1 finding sull'intera migration."
+    },
+    {
+      "id": "PY-S4",
+      "category": "injection",
+      "source_oracle": "semgrep",
+      "owasp": "A03:2025",
+      "cwe": "CWE-89",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "app/routes/bookings.py",
+        "marker": "SEED:PY-S4"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Bonus, NON-floor (gateato da T2.2). SQL costruito per interpolazione di input utente in cur.execute via f-string (get_booking_unsafe) invece di placeholder posizionale. Categoria injection (OWASP A03:2025, CWE-89). La funzione di contrasto get_booking_safe usa cur.execute(\"... WHERE id = %s\", (booking_id,)) e NON deve produrre finding (precisione)."
+    },
+    {
+      "id": "PY-S5",
+      "category": "dead-code",
+      "source_oracle": "vulture",
+      "owasp": "-",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "app/dead.py",
+        "symbol": "_unused_helper",
+        "marker": "SEED:PY-S5"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Bonus, NON-floor (gateato da T2.0). Funzione _unused_helper MAI referenziata in app/dead.py: vulture la segnala come unused function. Il contrasto used_helper e' chiamato da app/main.py allo startup (riferimento reale) e NON viene segnalato da vulture (precisione). Categoria dead-code; owasp/cwe non applicabili (omessi/'-')."
+    }
+  ]
+}

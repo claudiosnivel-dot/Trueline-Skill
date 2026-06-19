@@ -83,6 +83,10 @@ const M5_GATE = resolve(ROOT, 'eval', 'harness', 'm5_gate_check.mjs');
 const RUN_GITLEAKS = resolve(ROOT, 'trueline', 'scripts', 'oracles', 'run_gitleaks.mjs');
 const RUN_OSV = resolve(ROOT, 'trueline', 'scripts', 'oracles', 'run_osv.mjs');
 const RUN_SEMGREP = resolve(ROOT, 'trueline', 'scripts', 'oracles', 'run_semgrep.mjs');
+// Oracolo RLS custom di Trueline (legato dal pack postgres-py per la categoria rls,
+// ruolo authz-surface su Postgres non-Supabase via current_setting). Statico
+// (analizza la DDL delle migration, NON esegue il DB): nessuna dipendenza docker.
+const RLS_CHECK = resolve(ROOT, 'trueline', 'scripts', 'oracles', 'rls_check.mjs');
 const GO_BIN = process.platform === 'win32' ? 'C:/Users/claud/go/bin' : '/c/Users/claud/go/bin';
 
 // Immagine semgrep PINNATA (deve combaciare con run_semgrep.mjs / m5).
@@ -107,6 +111,14 @@ const PACK_FIXTURES = {
     kind: 'detection',
     fixtureApp: resolve(ROOT, 'eval', 'ecosystems', 'postgres-jsts', 'reference-app'),
     registry: resolve(ROOT, 'eval', 'ecosystems', 'postgres-jsts', 'registry.json'),
+  },
+  // postgres-py: corpo DETECTION-PARAMETRICO (SP-2). Floor=[secret,dependency-vuln,
+  // rls]: NESSUN binding del floor è semgrep -> needsDocker=false (conformance SENZA
+  // docker). Il ramo rls è legato a rls_check (oracolo statico custom, vedi RLS_CHECK).
+  'postgres-py': {
+    kind: 'detection',
+    fixtureApp: resolve(ROOT, 'eval', 'ecosystems', 'postgres-py', 'reference-app'),
+    registry: resolve(ROOT, 'eval', 'ecosystems', 'postgres-py', 'registry.json'),
   },
 };
 
@@ -455,6 +467,28 @@ function detectCategory({ cat, tool, binding, copyDir, copyBase, manifest }) {
     try { native = JSON.parse(r.stdout); } catch { /* gestito */ }
     if (!native) return { error: `semgrep: output non parsabile (exit=${r.status}) ${(r.stderr || '').slice(-200)}` };
     return { findings: safeNormalize('semgrep', native, opts) };
+  }
+  if (tool === 'rls_check' || tool === 'rls' || tool === 'rls-check') {
+    // rls -> rls_check <copy>/<scanDir>. La dir di scansione viene dal binding
+    // (manifest.oracles.rls.scan), default ["migrations"]. rls_check è STATICO
+    // (analizza la DDL, non esegue il DB) -> nessuna dipendenza docker nel floor.
+    //
+    // PATH-MATCHING (verificato EMPIRICAMENTE, T3.1): rls_check gira con cwd=ROOT
+    // (nodeRun) ed emette location.file = relative(ROOT, file) in posix, quindi
+    // "eval/.tmp-verify/eco-postgres-py-.../migrations/0001_init.sql". normalize
+    // (ramo rls-check) prefissa con opts.base SOLO i path "nudi": un path che parte
+    // già da "eval/" passa INVARIATO -> fileOf(finding) TERMINA con
+    // "migrations/0001_init.sql" e il match per ancora-file del registry scatta.
+    // opts.base resta copyBase (coerente con gli altri oracoli, non altera il path
+    // eval/-ancorato): il seed PY-S3 è COLTO senza aggiustamenti speciali.
+    const scanDirs = (binding.scan && binding.scan.length) ? binding.scan : ['migrations'];
+    const scanned = scanDirs.find((d) => existsSync(join(copyDir, d)));
+    const target = scanned ? join(copyDir, scanned) : copyDir;
+    const r = nodeRun(RLS_CHECK, [target]);
+    let native = null;
+    try { native = JSON.parse(r.stdout); } catch { /* gestito */ }
+    if (!native) return { error: `rls_check: output non parsabile (exit=${r.status})` };
+    return { findings: safeNormalize('rls', native, opts) };
   }
   return { error: `oracolo non gestito per la categoria ${cat}: ${tool}` };
 }
