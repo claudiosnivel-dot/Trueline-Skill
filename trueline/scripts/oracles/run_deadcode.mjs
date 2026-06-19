@@ -34,7 +34,7 @@ import { fileURLToPath } from 'node:url';
 //   node run_deadcode.mjs <project-dir> [--tool=<nome>]
 //
 // --tool=<nome>  Seleziona il dead-code tool. Default: knip.
-//                Valori supportati: knip
+//                Valori supportati: knip, vulture (Python — SP-2)
 //                Tool sconosciuto: esce con JSON vuoto + nota (mai falso verde).
 
 const args = process.argv.slice(2);
@@ -57,11 +57,11 @@ if (positionalArgs.length < 1) {
 const projectDir = resolve(positionalArgs[0]);
 
 // ── Dispatch: tool sconosciuto → JSON vuoto + nota (mai falso verde) ─────────
-// I tool concreti aggiuntivi (es. vulture per Python) sono SP-2, non qui.
+// I tool concreti supportati sono knip (JS/TS, primario) e vulture (Python, SP-2).
 // Un tool non supportato non deve mai sembrare "nessun dead code trovato" —
 // per questo si emette una nota esplicita accanto all'array vuoto.
 
-const SUPPORTED_TOOLS = new Set(['knip']);
+const SUPPORTED_TOOLS = new Set(['knip', 'vulture']);
 
 if (!SUPPORTED_TOOLS.has(toolName)) {
   const safeNote = `tool ${toolName} non supportato`;
@@ -74,6 +74,82 @@ if (!SUPPORTED_TOOLS.has(toolName)) {
 if (!existsSync(projectDir)) {
   process.stderr.write(`ERRORE: la directory del progetto non esiste: ${projectDir}\n`);
   process.exit(1);
+}
+
+// ── Ramo vulture (Python — SP-2) ─────────────────────────────────────────────
+// vulture analizza l'AST Python e stampa su stdout una riga per simbolo morto:
+//   <path>:<line>: unused <type> '<name>' (<NN>% confidence)
+// Le issue trovate sono INFORMAZIONE, non un errore: vulture esce 3 quando trova
+// dead code, 0 quando pulito — NON usiamo l'exit code per il verdetto, ma il
+// parsing dello stdout. EXIT 1 solo se il processo non parte (python assente /
+// spawn error). Emettiamo { tool: "vulture", issues: [...] } (+ note se vuoto).
+
+if (toolName === 'vulture') {
+  // Eseguiamo "python -m vulture <project-dir>" (NON il bare `vulture`, che
+  // potrebbe non essere sul PATH). cwd = projectDir per path relativi puliti.
+  const vultureRes = spawnSync('python', ['-m', 'vulture', projectDir], {
+    encoding: 'utf8',
+    timeout: 120_000,
+    env: process.env,
+  });
+
+  // Spawn error reale (python assente, ecc.) → EXIT 1.
+  if (vultureRes.error) {
+    process.stderr.write(
+      `ERRORE: impossibile avviare vulture: ${vultureRes.error.message}\n` +
+      'Verificare che python sia installato e che il modulo vulture sia presente (pip install vulture).\n'
+    );
+    process.exit(1);
+  }
+
+  // Propaga lo stderr di vulture (warning di sintassi, ecc.) al padre.
+  if (vultureRes.stderr) {
+    process.stderr.write(vultureRes.stderr);
+  }
+
+  // python introvabile dal launcher: spawnSync NON pone result.error ma esce con
+  // status 9009 (Windows) e nessuno stdout. Distinguiamo dal "clean" (0 issue,
+  // status 0, nessuno stdout) controllando lo status quando lo stdout e vuoto.
+  const rawVulture = (vultureRes.stdout || '');
+  if (!rawVulture.trim() && vultureRes.status !== 0 && vultureRes.status !== 3) {
+    process.stderr.write(
+      `ERRORE: vulture non e stato eseguito correttamente (exit ${vultureRes.status}, nessuno stdout).\n` +
+      'Verificare che "python -m vulture" sia disponibile.\n'
+    );
+    process.exit(1);
+  }
+
+  // Parsing: una issue per riga.
+  //   path:line: unused <type> '<name>' (NN% confidence)
+  // Regex robusta: cattura file, line, type (parola/e dopo "unused"), name e
+  // confidence. Tolleriamo path con ':' (es. drive Windows "C:") ancorando
+  // sull'ultimo ":<digits>: unused" tramite componenti non-greedy mirati.
+  const lineRe = /^(.*?):(\d+):\s*unused\s+([a-zA-Z ]+?)\s+'([^']+)'\s*\((\d+)%\s*confidence\)\s*$/;
+
+  const issues = [];
+  for (const rawLine of rawVulture.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const m = lineRe.exec(line);
+    if (!m) continue; // righe non conformi: ignorate (robustezza)
+    issues.push({
+      file: m[1],
+      line: Number(m[2]),
+      type: m[3].trim(),
+      name: m[4],
+      confidence: Number(m[5]),
+    });
+  }
+
+  const out = { tool: 'vulture', issues };
+  if (issues.length === 0) {
+    out.note = 'vulture non ha trovato dead-code (o nessuna riga parsabile)';
+  }
+
+  process.stdout.write(JSON.stringify(out, null, 2) + '\n');
+  // EXIT 0: vulture e stato eseguito e lo stdout e parsabile. Le issue sono
+  // informazione, non errore — il chiamante decide se escalare.
+  process.exit(0);
 }
 
 // ── Individua il binario knip ────────────────────────────────────────────────
