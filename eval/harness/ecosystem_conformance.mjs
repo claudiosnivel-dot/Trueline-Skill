@@ -120,6 +120,15 @@ const PACK_FIXTURES = {
     fixtureApp: resolve(ROOT, 'eval', 'ecosystems', 'postgres-py', 'reference-app'),
     registry: resolve(ROOT, 'eval', 'ecosystems', 'postgres-py', 'registry.json'),
   },
+  // SP-3: Python+Supabase. Floor=[secret,dependency-vuln,rls]: NESSUN binding del
+  // floor è semgrep -> needsDocker=false (conformance SENZA docker). Il ramo rls è
+  // legato a rls_check con binding.scan su supabase/migrations (auth.uid() come
+  // ISOLATION_TOKEN); corpo DETECTION-PARAMETRICO riusato (SP-1/SP-2), invariato.
+  'supabase-py': {
+    kind: 'detection',
+    fixtureApp: resolve(ROOT, 'eval', 'ecosystems', 'supabase-py', 'reference-app'),
+    registry: resolve(ROOT, 'eval', 'ecosystems', 'supabase-py', 'registry.json'),
+  },
 };
 
 // ---------------------------------------------------------------------------
