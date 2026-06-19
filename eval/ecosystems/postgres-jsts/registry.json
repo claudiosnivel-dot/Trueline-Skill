@@ -1,0 +1,66 @@
+{
+  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack postgres-jsts (SP-1, T1.2). Stesso schema di eval/harness/expected/registry.json. Per ogni difetto seminato PG-S1..PG-S4: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso (tier detection, fase 1 L-COL-030: tutti detection-only, verified_set vuoto), ancora ispezionabile (file+marker | lockfile+symbol), scope di scansione dell'oracolo, e note. Il floor [secret, dependency-vuln, authz] e' obbligatorio; PG-S4 (injection) e' bonus non-floor. authz-surface qui = route-authz nell'app (non RLS-al-DB).",
+  "schema_version": "1.0",
+  "milestone": "SP-1",
+  "ecosystem": "postgres-jsts",
+  "reference_app": "eval/ecosystems/postgres-jsts/reference-app",
+  "defects": [
+    {
+      "id": "PG-S1",
+      "category": "secret",
+      "source_oracle": "gitleaks",
+      "owasp": "A07:2025",
+      "cwe": "CWE-798",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "src/config.ts",
+        "marker": "SEED:PG-S1"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Credenziali hardcoded nel sorgente (connection string Postgres con password + token sk_live), PRESENTI nel working tree. Tier detection (fase 1): trovate dall'oracolo legato (gitleaks working-tree), non auto-fixate. Andrebbero lette da process.env."
+    },
+    {
+      "id": "PG-S2",
+      "category": "dependency-vuln",
+      "source_oracle": "osv",
+      "owasp": "A03:2025",
+      "cwe": "CWE-1321",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "package-lock.json",
+        "lockfile": "package-lock.json",
+        "symbol": "minimist@1.2.0"
+      },
+      "scan_scope": "lockfile",
+      "notes": "Dipendenza vulnerabile reale pinnata: minimist@1.2.0 (osv flagga GHSA-vh95-rmgr-6w4m, Prototype Pollution; anche GHSA-xvch-5gv4-984h). Rilevata dall'oracolo legato (osv) sul lockfile. CWE atteso = CWE-1321 (Prototype Pollution), allineato al CWE nativo emesso da osv-scanner per questo GHSA (registro falsificabile: l'atteso combacia col fatto dell'oracolo). Tier detection: trovata, prioritizzata, non auto-bumpata nel set verificato (fase 1, verified_set vuoto)."
+    },
+    {
+      "id": "PG-S3",
+      "category": "authz",
+      "source_oracle": "semgrep",
+      "owasp": "A01:2025",
+      "cwe": "CWE-862",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "src/routes/bookings.ts",
+        "marker": "SEED:PG-S3"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Rotta mutante (router.post) che esegue pool.query('INSERT ...') SENZA alcun controllo di identita/ruolo (route-authz, authz-surface non-Supabase). Gateata da T2.2/T3.1 (dipende dal ruleset del pack). La rotta di contrasto POST /bookings/secure verifica verifyToken PRIMA dell'INSERT e NON deve produrre finding (precisione)."
+    },
+    {
+      "id": "PG-S4",
+      "category": "injection",
+      "source_oracle": "semgrep",
+      "owasp": "A05:2025",
+      "cwe": "CWE-89",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "src/db.ts",
+        "marker": "SEED:PG-S4"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Bonus, NON-floor. SQL costruito per concatenazione di input utente in pool.query (string-concat invece di parametro posizionale $1). Categoria injection (OWASP A05:2025, CWE-89). Inoltrata dalla GET /bookings/:id verso findBookingByIdUnsafe."
+    }
+  ]
+}
