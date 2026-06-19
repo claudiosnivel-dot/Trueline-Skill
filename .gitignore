@@ -4,3 +4,6 @@ eval/.tmp-*/
 .trueline/
 *.log
 dist/
+
+# SP-1: per-ecosystem fixture apps are gitignored, on-disk inner repos (mirror eval/reference-app/)
+eval/ecosystems/*/reference-app/
