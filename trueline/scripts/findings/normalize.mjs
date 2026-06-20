@@ -353,6 +353,47 @@ function normalizeKnip(native, ctx) {
   return out;
 }
 
+// --- vulture (dead-code Python — SP-2/SP-4) ----------------------------------
+// Nativo (da run_deadcode.mjs --tool=vulture): { tool:'vulture', issues:[{ file,
+//   line, type, name, confidence }] }. category=dead-code; severity=LOW (igiene,
+//   come knip). Un'issue = un simbolo Python non usato (function/class/variable/
+//   attribute/...). Emettiamo un finding per simbolo, con location.symbol=name.
+//   Il fingerprint e' ANCORATO al simbolo (NON alla riga, che vulture sposta):
+//   stesso simbolo morto -> stesso fingerprint prima e dopo la fix, cosi' il loop
+//   (stillPresent per fingerprint) lo riconosce come "ancora presente / azzerato".
+function normalizeVulture(native, ctx) {
+  const issues = native && Array.isArray(native.issues) ? native.issues : [];
+  const out = [];
+  for (const issue of issues) {
+    const normalizedPath = normalizePath(issue.file || '', { base: ctx.base });
+    const symbol = issue.name || undefined;
+    const kind = String(issue.type || 'symbol').trim().replace(/\s+/g, '-');
+    const ruleId = `unused-${kind}`; // es. unused-function, unused-class, unused-attribute
+    // match_signature: tipo-di-morto + simbolo + path (NON la riga, NON la
+    // confidence: due run sullo stesso simbolo danno lo stesso fingerprint).
+    const matchSignature = [ruleId, symbol || '', normalizedPath].join('|');
+    out.push(baseFinding(ctx, {
+      category: 'dead-code',
+      severity: 'LOW',
+      location: {
+        file: normalizedPath,
+        start_line: intOr(issue.line, 0),
+        end_line: intOr(issue.line, 0),
+        ...(symbol ? { symbol } : {}),
+      },
+      evidence: `Simbolo Python non utilizzato (${ruleId}): ${symbol || '?'} in ${normalizedPath} (vulture, ${intOr(issue.confidence, 0)}% confidence).`,
+      source_oracle: {
+        oracle: 'vulture',
+        tool_version: ctx.toolVersions.vulture,
+        rule_id: ruleId,
+      },
+      fingerprint: fingerprintOf({ oracle: 'vulture', ruleId, normalizedPath, matchSignature }),
+      remediation_hint: 'Rimuovere il simbolo morto (previo gate umano).',
+    }));
+  }
+  return out;
+}
+
 function makeKnipFinding(ctx, { ruleId, normalizedPath, symbol, startLine, evidence }) {
   // match_signature: tipo-di-morto + simbolo + path (NON la riga).
   const matchSignature = [ruleId, symbol || '', normalizedPath].join('|');
@@ -681,6 +722,7 @@ const ORACLE_ALIASES = {
   knip: 'knip',
   deadcode: 'knip',
   'dead-code': 'knip',
+  vulture: 'vulture',
   osv: 'osv',
   'osv-scanner': 'osv',
   semgrep: 'semgrep',
@@ -696,7 +738,7 @@ export function normalize(oracle, native, opts = {}) {
   const canon = ORACLE_ALIASES[String(oracle).toLowerCase()];
   if (!canon) {
     throw new Error(
-      `oracolo sconosciuto: "${oracle}" (ammessi: gitleaks, rls-check, knip, osv, semgrep)`,
+      `oracolo sconosciuto: "${oracle}" (ammessi: gitleaks, rls-check, knip, vulture, osv, semgrep)`,
     );
   }
   const ctx = {
@@ -708,6 +750,7 @@ export function normalize(oracle, native, opts = {}) {
       gitleaks: 'gitleaks',
       'rls-check': 'rls-check@trueline',
       knip: 'knip',
+      vulture: 'vulture',
       osv: 'osv-scanner',
       semgrep: 'semgrep',
       ...(opts.toolVersions || {}),
@@ -720,6 +763,8 @@ export function normalize(oracle, native, opts = {}) {
       return normalizeRlsCheck(native, ctx);
     case 'knip':
       return normalizeKnip(native, ctx);
+    case 'vulture':
+      return normalizeVulture(native, ctx);
     case 'osv':
       return normalizeOsv(native, ctx);
     case 'semgrep':

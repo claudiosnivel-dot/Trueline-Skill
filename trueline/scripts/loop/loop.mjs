@@ -60,12 +60,21 @@ function rerunOracleFor(finding, dir, runOpts) {
     catch (e) { return { ok: false, json: null, detail: `JSON invalido: ${e.message}` }; }
   };
 
+  // Path del finding in POSIX (per discriminare JS vs Python in modo additivo).
+  const fpath = String((finding.location && finding.location.file) || '').replace(/\\/g, '/');
+  const isPy = /\.py$/.test(fpath);
+
   let oracle; let res; let scope;
   switch (finding.category) {
     case 'secret':
       oracle = 'gitleaks';
-      // scope: working-tree per S1; history per S2 (file solo in history).
-      scope = /legacy\/credentials\.ts$/.test(finding.location.file) ? 'history' : 'working-tree';
+      // scope: history per i secret-in-history (file vivo SOLO nella history,
+      // assente dal working tree). Sono tali sia il caso JS (legacy/credentials.ts,
+      // S2) sia il caso Python (app/legacy_credentials.py, SPY-S6). Altrimenti
+      // working-tree (S1 / SPY-S1). DISPATCH ADDITIVO keyed sul path: JS e Python
+      // coesistono.
+      scope = (/legacy\/credentials\.ts$/.test(fpath) || /legacy_credentials\.py$/.test(fpath))
+        ? 'history' : 'working-tree';
       res = run(RUN_GITLEAKS, [dir, scope]);
       break;
     case 'rls':
@@ -73,8 +82,16 @@ function rerunOracleFor(finding, dir, runOpts) {
       res = run(RLS_CHECK, [resolve(dir, 'supabase', 'migrations')]);
       break;
     case 'dead-code':
-      oracle = 'knip'; scope = 'working-tree';
-      res = run(RUN_DEADCODE, [dir]);
+      // ECOSYSTEM-AWARE (additivo): dead-code Python -> vulture; JS/TS -> knip
+      // (invariato). Il dispatch e' keyed sull'estensione del file del finding,
+      // cosi' i due ecosistemi coesistono senza rompere il ramo knip esistente.
+      if (isPy) {
+        oracle = 'vulture'; scope = 'working-tree';
+        res = run(RUN_DEADCODE, [dir, '--tool=vulture']);
+      } else {
+        oracle = 'knip'; scope = 'working-tree';
+        res = run(RUN_DEADCODE, [dir]);
+      }
       break;
     default:
       return { ok: false, findings: [], detail: `categoria non rieseguibile: ${finding.category}` };
@@ -221,8 +238,12 @@ export function runFindingLoop(finding, ctx) {
   // sullo STESSO literal di config.ts: la fix di S1 ne cancella entrambe).
   // Riesegui lo stesso oracolo: se il finding e' GIA' assente, e' verified per
   // fatto dell'oracolo, senza ri-applicare nulla (L-COL-002). NON si applica al
-  // caso history (S2): la history non si "pulisce" senza riscrittura distruttiva.
-  if (triage.category !== 'secret' || !/legacy\/credentials\.ts$/.test(triage.location.file)) {
+  // caso history (S2/SPY-S6): la history non si "pulisce" senza riscrittura
+  // distruttiva (dispatch additivo keyed sul path: copre JS .ts e Python .py).
+  const __triagePath = String((triage.location && triage.location.file) || '').replace(/\\/g, '/');
+  const __isHistorySecret = triage.category === 'secret'
+    && (/legacy\/credentials\.ts$/.test(__triagePath) || /legacy_credentials\.py$/.test(__triagePath));
+  if (!__isHistorySecret) {
     const pre = rerunOracleFor(triage, dir, runOpts);
     if (pre.ok && !stillPresent(triage, pre.findings)) {
       // partition col finding corrente: l'assertion sulla stessa regione/tabella

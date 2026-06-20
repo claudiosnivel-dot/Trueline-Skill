@@ -26,9 +26,17 @@
 import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 
+import { removePySymbol } from './py_deadcode_edit.mjs';
+
 const MIGRATION_REL = 'supabase/migrations/0001_init.sql';
 const CONFIG_REL = 'src/lib/config.ts';
 const DEAD_REL = 'src/legacy/unused.ts';
+
+// --- Path Python della fixture supabase-py (SP-4) ----------------------------
+// Le migration vivono nello stesso layout Supabase (supabase/migrations) sia per
+// la fixture JS sia per quella Python: MIGRATION_REL e' condiviso. Gli altri
+// path sono specifici dell'ecosistema Python.
+const PY_CONFIG_REL = 'app/config.py';
 
 // --- Tabella deterministica di fix note (EVAL-MODE) --------------------------
 //
@@ -132,6 +140,142 @@ function fixSecretHistoryS2() {
   };
 }
 
+// =============================================================================
+// FIX PYTHON (SP-4, supabase-py) — additive. Dispatch keyed sul finding/ecosystem
+// (vedi selectKnownFix): i fix JS e Python coesistono senza interferire.
+// =============================================================================
+
+// SPY-S1 — secret working-tree (Python): sostituisce le credenziali hardcoded in
+// app/config.py con os.getenv(...). Cosi' gitleaks working-tree torna PULITO su
+// app/config.py (sparisce il literal JWT della service_role key + la DSN con
+// password) -> verified. La suite di caratterizzazione resta verde: con le env
+// impostate get_database_url()/get_service_role_key() tornano il valore d'ambiente
+// (ramo "env presente" invariato), e PORT continua a leggere os.environ.
+function fixSecretSpyS1(dir) {
+  const p = resolve(dir, PY_CONFIG_REL);
+  if (!existsSync(p)) return { ok: false, detail: `file assente: ${PY_CONFIG_REL}` };
+  let src = readFileSync(p, 'utf8');
+  const before = src;
+
+  // DATABASE_URL = "postgresql://...":  -> os.getenv (nessun default hardcoded).
+  src = src.replace(
+    /^DATABASE_URL\s*=\s*["'][^"'\n]*["']\s*$/m,
+    'DATABASE_URL = os.getenv("DATABASE_URL", "")',
+  );
+  // SUPABASE_SERVICE_ROLE_KEY = "eyJ...": -> os.getenv.
+  src = src.replace(
+    /^SUPABASE_SERVICE_ROLE_KEY\s*=\s*["'][^"'\n]*["']\s*$/m,
+    'SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")',
+  );
+
+  if (src === before) {
+    return { ok: false, detail: 'SPY-S1: literal hardcoded non trovato in app/config.py (pattern cambiato?)' };
+  }
+  writeFileSync(p, src, 'utf8');
+  return { ok: true, detail: 'SPY-S1: credenziali hardcoded in app/config.py sostituite con os.getenv(...)' };
+}
+
+// SPY-S3 — RLS USING (true) su public.invoices (Python fixture): trasferisce il
+// fix RLS (USING(true) -> predicato reale con auth.uid()) sulla migration della
+// fixture Python (stesso layout supabase/migrations). rls_check torna PULITO
+// (0 finding) -> verified. Riusa la stessa semantica di fixRlsS4 (predicato reale),
+// adattata alla colonna di tenancy della fixture Python (tenant_id = auth.uid(),
+// coerente col contrasto public.notes che NON e' flaggato).
+function fixRlsSpyS3(dir) {
+  const p = resolve(dir, MIGRATION_REL);
+  if (!existsSync(p)) return { ok: false, detail: `migration assente: ${MIGRATION_REL}` };
+  const sql = readFileSync(p, 'utf8');
+  // Sostituisci la USING (true) della policy invoices_select con un predicato
+  // reale Supabase (auth.uid()). Match mirato alla policy su public.invoices per
+  // non toccare il contrasto notes_select (gia' isolato).
+  //
+  // Il match INCLUDE il terminatore `;` dello statement (opzionale) e lo RI-EMETTE
+  // PRIMA del commento di fix. Senza, il commento `-- FIX:SPY-S3` si frapporrebbe
+  // tra `)` e `;`, COMMENTANDO il terminatore: lo statement resterebbe aperto e lo
+  // statement SUCCESSIVO (create table notes) verrebbe agganciato -> migration
+  // SINTATTICAMENTE ROTTA a runtime (rls_check statico non se ne accorge, ma la
+  // caratterizzazione RLS a runtime sì). Il `;` va quindi PRIMA del commento.
+  const re = /(create\s+policy\s+invoices_select\s+on\s+public\.invoices\s+for\s+select\s+using\s*\()\s*true\s*(\)\s*;?)/i;
+  if (!re.test(sql)) {
+    return { ok: false, detail: 'SPY-S3: policy invoices_select USING (true) non trovata in 0001_init.sql' };
+  }
+  // $2 cattura ")" + l'eventuale ";": lo emettiamo invariato, poi il commento, così
+  // il terminatore resta FUORI dal commento e lo statement è chiuso correttamente.
+  const after = sql.replace(re, '$1tenant_id = auth.uid()$2  -- FIX:SPY-S3');
+  if (after === sql) return { ok: false, detail: 'SPY-S3: nessuna modifica applicata' };
+  writeFileSync(p, after, 'utf8');
+  return { ok: true, detail: 'SPY-S3: invoices_select USING(true) -> USING(tenant_id = auth.uid())' };
+}
+
+// SPY-S5 — dead-code Python: rimuove in modo SICURO la definizione del simbolo
+// morto segnalato da vulture (finding {file, line, symbol}). Delega all'helper
+// riusabile removePySymbol (py_deadcode_edit.mjs): rimuove SOLO la definizione
+// top-level (non rompe il modulo); se il simbolo non e' una def top-level fallisce
+// ONESTAMENTE (mai una rimozione approssimata). Gate umano: L-COL-021 (in eval
+// auto-approvato dal loop). Dopo, vulture NON segnala piu' il simbolo -> verified;
+// used_helper resta intatto (la suite di caratterizzazione resta verde).
+function fixDeadcodeSymbol(dir, finding) {
+  const rel = String((finding && finding.location && finding.location.file) || '')
+    .replace(/\\/g, '/');
+  const symbol = (finding && finding.location && finding.location.symbol) || '';
+  const kindHint = inferKindFromRuleId(finding && finding.source_oracle && finding.source_oracle.rule_id);
+  if (!rel || !symbol) {
+    return { ok: false, detail: `SPY-S5: finding senza file/symbol (file=${rel || '?'} symbol=${symbol || '?'})` };
+  }
+  // Il path del finding e' repo-relativo (es. eval/.tmp-verify/<id>/app/dead.py o
+  // app/dead.py a seconda della base di normalize). Lo ancoriamo alla COPIA `dir`
+  // prendendo la coda dopo "app/" se presente, altrimenti il basename.
+  const absFile = resolvePyFileInCopy(dir, rel);
+  if (!absFile) {
+    return { ok: false, detail: `SPY-S5: file Python non risolto nella copia (${rel})` };
+  }
+  const r = removePySymbol(absFile, symbol, { kindHint });
+  if (!r.ok) return { ok: false, detail: `SPY-S5: ${r.detail}` };
+  return { ok: true, detail: `SPY-S5: ${r.detail}` };
+}
+
+// Ricava il keyword di definizione (function/class) dal rule_id vulture
+// (unused-function/unused-class/...). Default: function.
+function inferKindFromRuleId(ruleId) {
+  const r = String(ruleId || '');
+  if (/class/i.test(r)) return 'class';
+  return 'function';
+}
+
+// Risolve il path ASSOLUTO del file Python nella COPIA `dir` a partire dal path
+// (eventualmente repo-relativo) del finding. Strategia: prende il segmento a
+// partire da "app/" (layout della fixture); fallback al path cosi' com'e' se gia'
+// risolve dentro la copia. NON esce mai dalla copia (nessun ../ verso l'esterno).
+function resolvePyFileInCopy(dir, rel) {
+  const norm = rel.replace(/\\/g, '/');
+  const m = /(?:^|\/)(app\/.+\.py)$/.exec(norm);
+  if (m) {
+    const cand = resolve(dir, m[1]);
+    if (existsSync(cand)) return cand;
+  }
+  // Fallback: il path e' gia' relativo alla copia.
+  const direct = resolve(dir, norm);
+  if (existsSync(direct)) return direct;
+  return null;
+}
+
+// SPY-S6 — secret-in-history (Python): ROTAZIONE dichiarata, NESSUNA riscrittura
+// di history (distruttiva, gate umano). Riusa il pattern di fixSecretHistoryS2:
+// la chiave vive SOLO nella git history (app/legacy_credentials.py rimosso dal
+// working tree); purgarla richiede git filter-repo (distruttivo) -> MAI autonomo.
+// Esito atteso: mitigated-residual, MAI verified (L-COL-006/L-COL-024).
+function fixSecretHistorySpyS6() {
+  return {
+    ok: true,
+    detail:
+      'SPY-S6: rotazione chiave PRESCRITTA e dichiarata (azione fuori dal codice, '
+      + 'console provider). History NON riscritta (purga distruttiva, gate umano). '
+      + 'Esito atteso: mitigated-residual (mai verified).',
+    rotationDeclared: true,
+    historyRewritten: false,
+  };
+}
+
 // Mappa controlId(rule_id) -> costruttore di patch.
 const FIX_TABLE = {
   // gitleaks: il rule_id varia per regola; mappiamo per categoria nel selettore.
@@ -141,15 +285,54 @@ const FIX_TABLE = {
 };
 
 // Seleziona la patch nota per un finding. Per secret/dead-code si seleziona per
-// categoria + path (i rule_id di gitleaks/knip sono meno stabili dei controlId rls).
+// categoria + path (i rule_id di gitleaks/knip/vulture sono meno stabili dei
+// controlId rls). DISPATCH keyed sul finding/ecosystem: il ramo Python (.py /
+// supabase-py) e quello JS (.ts) coesistono, NESSUNO interferisce con l'altro.
 function selectKnownFix(finding) {
   const cat = finding.category;
-  const file = (finding.location && finding.location.file) || '';
+  const file = String((finding.location && finding.location.file) || '').replace(/\\/g, '/');
   const ruleId = (finding.source_oracle && finding.source_oracle.rule_id) || '';
+  const isPy = /\.py$/.test(file);
+  // Discrimina la fixture Python supabase-py: la sua migration ha la policy
+  // invoices_select USING(true) su public.invoices. La fixture JS usa marker
+  // diversi (-- SEED:S4 su documents). Distinguiamo per la presenza della policy
+  // invoices_select nella signature/symbol del finding (location.symbol = policy).
+  const policySym = String((finding.location && finding.location.symbol) || '');
+  const isPyMigration = /supabase\/migrations\/.*\.sql$/.test(file) && policySym === 'invoices_select';
+
+  // --- RAMO PYTHON (SP-4, supabase-py) — additivo, PRECEDENZA su FIX_TABLE --
+  // Deve precedere il lookup FIX_TABLE: RLS003_PERMISSIVE_TRUE e' in FIX_TABLE
+  // mappato alla fix JS fixRlsS4 (cerca "USING (true); -- SEED:S4", marker assente
+  // nella fixture Python). Per la migration Python (policy invoices_select) usiamo
+  // fixRlsSpyS3 -> altrimenti la fix JS fallirebbe il pattern.
+  if (cat === 'rls' && isPyMigration && ruleId === 'RLS003_PERMISSIVE_TRUE') {
+    return { kind: 'rls', apply: fixRlsSpyS3, signature: 'fix-spy-s3-invoices-auth-uid' };
+  }
 
   if (cat === 'rls' && FIX_TABLE[ruleId]) {
     return FIX_TABLE[ruleId];
   }
+
+  if (cat === 'secret' && isPy) {
+    // SPY-S6: secret-in-history Python (app/legacy_credentials.py, assente dal
+    // working tree) -> rotazione dichiarata, mitigated-residual (mai verified).
+    if (/legacy_credentials\.py$/.test(file)) {
+      return { kind: 'secret-history', apply: fixSecretHistorySpyS6, signature: 'rotate-spy-s6-no-rewrite' };
+    }
+    // SPY-S1: secret working-tree Python (app/config.py) -> os.getenv(...).
+    if (/(^|\/)app\/config\.py$/.test(file)) {
+      return { kind: 'secret', apply: fixSecretSpyS1, signature: 'fix-spy-s1-env-config-py' };
+    }
+  }
+  if (cat === 'dead-code' && isPy) {
+    // SPY-S5: dead-code Python (vulture {file,line,symbol}) -> rimozione sicura
+    // del simbolo via helper riusabile. La signature include il simbolo cosi'
+    // ogni simbolo morto distinto ha una patch MATERIALMENTE distinta.
+    const sym = (finding.location && finding.location.symbol) || '?';
+    return { kind: 'dead-code', apply: fixDeadcodeSymbol, signature: `fix-spy-s5-remove-symbol:${sym}` };
+  }
+
+  // --- RAMO JS/TS (invariato) ----------------------------------------------
   if (cat === 'secret') {
     // secret-in-history (S2): path src/legacy/credentials.ts (non esiste piu' nel
     // working tree) -> rotazione simulata, mitigated-residual.
@@ -183,7 +366,10 @@ export function deterministicFixProvider() {
         id: `${finding.fingerprint.slice(0, 8)}-a${attempt}`,
         kind: known.kind,
         signature: known.signature,
-        apply: (workspaceDir) => known.apply(workspaceDir),
+        // Passiamo il finding all'apply: i fix Python data-driven (es.
+        // fixDeadcodeSymbol) ne ricavano file/symbol. I fix JS lo ignorano
+        // (firma backward-compatible: secondo arg opzionale).
+        apply: (workspaceDir) => known.apply(workspaceDir, finding),
       };
     },
   };
