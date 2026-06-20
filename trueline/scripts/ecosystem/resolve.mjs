@@ -51,24 +51,40 @@ function strongSignal(projectDir, entry) {
 //  (1) i manifest con detect.files_any NON vuoto il cui SEGNALE FORTE è presente
 //      (file dichiarato O dir-marker, vedi strongSignal) = SEGNALE FORTE; tra più
 //      match forti vince il più SPECIFICO (più files_any combacianti). Pari merito
-//      tra manifest distinti = AMBIGUITÀ -> esito {ambiguous} (il chiamante fa
-//      proponi+conferma, regola dura SKILL.md §1) — MAI un verde silenzioso.
+//      sul MASSIMO numero di hit files_any -> TIE-BREAK per LINGUA (SP-3 T2.1):
+//      due manifest con lo STESSO backend (es. supabase-jsts e supabase-py
+//      condividono files_any:["supabase/config.toml"]) differiscono solo per la
+//      LINGUA. Si conta allora il numero di match detect.lang_any presenti nel
+//      projectDir: vince chi ha più match (il backend È deciso, la lingua lo
+//      disambigua — es. package.json -> JS/TS, requirements.txt -> Python). Se
+//      pareggiano ANCHE sulla lingua (entrambe presenti, o entrambe assenti) =
+//      AMBIGUITÀ -> esito {ambiguous} (il chiamante fa proponi+conferma, regola
+//      dura SKILL.md §1) — MAI un verde silenzioso.
 //  (2) fallback: i manifest lang_any-only (detect senza files_any) il cui lang_any
 //      combacia; stessa gestione dell'ambiguità.
 //  Repo che non combacia in nessuna passata -> null (non supportato, onesto).
 export function classify(projectDir, ecosystems = loadEcosystems()) {
   // Passata 1 — segnale forte (files_any non vuoto + segnale presente: file o dir-marker).
+  // Si registra anche langHits (match di lang_any nel projectDir) per il tie-break.
   const strong = [];
   for (const m of ecosystems) {
     const d = m.detect || {};
     const filesAny = d.files_any || [];
     if (!filesAny.length) continue;
     const hits = filesAny.filter((f) => strongSignal(projectDir, f)).length;
-    if (hits > 0) strong.push({ id: m.id, hits });
+    if (hits > 0) {
+      const langHits = (d.lang_any || []).filter((f) => existsSync(join(projectDir, f))).length;
+      strong.push({ id: m.id, hits, langHits });
+    }
   }
   if (strong.length) {
     const max = Math.max(...strong.map((s) => s.hits));
-    const top = strong.filter((s) => s.hits === max);
+    let top = strong.filter((s) => s.hits === max);
+    if (top.length === 1) return top[0].id;
+    // Tie-break per LINGUA (SP-3 T2.1): stesso backend, lingue diverse. Vince chi ha
+    // più match lang_any; se pareggiano anche sulla lingua -> ambiguità onesta.
+    const maxLang = Math.max(...top.map((s) => s.langHits));
+    top = top.filter((s) => s.langHits === maxLang);
     if (top.length === 1) return top[0].id;
     return { ambiguous: true, candidates: top.map((s) => s.id) }; // proponi+conferma
   }

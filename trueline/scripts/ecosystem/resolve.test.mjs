@@ -21,8 +21,14 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 const d = mkdtempSync(join(tmpdir(), 'eco-'));
+// SP-3 T2.1 — un repo Supabase REALE ha un marker di lingua: aggiungiamo package.json
+// (vero progetto JS+Supabase). supabase-jsts e supabase-py PAREGGIANO sul segnale forte
+// `supabase/config.toml` (entrambi hits=1); il tie-break per LINGUA conta lang_any:
+// supabase-jsts (package.json) vince su supabase-py (lang Python assente). Il caso
+// "config.toml SENZA alcuna lingua -> ambiguous" è coperto dal nuovo Caso G esplicito.
 mkdirSync(join(d, 'supabase'), { recursive: true }); writeFileSync(join(d, 'supabase', 'config.toml'), '');
-check('classify(supabase repo) = supabase-jsts', classify(d) === 'supabase-jsts');
+writeFileSync(join(d, 'package.json'), '{}');
+check('classify(supabase repo JS: config.toml + package.json) = supabase-jsts', classify(d) === 'supabase-jsts');
 const empty = mkdtempSync(join(tmpdir(), 'eco-empty-'));
 check('classify(repo vuoto) = null (non supportato, onesto)', classify(empty) === null);
 
@@ -83,13 +89,18 @@ check(
   classify(pyReq) === 'postgres-py',
 );
 
-// Caso C (anti-regressione): repo con supabase/config.toml -> resta supabase-jsts
-// (segnale forte, passata 1 — non interferisce con postgres-py).
+// Caso C (anti-regressione): repo Supabase JS REALE (supabase/config.toml + package.json)
+// -> resta supabase-jsts. Passata 1: supabase-jsts e supabase-py pareggiano sul segnale
+// forte config.toml (hits=1 entrambi); il tie-break per LINGUA conta lang_any e
+// supabase-jsts (package.json) vince su supabase-py (lang Python assente). Aggiungiamo
+// package.json perché un repo Supabase reale ha SEMPRE un marker di lingua; il caso
+// "config.toml senza lingua -> ambiguous" è coperto dal nuovo Caso G esplicito.
 const sbAntiReg = mkdtempSync(join(tmpdir(), 'eco-sbanti-'));
 mkdirSync(join(sbAntiReg, 'supabase'), { recursive: true });
 writeFileSync(join(sbAntiReg, 'supabase', 'config.toml'), '');
+writeFileSync(join(sbAntiReg, 'package.json'), '{}');
 check(
-  'classify(supabase/config.toml) = supabase-jsts (anti-regressione con postgres-py caricato)',
+  'classify(supabase/config.toml + package.json) = supabase-jsts (tie-break per lingua, postgres-py + supabase-py caricati)',
   classify(sbAntiReg) === 'supabase-jsts',
 );
 
@@ -121,6 +132,64 @@ const emptyPy = mkdtempSync(join(tmpdir(), 'eco-emptpy-'));
 check(
   'classify(repo vuoto, con postgres-py caricato) = null',
   classify(emptyPy) === null,
+);
+
+// ── SP-3 T2.1 — tie-break per LINGUA su backend Supabase (supabase-jsts ↔ supabase-py) ──
+// supabase-jsts e supabase-py condividono files_any:["supabase/config.toml"]: su un repo
+// Supabase pareggiano sul segnale forte (hits=1 entrambi). Il tie-break conta i match
+// lang_any nel projectDir per disambiguare il BACKEND per LINGUA.
+
+// Caso Sp-Py: supabase/config.toml + requirements.txt (NO package.json) -> supabase-py.
+// Passata 1: config.toml -> sj e sp hits=1 (pari merito). Tie-break lang: sp lang=1
+// (requirements.txt), sj lang=0 (package.json assente) -> vince supabase-py.
+const sbPy = mkdtempSync(join(tmpdir(), 'eco-sbpy-'));
+mkdirSync(join(sbPy, 'supabase'), { recursive: true });
+writeFileSync(join(sbPy, 'supabase', 'config.toml'), '');
+writeFileSync(join(sbPy, 'requirements.txt'), 'supabase==2.4.0\n');
+check(
+  'classify(supabase/config.toml + requirements.txt, NO package.json) = supabase-py (tie-break per lingua)',
+  classify(sbPy) === 'supabase-py',
+);
+
+// Caso Sp-Py-pyproject: variante con pyproject.toml al posto di requirements.txt -> supabase-py.
+const sbPyPrj = mkdtempSync(join(tmpdir(), 'eco-sbpyprj-'));
+mkdirSync(join(sbPyPrj, 'supabase'), { recursive: true });
+writeFileSync(join(sbPyPrj, 'supabase', 'config.toml'), '');
+writeFileSync(join(sbPyPrj, 'pyproject.toml'), '[tool.poetry]\nname = "myapp"\n');
+check(
+  'classify(supabase/config.toml + pyproject.toml, NO package.json) = supabase-py (tie-break per lingua)',
+  classify(sbPyPrj) === 'supabase-py',
+);
+
+// Caso Sp-Ambig: supabase/config.toml + package.json + requirements.txt -> {ambiguous}.
+// Passata 1: sj e sp hits=1 (config.toml). Tie-break lang: sj lang=1 (package.json),
+// sp lang=1 (requirements.txt) -> pareggiano ANCHE sulla lingua -> ambiguous (onesto).
+const sbAmbig = mkdtempSync(join(tmpdir(), 'eco-sbambig-'));
+mkdirSync(join(sbAmbig, 'supabase'), { recursive: true });
+writeFileSync(join(sbAmbig, 'supabase', 'config.toml'), '');
+writeFileSync(join(sbAmbig, 'package.json'), '{}');
+writeFileSync(join(sbAmbig, 'requirements.txt'), 'supabase==2.4.0\n');
+const sbAmbigResult = classify(sbAmbig);
+check(
+  'classify(supabase/config.toml + package.json + requirements.txt) = {ambiguous:true} (JS↔Py pari merito su lingua)',
+  sbAmbigResult && sbAmbigResult.ambiguous === true &&
+  Array.isArray(sbAmbigResult.candidates) &&
+  sbAmbigResult.candidates.includes('supabase-jsts') &&
+  sbAmbigResult.candidates.includes('supabase-py'),
+);
+
+// Caso G: supabase/config.toml SENZA alcun marker di lingua -> {ambiguous} (JS↔Py indecidibile).
+// Passata 1: sj e sp hits=1 (config.toml). Tie-break lang: entrambi lang=0 -> ambiguous.
+const sbNoLang = mkdtempSync(join(tmpdir(), 'eco-sbnolang-'));
+mkdirSync(join(sbNoLang, 'supabase'), { recursive: true });
+writeFileSync(join(sbNoLang, 'supabase', 'config.toml'), '');
+const sbNoLangResult = classify(sbNoLang);
+check(
+  'classify(supabase/config.toml SENZA lingua) = {ambiguous:true} (JS↔Py indecidibile, onesto)',
+  sbNoLangResult && sbNoLangResult.ambiguous === true &&
+  Array.isArray(sbNoLangResult.candidates) &&
+  sbNoLangResult.candidates.includes('supabase-jsts') &&
+  sbNoLangResult.candidates.includes('supabase-py'),
 );
 
 const failed = results.filter((r) => !r.ok);
