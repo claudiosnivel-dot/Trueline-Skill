@@ -26,8 +26,9 @@
 //
 // CLI:
 //   node normalize.mjs <oracle> <native.json> [opzioni]
-//     <oracle>      uno di: gitleaks | rls-check | knip | osv | semgrep
-//                   (alias accettati: osv-scanner, rls_check, deadcode, dead-code)
+//     <oracle>      uno di: gitleaks | rls-check | firestore-rules | knip | osv | semgrep
+//                   (alias accettati: osv-scanner, rls_check, deadcode, dead-code,
+//                    firestore_rules, firestore)
 //     <native.json> file col JSON nativo dell'oracolo ("-" per stdin)
 //   opzioni:
 //     --run-id <id>        run_id fisso (default: "run-fixed" per riproducibilita)
@@ -293,6 +294,77 @@ function normalizeRlsCheck(native, ctx) {
       }),
       remediation_hint: f.heuristic
         ? 'Verifica comportamentale per-tenant demandata a rls-check [DB-test].'
+        : undefined,
+    });
+    out.push(finding);
+  }
+  return out;
+}
+
+// --- firestore-rules (authz) -------------------------------------------------
+// Nativo (da firestore_rules_check.mjs): { oracle:'firestore-rules', tool_version,
+//   coverage, scanned_files, parse_warnings, findings:[{ control_id, severity,
+//   category:'authz', match_path, allow, location{file,start_line,end_line,
+//   statement}, snippet, message, heuristic? }] }. Gemello strutturale di
+//   normalizeRlsCheck: e' un NOSTRO oracolo (OWASP gia 2025 a regime, L-COL-026)
+//   per il Broken Access Control sulle Firestore Security Rules. category=authz
+//   (NON rls: la categoria authz copre le regole di autorizzazione applicative,
+//   distinte dalla Row Level Security del DB). Il fingerprint e' ANCORATO al
+//   match_path (mai alla riga, che firestore.rules sposta): stesso difetto sullo
+//   stesso path -> stesso fingerprint prima e dopo, cosi il loop lo riconosce.
+function normalizeFirestoreRules(native, ctx) {
+  const report = native && Array.isArray(native.findings) ? native : { findings: native };
+  if (!Array.isArray(report.findings)) {
+    throw new Error('firestore-rules: atteso { findings: [...] } oppure un array');
+  }
+  const toolVersion = report.tool_version || ctx.toolVersions['firestore-rules'];
+  // OWASP canonico 2025 dei controlli Firestore (nostro oracolo: gia 2025).
+  const FIRESTORE_OWASP_2025 = 'A01:2025'; // Broken Access Control
+  // CWE-862 Missing Authorization (deliberato, allineato a 07 §4.3): la regola
+  // non impone alcun controllo di autorizzazione efficace. NON CWE-285.
+  const FIRESTORE_CWE = {
+    FIRESTORE001_PUBLIC_ALLOW: 'CWE-862',
+    FIRESTORE002_MISSING_AUTH: 'CWE-862',
+  };
+  const out = [];
+  for (const f of report.findings) {
+    const ruleId = f.control_id || 'FIRESTORE_UNKNOWN';
+    const loc = f.location || {};
+    const normalizedPath = normalizePath(loc.file, { base: ctx.base });
+    // Simbolo = il match_path della regola (l'ancora semantica del difetto).
+    const symbol = f.match_path;
+    // match_signature: controllo + match_path + allow + path (semantica, NON la
+    // riga): due run sulla stessa regola danno lo stesso fingerprint anche se la
+    // riga si sposta.
+    const matchSignature = [ruleId, f.match_path || '', f.allow || '', normalizedPath].join('|');
+    const finding = baseFinding(ctx, {
+      category: 'authz',
+      severity: normSeverity(f.severity, 'HIGH'),
+      location: {
+        file: normalizedPath,
+        start_line: intOr(loc.start_line, 0),
+        end_line: intOr(loc.end_line, loc.start_line, 0),
+        ...(symbol ? { symbol } : {}),
+      },
+      // L'oracolo Firestore non emette segreti: messaggio/snippet e' evidenza sicura.
+      evidence: f.message || f.snippet || `Controllo Firestore ${ruleId} su ${f.match_path}`,
+      source_oracle: {
+        oracle: 'firestore-rules',
+        tool_version: toolVersion,
+        rule_id: ruleId,
+      },
+      // Nostro oracolo: OWASP gia 2025 (owasp_source uguale = nessuna conversione).
+      owasp: FIRESTORE_OWASP_2025,
+      owasp_source: FIRESTORE_OWASP_2025,
+      ...(FIRESTORE_CWE[ruleId] ? { cwe: FIRESTORE_CWE[ruleId] } : {}),
+      fingerprint: fingerprintOf({
+        oracle: 'firestore-rules',
+        ruleId,
+        normalizedPath,
+        matchSignature,
+      }),
+      remediation_hint: f.heuristic
+        ? 'Verifica euristica per-documento demandata a firestore-rules.'
         : undefined,
     });
     out.push(finding);
@@ -719,6 +791,9 @@ const ORACLE_ALIASES = {
   'rls-check': 'rls-check',
   rls_check: 'rls-check',
   rls: 'rls-check',
+  'firestore-rules': 'firestore-rules',
+  firestore_rules: 'firestore-rules',
+  firestore: 'firestore-rules',
   knip: 'knip',
   deadcode: 'knip',
   'dead-code': 'knip',
@@ -738,7 +813,7 @@ export function normalize(oracle, native, opts = {}) {
   const canon = ORACLE_ALIASES[String(oracle).toLowerCase()];
   if (!canon) {
     throw new Error(
-      `oracolo sconosciuto: "${oracle}" (ammessi: gitleaks, rls-check, knip, vulture, osv, semgrep)`,
+      `oracolo sconosciuto: "${oracle}" (ammessi: gitleaks, rls-check, firestore-rules, knip, vulture, osv, semgrep)`,
     );
   }
   const ctx = {
@@ -749,6 +824,7 @@ export function normalize(oracle, native, opts = {}) {
     toolVersions: {
       gitleaks: 'gitleaks',
       'rls-check': 'rls-check@trueline',
+      'firestore-rules': 'firestore-rules-check',
       knip: 'knip',
       vulture: 'vulture',
       osv: 'osv-scanner',
@@ -761,6 +837,8 @@ export function normalize(oracle, native, opts = {}) {
       return normalizeGitleaks(native, ctx);
     case 'rls-check':
       return normalizeRlsCheck(native, ctx);
+    case 'firestore-rules':
+      return normalizeFirestoreRules(native, ctx);
     case 'knip':
       return normalizeKnip(native, ctx);
     case 'vulture':
@@ -818,7 +896,7 @@ function main(argv) {
     process.stderr.write(
       'uso: node normalize.mjs <oracle> <native.json|-> ' +
         '[--run-id <id>] [--created-at <iso>] [--base <dir>] [--scope <s>]\n' +
-        'oracoli: gitleaks | rls-check | knip | osv | semgrep\n',
+        'oracoli: gitleaks | rls-check | firestore-rules | knip | osv | semgrep\n',
     );
     return 2;
   }
