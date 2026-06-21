@@ -132,7 +132,7 @@ Prossimo: **M3 — Characterization & REMEDIATE** (`06`): baseline, partizione g
 Ledger completo in `00-INDEX` §4–§5. Sintesi:
 
 - **Locked**: `L-COL-001 … 030`. Chat E ha coniato **`L-COL-027`** (build via Dynamic Workflows) e **`L-COL-028`** (policy conservativa FP, ex meccanismo di `L-COL-002/006/021`). **SP-0** ha coniato **`L-COL-029`** (engine manifest-driven; il corpo non contiene logica di ecosistema) e **`L-COL-030`** (barra B: floor in detection + coverage dichiarata + verified come fase 2). `validate_blueprint` resta **meccanismo** di `L-COL-019`. `L-COL-026` (OWASP 2025) emendato in `03`/`04`.
-- **Aperte**: `O-COL-010` (piano Max) — confermata operativa (i workflow SP-0…SP-4 sono girati). *(`O-COL-005` ora **chiusa da SP-0**; i lock `L-COL-029`/`L-COL-030` sono **applicati al ledger**.)*
+- **Aperte**: `O-COL-010` (piano Max) — confermata operativa (i workflow SP-0…SP-4 sono girati); **`O-COL-011`** (dispatch dei fix deterministici/loop: manifest-driven o eval-scoped — aperta a SP-4, da decidere a SP-5). *(`O-COL-005` ora **chiusa da SP-0**; i lock `L-COL-029`/`L-COL-030` sono **applicati al ledger**.)*
 - **Chiuse**: `O-COL-001` (nome = **Trueline**); `O-COL-002` (GitHub + manuale); `O-COL-003` (MIT); `O-COL-004` (preflight); `O-COL-005` (2° ecosistema → **sciolta da SP-0**: Trueline multi-ecosistema via contratto-manifest + gate di conformità; `supabase-jsts` **56/56**); `O-COL-006` (retry/scarto; numero **pinnato a M5**, `10` §6 → `thresholds.md`); `O-COL-007` (DAST → v2); `O-COL-008` (chiusa da `L-COL-024`); `O-COL-009` (nessuna telemetria); **`O-COL-010`** (Workflow Max **confermato disponibile**: i workflow M-1…M5 + l'audit `m5-completeness-audit` di questa sessione sono girati).
 
 ## 4. Da congelare

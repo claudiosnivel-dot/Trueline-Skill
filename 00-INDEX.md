@@ -114,6 +114,7 @@ Stesso metodo degli altri progetti:
 | ID | Domanda | Stato / Default | Impatto |
 |---|---|---|---|
 | **O-COL-010** | Piano richiesto per i Dynamic Workflows. | **Aperta.** Girano su Claude Code Max. Default: assunti disponibili per l'implementazione; fallback al loop sequenziale manuale guidato dai 3 prompt (`12`) se non disponibili. | → `DYNAMIC-WORKFLOWS` §9. |
+| **O-COL-011** | **Dispatch dei fix deterministici / del loop: manifest-driven o eval-scoped?** Il fix-provider deterministico (`fix_provider.mjs`) e il dispatch oracolo del loop (`loop.mjs` — dead-code knip/vulture, secret working-tree/history) sono **keyed su path/estensione** del fixture e vivono nei file engine **spediti**, non guidati dal manifest (`L-COL-029`) né isolati in `eval/`. Additivo e load-bearing finora (JS BIT-invariante), ma ogni promozione verified aggiunge un ramo keyed. | **Aperta (SP-4, 21 giu 2026).** Default: continuare additivo finché regge; decidere **a SP-5** se rifattorizzare a dispatch manifest-driven o spostare i fixer deterministici in `eval/`. Non blocca, non tocca decisioni v1 (gemella della collocazione del fix-provider annotata nel plan SP-4). | → `05`, `L-COL-029`, plan SP-4. |
 
 > **Chiuse:**
 > - **`O-COL-001`** (nome + brand check) — **Chiusa (Chat E) → Trueline.** Brand check: npm `trueline` libero; handle `github.com/trueline` occupato da account non-dev → repo sotto namespace utente; nessuna collisione di dominio funzionale (a differenza di "trueforge", scartato). Il tag `COL` resta. → `09`.
