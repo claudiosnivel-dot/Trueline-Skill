@@ -52,6 +52,8 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { resolveRlsMigrationsDir } from '../loop/rls_scan.mjs';
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RLS_CHECK = resolve(__dirname, '..', 'oracles', 'rls_check.mjs');
 
@@ -128,8 +130,11 @@ function psqlAvailable(psqlCmd) {
 // -----------------------------------------------------------------------------
 // Static rls_check (path degradato)
 // -----------------------------------------------------------------------------
-function staticRls(projectDir) {
-  const migrations = resolve(projectDir, 'supabase', 'migrations');
+function staticRls(projectDir, opts = {}) {
+  // MANIFEST-DRIVEN (O-COL-011): chiede al resolver la migration-dir. Default
+  // BIT-invariante 'supabase/migrations' per il layout Supabase; 'migrations/'
+  // per postgres-py.
+  const migrations = resolveRlsMigrationsDir(projectDir, { manifest: opts.manifest });
   if (!existsSync(migrations)) {
     return { ok: false, findings: [], detail: `migrations assenti: ${migrations}` };
   }
@@ -196,7 +201,7 @@ export function characterizeRls(projectDir, opts = {}) {
   // 1) Nessun comando psql risolvibile (ne psqlCmd, ne TRUELINE_TEST_PSQL, ne
   //    dbUrl) -> DEGRADA allo static checker e DICHIARA il confine.
   if (!psqlCmd) {
-    const st = staticRls(projectDir);
+    const st = staticRls(projectDir, opts);
     if (!st.ok) {
       return {
         assertions: [], runtime: false, degraded: true, error: true,
@@ -212,7 +217,7 @@ export function characterizeRls(projectDir, opts = {}) {
 
   // 2) Comando psql risolto ma NON funzionante ('SELECT 1' != 0) -> DEGRADA.
   if (!psqlAvailable(psqlCmd)) {
-    const st = staticRls(projectDir);
+    const st = staticRls(projectDir, opts);
     if (!st.ok) {
       return {
         assertions: [], runtime: false, degraded: true, error: true,
@@ -229,9 +234,9 @@ export function characterizeRls(projectDir, opts = {}) {
   // 3) Path RUNTIME: schema effimero -> apply -> seed -> query come tenant A ->
   //    snapshot -> DROP. Se QUALSIASI passo fallisce, DEGRADA (mai falso verde).
   try {
-    const snapshot = runtimeSnapshot(projectDir, psqlCmd);
+    const snapshot = runtimeSnapshot(projectDir, psqlCmd, opts);
     if (!snapshot.ok) {
-      const st = staticRls(projectDir);
+      const st = staticRls(projectDir, opts);
       return degradedAssertions(
         st.ok ? st : { findings: [] },
         `RLS runtime fallita (${snapshot.detail}); static checker used`,
@@ -245,7 +250,7 @@ export function characterizeRls(projectDir, opts = {}) {
       tables: snapshot.assertions.map((a) => a.target),
     };
   } catch (e) {
-    const st = staticRls(projectDir);
+    const st = staticRls(projectDir, opts);
     return degradedAssertions(
       st.ok ? st : { findings: [] },
       `RLS runtime eccezione (${e.message}); static checker used`,
@@ -266,8 +271,11 @@ export function characterizePostFix(projectDir, opts = {}) {
 // runtimeSnapshot — flusso completo dello schema effimero.
 // Ritorna { ok, assertions, detail }. Difensivo: DROP SCHEMA in un finally.
 // -----------------------------------------------------------------------------
-function runtimeSnapshot(projectDir, psqlCmd) {
-  const migDir = resolve(projectDir, 'supabase', 'migrations');
+function runtimeSnapshot(projectDir, psqlCmd, opts = {}) {
+  // MANIFEST-DRIVEN (O-COL-011): la migration-dir e' risolta dal resolver, non
+  // cablata. Default BIT-invariante 'supabase/migrations'; 'migrations/' per
+  // postgres-py.
+  const migDir = resolveRlsMigrationsDir(projectDir, { manifest: opts.manifest });
   if (!existsSync(migDir)) {
     return { ok: false, detail: `migrations assenti: ${migDir}` };
   }
@@ -413,10 +421,18 @@ function runtimeSnapshot(projectDir, psqlCmd) {
 
       // Interroga COME tenant A in UNA transazione (RLS applicato): conta le
       // righe visibili e se ne vede di altri tenant.
+      // ADDITIVE (O-COL-011 / L-COL-029): imposta sia request.jwt.claims
+      // (idioma Supabase auth.uid()) sia app.current_tenant (idioma Postgres
+      // non-Supabase con current_setting()). Il secondo set_config e' no-op per
+      // le policy Supabase (non usano app.current_tenant) -> BIT-INVARIANTE.
+      // Senza app.current_tenant la query su 'notes' (postgres-py) lancia
+      // "unrecognized configuration parameter" -> status 3 -> degrada tutta la
+      // caratterizzazione a static, rendendo il gate unreachable (FIX ROUND 1).
       const res = q(
         `BEGIN; `
         + `SET LOCAL ROLE authenticated; `
         + `SELECT set_config('request.jwt.claims', json_build_object('sub','${TENANT_A}')::text, true); `
+        + `SELECT set_config('app.current_tenant', '${TENANT_A}', true); `
         + `SELECT count(*)::text || '|' || `
         + `coalesce(bool_or(${disc} <> '${TENANT_A}'::uuid)::text, 'false') `
         + `FROM ${S}.${table}; `

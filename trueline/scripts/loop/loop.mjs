@@ -34,6 +34,7 @@ import { validateMany } from '../findings/validate_finding.mjs';
 import { LOOP_BUDGET } from '../checkpoint/thresholds.mjs';
 import { loadCharacterization, characterizationInvariance } from '../checkpoint/checkpoint.mjs';
 import { commitOnBranch, revertToRef, headSha } from '../git/layered_git.mjs';
+import { resolveRlsMigrationsDir } from './rls_scan.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ORACLES = resolve(__dirname, '..', 'oracles');
@@ -79,7 +80,12 @@ function rerunOracleFor(finding, dir, runOpts) {
       break;
     case 'rls':
       oracle = 'rls-check'; scope = 'static-ddl';
-      res = run(RLS_CHECK, [resolve(dir, 'supabase', 'migrations')]);
+      // MANIFEST-DRIVEN (O-COL-011): la migration-dir non e' piu' cablata. Si
+      // chiede al resolver, che usa opts.manifest.oracles.rls.scan se presente
+      // (passato in runOpts.manifest) o la probe-list di default. Per il layout
+      // Supabase il default risolve a 'supabase/migrations' (BIT-invariante);
+      // per postgres-py risolve a 'migrations/'.
+      res = run(RLS_CHECK, [resolveRlsMigrationsDir(dir, { manifest: runOpts && runOpts.manifest })]);
       break;
     case 'dead-code':
       // ECOSYSTEM-AWARE (additivo): dead-code Python -> vulture; JS/TS -> knip

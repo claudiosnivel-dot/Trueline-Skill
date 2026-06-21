@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// fixture_check.mjs — GATE di T1.2 (SP-2): self-check FALSIFICABILE della fixture
-// vulnerabile `postgres-py` (FastAPI + Postgres non-Supabase). Il "verde" e' un
+// fixture_check.mjs — GATE di T1.1 (SP-6: estende T1.2/SP-2 a VERIFY-capable):
+// self-check FALSIFICABILE della fixture vulnerabile `postgres-py` (FastAPI +
+// psycopg su Postgres NON-Supabase, idioma RLS current_setting). Il "verde" e' un
 // FATTO di oracoli REALI (gitleaks/osv/rls-check) + ispezione testuale dei marker
 // bonus, MAI un parere dell'LLM (L-COL-002). Scritto TEST-FIRST: prima
 // dell'esistenza della fixture questo script FALLISCE (exit 1).
@@ -17,6 +18,19 @@
 //   6) la fixture e' gitignorata dal repo esterno (git check-ignore la copre): il
 //      repo esterno NON la traccia.
 //
+// AGGIUNTE SP-6 (T1.1, parita verified con supabase-py):
+//   7) REGISTRY: ogni difetto del registry.json porta un expected_fix_state nel
+//      set atteso del tier verified, e la mappa id->stato combacia ESATTAMENTE:
+//      PY-S1->verified, PY-S2->detection-only, PY-S3->verified,
+//      PY-S4->detection-only, PY-S5->verified, PY-S6->mitigated-residual;
+//      verified_set del registry === ["secret","rls","dead-code"].
+//   8) PY-S6 (secret-in-history): run_gitleaks <fixture> HISTORY TROVA il secret
+//      in app/legacy_credentials.py, mentre run_gitleaks <fixture> WORKING-TREE NON
+//      lo trova (file rimosso dal working tree, vivo solo in history -> il suo stato
+//      atteso e' mitigated-residual, mai verified).
+//   9) pytest GUARD: la suite di caratterizzazione (tests/test_characterization.py)
+//      passa (rete di sicurezza per la fix di T2.1, valori env NON-segreti).
+//
 // L'osv richiede /c/Users/claud/go/bin sul PATH; gitleaks idem. Questo script
 // arricchisce il PATH per gli spawn (mirror dei wrapper). NON tocca il git esterno
 // se non in SOLA LETTURA (rev-parse/status/check-ignore).
@@ -32,6 +46,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // eval/ecosystems/postgres-py -> root e' 3 livelli sopra.
 const ROOT = resolve(__dirname, '..', '..', '..');
 const FIXTURE = resolve(__dirname, 'reference-app');
+const REGISTRY = resolve(__dirname, 'registry.json');
 const RUN_GITLEAKS = resolve(ROOT, 'trueline', 'scripts', 'oracles', 'run_gitleaks.mjs');
 const RUN_OSV = resolve(ROOT, 'trueline', 'scripts', 'oracles', 'run_osv.mjs');
 const RLS_CHECK = resolve(ROOT, 'trueline', 'scripts', 'oracles', 'rls_check.mjs');
@@ -58,8 +73,9 @@ function gitRead(cwd, args) {
 }
 
 console.log('============================================================');
-console.log(' GATE T1.2 — fixture vulnerabile postgres-py (FATTI di oracoli reali)');
+console.log(' GATE T1.1 (SP-6) — fixture VERIFY-capable postgres-py (FATTI di oracoli reali)');
 console.log(`   fixture : ${FIXTURE}`);
+console.log('   verified_set atteso: [secret, rls, dead-code] (parita supabase-py)');
 console.log('============================================================');
 console.log('');
 
@@ -183,10 +199,110 @@ const tracked = gitRead(ROOT, ['ls-files', 'eval/ecosystems/postgres-py/referenc
 assert('nessun file della fixture e tracciato dal repo esterno', tracked.stdout === '',
   tracked.stdout === '' ? 'nessun file tracciato' : `${tracked.stdout.split('\n').length} file tracciati (vietato!)`);
 
+// --- 7) REGISTRY: ogni difetto ha expected_fix_state nel set atteso (SP-6) -----
+console.log('');
+console.log('7) REGISTRY — expected_fix_state coerente col tier VERIFIED (parita supabase-py):');
+const ALLOWED_STATES = new Set(['verified', 'detection-only', 'mitigated-residual']);
+// Mappa ATTESA id->stato (il contratto del tier verified_set = [secret,rls,dead-code]).
+const EXPECTED = {
+  'PY-S1': 'verified',           // secret working-tree
+  'PY-S2': 'detection-only',     // dependency-vuln (fuori dal verified_set)
+  'PY-S3': 'verified',           // rls RLS003
+  'PY-S4': 'detection-only',     // injection bonus (fuori dal verified_set)
+  'PY-S5': 'verified',           // dead-code
+  'PY-S6': 'mitigated-residual', // secret-in-history (mai verified, L-COL-006/024)
+};
+let registry = null;
+try { registry = JSON.parse(readSafe(REGISTRY)); } catch { /* gestito sotto */ }
+assert('registry.json esiste ed e un JSON valido', registry && Array.isArray(registry.defects),
+  registry && Array.isArray(registry.defects) ? `${registry.defects.length} difetti` : 'assente/non-parsabile');
+const defects = (registry && Array.isArray(registry.defects)) ? registry.defects : [];
+// verified_set del registry === ["secret","rls","dead-code"] (ordine-insensitive).
+const vset = Array.isArray(registry && registry.verified_set) ? [...registry.verified_set].sort() : null;
+const VSET_EXPECTED = ['dead-code', 'rls', 'secret'];
+assert('verified_set del registry === [secret, rls, dead-code]',
+  vset !== null && JSON.stringify(vset) === JSON.stringify(VSET_EXPECTED),
+  vset ? `verified_set=[${vset.join(', ')}]` : 'verified_set assente');
+// (a) OGNI difetto porta un expected_fix_state nel set ammesso.
+const badState = defects.filter((d) => !ALLOWED_STATES.has(d.expected_fix_state));
+assert('ogni difetto del registry ha expected_fix_state nel set {verified, detection-only, mitigated-residual}',
+  defects.length > 0 && badState.length === 0,
+  badState.length ? `stati invalidi: ${badState.map((d) => `${d.id}=${d.expected_fix_state}`).join(', ')}` : 'tutti validi');
+// (b) la mappa id->stato combacia ESATTAMENTE con il contratto atteso (falsificabile).
+const byId = Object.fromEntries(defects.map((d) => [d.id, d.expected_fix_state]));
+const mismatches = Object.entries(EXPECTED).filter(([id, st]) => byId[id] !== st);
+assert('mappa id->expected_fix_state === contratto verified (PY-S1/3/5 verified; S2/S4 detection-only; S6 mitigated-residual)',
+  Object.keys(EXPECTED).every((id) => id in byId) && mismatches.length === 0,
+  mismatches.length ? `divergenze: ${mismatches.map(([id, st]) => `${id} atteso=${st} trovato=${byId[id] || 'ASSENTE'}`).join('; ')}`
+    : 'tutti combaciano');
+// (c) coerenza categoria<->verified_set: i difetti la cui categoria e' nel verified_set
+//     DEVONO essere verified; i difetti secret-in-history (scan_scope=history) sono
+//     l'eccezione esplicita (mitigated-residual, mai verified).
+const vsetCats = new Set(registry && Array.isArray(registry.verified_set) ? registry.verified_set : []);
+const inconsistencies = defects.filter((d) => {
+  const inVset = vsetCats.has(d.category);
+  if (d.scan_scope === 'history') return d.expected_fix_state !== 'mitigated-residual';
+  if (inVset) return d.expected_fix_state !== 'verified';
+  return d.expected_fix_state === 'verified'; // fuori dal verified_set non puo' essere verified
+});
+assert('coerenza categoria<->verified_set: in-set=verified, history=mitigated-residual, fuori-set!=verified',
+  inconsistencies.length === 0,
+  inconsistencies.length ? `incoerenti: ${inconsistencies.map((d) => `${d.id}(${d.category}/${d.scan_scope}=${d.expected_fix_state})`).join(', ')}` : 'coerenti');
+// (d) PY-S2 (dependency-vuln) ancora = package@version (regola seed-match osv).
+const s2 = defects.find((d) => d.id === 'PY-S2');
+const s2sym = s2 && s2.anchor && s2.anchor.symbol;
+assert('PY-S2 ancora dependency-vuln = package@version (es. pyyaml@5.3.1, seed-match)',
+  typeof s2sym === 'string' && /^[a-z0-9._-]+@[0-9][\w.+-]*$/i.test(s2sym),
+  s2sym || 'symbol assente');
+
+// --- 8) PY-S6: secret in HISTORY ma NON nel WORKING-TREE (mitigated-residual) ---
+console.log('');
+console.log('8) PY-S6 — gitleaks: secret in HISTORY (app/legacy_credentials.py) ma NON nel working-tree:');
+const S6_FILE_RE = /(^|\/)app\/legacy_credentials\.py$/;
+// HISTORY: deve trovare il secret PY-S6 in app/legacy_credentials.py.
+const glHist = nodeRun(RUN_GITLEAKS, [FIXTURE, 'history']);
+let glHistFindings = [];
+try { glHistFindings = JSON.parse(glHist.stdout); } catch { /* gestito sotto */ }
+assert('run_gitleaks <fixture> history esce 0 ed emette un array JSON',
+  glHist.status === 0 && Array.isArray(glHistFindings),
+  `exit=${glHist.status} findings=${Array.isArray(glHistFindings) ? glHistFindings.length : 'N/A'}`);
+const s6Hist = Array.isArray(glHistFindings)
+  ? glHistFindings.filter((f) => S6_FILE_RE.test(fileOfGl(f)))
+  : [];
+assert('PY-S6: gitleaks HISTORY trova >=1 secret in app/legacy_credentials.py',
+  s6Hist.length >= 1,
+  s6Hist.length ? `rule=${s6Hist[0].RuleID || s6Hist[0].ruleID || '?'}` : 'nessun finding su legacy_credentials.py in history');
+// WORKING-TREE: NON deve trovare il secret PY-S6 (file rimosso dal disco).
+// Riusa lo scan working-tree gia eseguito al check 1 (glFindings).
+const s6Wt = Array.isArray(glFindings)
+  ? glFindings.filter((f) => S6_FILE_RE.test(fileOfGl(f)))
+  : [];
+assert('PY-S6 contrasto: gitleaks WORKING-TREE NON trova il secret in legacy_credentials.py (solo in history)',
+  s6Wt.length === 0,
+  s6Wt.length ? `${s6Wt.length} finding nel working-tree (il file NON e stato rimosso!)` : 'assente nel working-tree (corretto)');
+// Il file della fixture e' davvero assente dal working tree (controllo diretto).
+assert('app/legacy_credentials.py ASSENTE dal working tree (vive solo in history)',
+  !existsSync(join(FIXTURE, 'app', 'legacy_credentials.py')),
+  existsSync(join(FIXTURE, 'app', 'legacy_credentials.py')) ? 'PRESENTE (working-tree non pulito!)' : 'assente');
+
+// --- 9) suite pytest minima della fixture passa (GUARD comportamentale) --------
+console.log('');
+console.log('9) pytest — la suite di caratterizzazione (GUARD) della fixture passa:');
+const pytest = spawnSync('python', ['-m', 'pytest', '-q'], {
+  cwd: FIXTURE, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
+});
+const pyOut = `${pytest.stdout || ''}${pytest.stderr || ''}`;
+assert('python -m pytest nella fixture esce 0 (suite di caratterizzazione verde)',
+  pytest.status === 0,
+  pytest.error ? `python non eseguibile: ${pytest.error.message}` : `exit=${pytest.status} — ${pyOut.trim().split('\n').slice(-1)[0] || '(no output)'}`);
+assert('la suite contiene il GUARD di caratterizzazione (tests/test_characterization.py)',
+  existsSync(join(FIXTURE, 'tests', 'test_characterization.py')),
+  existsSync(join(FIXTURE, 'tests', 'test_characterization.py')) ? 'presente' : 'assente');
+
 // --- Esito --------------------------------------------------------------------
 const allOk = checks.every((c) => c.ok);
 console.log('');
 console.log('------------------------------------------------------------');
-console.log(`=== GATE T1.2 RESULT: ${allOk ? 'PASS' : 'FAIL'} === (${checks.filter((c) => c.ok).length}/${checks.length} check)`);
+console.log(`=== GATE T1.1 (SP-6) RESULT: ${allOk ? 'PASS' : 'FAIL'} === (${checks.filter((c) => c.ok).length}/${checks.length} check)`);
 console.log('------------------------------------------------------------');
 process.exit(allOk ? 0 : 1);

@@ -27,10 +27,25 @@ import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 
 import { removePySymbol } from './py_deadcode_edit.mjs';
+import { resolveRlsMigrationsDir, resolveRlsMigrationFile } from './rls_scan.mjs';
 
+// Path RELATIVO STORICO della migration primaria (layout Supabase). Conservato
+// come fallback BIT-INVARIANTE: i fix RLS lo usano quando il resolver
+// manifest-driven non trova alcuna migration-dir (es. dir senza migration).
 const MIGRATION_REL = 'supabase/migrations/0001_init.sql';
 const CONFIG_REL = 'src/lib/config.ts';
 const DEAD_REL = 'src/legacy/unused.ts';
+
+// MANIFEST-DRIVEN (O-COL-011): localizza la migration .sql primaria da fixare
+// nella copia `dir`, SENZA cablare la migration-dir ne' il nome-file. Usa la
+// probe-list di default del resolver ('supabase/migrations' PRIMA -> BIT-invariante
+// per le fixture Supabase; 'migrations/' per postgres-py). Se il resolver non
+// trova alcun .sql, FALLBACK al path storico (BIT-invariante): cosi' i chiamanti
+// che prima cablavano sempre MIGRATION_REL hanno lo stesso path su quel layout.
+function migrationFileFor(dir, opts = {}) {
+  const found = resolveRlsMigrationFile(dir, { manifest: opts.manifest });
+  return found || resolve(dir, MIGRATION_REL);
+}
 
 // --- Path Python della fixture supabase-py (SP-4) ----------------------------
 // Le migration vivono nello stesso layout Supabase (supabase/migrations) sia per
@@ -48,16 +63,22 @@ const PY_CONFIG_REL = 'app/config.py';
 // Sostituisce in modo idempotente la prima occorrenza di `needle` (regex) con
 // `replacement` nel file `rel` della copia temp. Ritorna {ok, detail}.
 function patchFile(dir, rel, needle, replacement, label) {
-  const p = resolve(dir, rel);
-  if (!existsSync(p)) return { ok: false, detail: `file assente: ${rel}` };
+  return patchAbsFile(resolve(dir, rel), needle, replacement, label, rel);
+}
+
+// Variante che opera su un path GIA' ASSOLUTO (per i fix RLS manifest-driven:
+// la migration-dir e' risolta dal resolver, non cablata). `labelPath` e' solo
+// per i messaggi.
+function patchAbsFile(p, needle, replacement, label, labelPath) {
+  if (!existsSync(p)) return { ok: false, detail: `file assente: ${labelPath || p}` };
   const before = readFileSync(p, 'utf8');
   if (!needle.test(before)) {
-    return { ok: false, detail: `pattern non trovato per ${label} in ${rel}` };
+    return { ok: false, detail: `pattern non trovato per ${label} in ${labelPath || p}` };
   }
   const after = before.replace(needle, replacement);
   if (after === before) return { ok: false, detail: `nessuna modifica applicata (${label})` };
   writeFileSync(p, after, 'utf8');
-  return { ok: true, detail: `${label}: patch applicata su ${rel}` };
+  return { ok: true, detail: `${label}: patch applicata su ${labelPath || p}` };
 }
 
 // S1 — secret working-tree: rimuove il literal hardcoded, legge da process.env.
@@ -73,7 +94,7 @@ function fixSecretS1(dir) {
 
 // S3 — RLS assente su public.audit_logs: aggiunge ENABLE RLS + policy isolata.
 function fixRlsS3(dir) {
-  const p = resolve(dir, MIGRATION_REL);
+  const p = migrationFileFor(dir);
   if (!existsSync(p)) return { ok: false, detail: `migration assente` };
   const sql = readFileSync(p, 'utf8');
   if (/ALTER TABLE public\.audit_logs ENABLE ROW LEVEL SECURITY/i.test(sql)) {
@@ -92,22 +113,24 @@ function fixRlsS3(dir) {
 }
 
 // S4 — policy USING(true): sostituisce con un predicato reale (auth.uid()).
+// MANIFEST-DRIVEN: la migration-dir e' risolta dal resolver (BIT-invariante
+// 'supabase/migrations' per la fixture JS).
 function fixRlsS4(dir) {
-  return patchFile(
-    dir, MIGRATION_REL,
+  return patchAbsFile(
+    migrationFileFor(dir),
     /USING \(true\);\s*-- SEED:S4/,
     'USING (owner_id = auth.uid());  -- FIX:S4',
-    'S4 rls',
+    'S4 rls', MIGRATION_REL,
   );
 }
 
 // S5 — policy senza isolamento per tenant: aggiunge il vincolo auth.uid()/tenant_id.
 function fixRlsS5(dir) {
-  return patchFile(
-    dir, MIGRATION_REL,
+  return patchAbsFile(
+    migrationFileFor(dir),
     /USING \(status <> 'draft'\);/,
     "USING (status <> 'draft' AND tenant_id = (auth.jwt() ->> 'tenant_id')::uuid);  -- FIX:S5",
-    'S5 rls',
+    'S5 rls', MIGRATION_REL,
   );
 }
 
@@ -145,12 +168,20 @@ function fixSecretHistoryS2() {
 // (vedi selectKnownFix): i fix JS e Python coesistono senza interferire.
 // =============================================================================
 
-// SPY-S1 — secret working-tree (Python): sostituisce le credenziali hardcoded in
-// app/config.py con os.getenv(...). Cosi' gitleaks working-tree torna PULITO su
-// app/config.py (sparisce il literal JWT della service_role key + la DSN con
-// password) -> verified. La suite di caratterizzazione resta verde: con le env
-// impostate get_database_url()/get_service_role_key() tornano il valore d'ambiente
-// (ramo "env presente" invariato), e PORT continua a leggere os.environ.
+// PY-S1 (condiviso supabase-py SPY-S1 / postgres-py PY-S1) — secret working-tree
+// Python: sostituisce le credenziali hardcoded in app/config.py con os.getenv(...).
+// Cosi' gitleaks working-tree torna PULITO su app/config.py (sparisce il literal
+// della chiave + la DSN con password) -> verified. La suite di caratterizzazione
+// resta verde: con le env impostate get_database_url()/get_service_role_key()/
+// get_api_key() tornano il valore d'ambiente (ramo "env presente" invariato), e
+// PORT continua a leggere os.environ.
+//
+// MULTI-ECOSYSTEM (additivo, BIT-INVARIANTE): la stessa funzione bonifica sia il
+// literal Supabase (SUPABASE_SERVICE_ROLE_KEY = "eyJ...") sia quello postgres-py
+// (API_KEY = "sk_live_..."). Le DUE replace dei nomi-chiave sono mutuamente
+// esclusive per fixture: supabase-py NON ha la riga API_KEY (la sua replace e' un
+// NO-OP la' -> path byte-identico), postgres-py NON ha SUPABASE_SERVICE_ROLE_KEY
+// (idem). DATABASE_URL e' condiviso. Cosi' il ramo Supabase resta invariato.
 function fixSecretSpyS1(dir) {
   const p = resolve(dir, PY_CONFIG_REL);
   if (!existsSync(p)) return { ok: false, detail: `file assente: ${PY_CONFIG_REL}` };
@@ -162,10 +193,16 @@ function fixSecretSpyS1(dir) {
     /^DATABASE_URL\s*=\s*["'][^"'\n]*["']\s*$/m,
     'DATABASE_URL = os.getenv("DATABASE_URL", "")',
   );
-  // SUPABASE_SERVICE_ROLE_KEY = "eyJ...": -> os.getenv.
+  // SUPABASE_SERVICE_ROLE_KEY = "eyJ...": -> os.getenv (fixture supabase-py).
   src = src.replace(
     /^SUPABASE_SERVICE_ROLE_KEY\s*=\s*["'][^"'\n]*["']\s*$/m,
     'SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")',
+  );
+  // API_KEY = "sk_live_...": -> os.getenv (fixture postgres-py). Riga ASSENTE in
+  // supabase-py -> replace NO-OP la' (BIT-invariante).
+  src = src.replace(
+    /^API_KEY\s*=\s*["'][^"'\n]*["']\s*$/m,
+    'API_KEY = os.getenv("API_KEY", "")',
   );
 
   if (src === before) {
@@ -182,7 +219,10 @@ function fixSecretSpyS1(dir) {
 // adattata alla colonna di tenancy della fixture Python (tenant_id = auth.uid(),
 // coerente col contrasto public.notes che NON e' flaggato).
 function fixRlsSpyS3(dir) {
-  const p = resolve(dir, MIGRATION_REL);
+  // MANIFEST-DRIVEN (O-COL-011): la migration-dir e' risolta dal resolver. Per
+  // supabase-py il layout e' 'supabase/migrations' (BIT-invariante); il resolver
+  // generalizza a 'migrations/' per il layout postgres-py senza cablarlo.
+  const p = migrationFileFor(dir);
   if (!existsSync(p)) return { ok: false, detail: `migration assente: ${MIGRATION_REL}` };
   const sql = readFileSync(p, 'utf8');
   // Sostituisci la USING (true) della policy invoices_select con un predicato
@@ -205,6 +245,42 @@ function fixRlsSpyS3(dir) {
   if (after === sql) return { ok: false, detail: 'SPY-S3: nessuna modifica applicata' };
   writeFileSync(p, after, 'utf8');
   return { ok: true, detail: 'SPY-S3: invoices_select USING(true) -> USING(tenant_id = auth.uid())' };
+}
+
+// PY-S3 — RLS USING (true) su public.invoices (fixture postgres-py, NON-Supabase):
+// trasferisce il fix RLS (USING(true) -> predicato reale) sulla migration della
+// fixture Postgres. A DIFFERENZA di SPY-S3 (Supabase, auth.uid()), l'idioma di
+// isolamento e' current_setting('app.current_tenant')::uuid — lo STESSO del
+// contrasto PULITO della fixture (policy notes_select), che rls_check non flagga.
+// Cosi' la policy riscritta usa l'idioma corretto per un Postgres non-Supabase
+// (auth.uid() non esiste fuori da Supabase): rls_check torna PULITO (0 finding)
+// -> verified, e la migration NON contiene auth.uid() (idioma coerente).
+//
+// MANIFEST-DRIVEN (O-COL-011 / L-COL-029): la migration-dir e' risolta dal resolver
+// (migrationFileFor), che per il layout postgres-py risolve 'migrations/' (la dir
+// 'supabase/migrations' non esiste nella copia -> il resolver cade su 'migrations').
+function fixRlsPgS3(dir) {
+  const p = migrationFileFor(dir);
+  if (!existsSync(p)) return { ok: false, detail: `migration assente: ${MIGRATION_REL}` };
+  const sql = readFileSync(p, 'utf8');
+  // Match mirato alla policy invoices_select su public.invoices (NON tocca il
+  // contrasto notes_select, gia' isolato via current_setting). Come in SPY-S3, il
+  // match cattura il terminatore `;` ($2) e lo RI-EMETTE PRIMA del commento di
+  // fix: senza, il commento commenterebbe il `;` lasciando lo statement aperto e
+  // agganciando il successivo (create table notes) -> migration ROTTA a runtime.
+  const re = /(create\s+policy\s+invoices_select\s+on\s+public\.invoices\s+for\s+select\s+using\s*\()\s*true\s*(\)\s*;?)/i;
+  if (!re.test(sql)) {
+    return { ok: false, detail: 'PY-S3: policy invoices_select USING (true) non trovata in 0001_init.sql' };
+  }
+  // Idioma Postgres non-Supabase: current_setting('app.current_tenant')::uuid,
+  // identico al contrasto pulito notes_select (isolamento reale per tenant).
+  const after = sql.replace(
+    re,
+    "$1tenant_id = current_setting('app.current_tenant')::uuid$2  -- FIX:PY-S3",
+  );
+  if (after === sql) return { ok: false, detail: 'PY-S3: nessuna modifica applicata' };
+  writeFileSync(p, after, 'utf8');
+  return { ok: true, detail: "PY-S3: invoices_select USING(true) -> USING(tenant_id = current_setting('app.current_tenant')::uuid)" };
 }
 
 // SPY-S5 — dead-code Python: rimuove in modo SICURO la definizione del simbolo
@@ -298,14 +374,33 @@ function selectKnownFix(finding) {
   // diversi (-- SEED:S4 su documents). Distinguiamo per la presenza della policy
   // invoices_select nella signature/symbol del finding (location.symbol = policy).
   const policySym = String((finding.location && finding.location.symbol) || '');
-  const isPyMigration = /supabase\/migrations\/.*\.sql$/.test(file) && policySym === 'invoices_select';
+  // MANIFEST-DRIVEN layout (O-COL-011): la migration Python puo' vivere sotto
+  // 'supabase/migrations/' (supabase-py) O 'migrations/' (postgres-py). La
+  // discriminante FORTE resta la policy 'invoices_select' (assente nella fixture
+  // JS, che usa marker -- SEED:S4 su documents). Il match sul path tollera
+  // entrambi i layout senza cablare il prefisso supabase/.
+  const isMigrationSql = /(?:^|\/)(?:supabase\/)?migrations\/.*\.sql$/.test(file);
+  const isPyMigration = isMigrationSql && policySym === 'invoices_select';
+  // ECOSYSTEM dell'idioma RLS (SP-6): il layout del path discrimina l'idioma di
+  // isolamento corretto. supabase-py vive in 'supabase/migrations/' -> auth.uid()
+  // (idioma Supabase). postgres-py vive in 'migrations/' (SENZA prefisso supabase/)
+  // -> current_setting('app.current_tenant') (idioma Postgres non-Supabase, lo
+  // stesso del contrasto pulito notes_select). NB: la fixture JS NON ha la policy
+  // invoices_select, quindi isPyMigration la esclude a monte (resta su FIX_TABLE).
+  const isSupabaseMigration = /(?:^|\/)supabase\/migrations\/.*\.sql$/.test(file);
+  const isPgMigration = isMigrationSql && !isSupabaseMigration;
 
-  // --- RAMO PYTHON (SP-4, supabase-py) — additivo, PRECEDENZA su FIX_TABLE --
+  // --- RAMO PYTHON RLS — additivo, PRECEDENZA su FIX_TABLE -------------------
   // Deve precedere il lookup FIX_TABLE: RLS003_PERMISSIVE_TRUE e' in FIX_TABLE
   // mappato alla fix JS fixRlsS4 (cerca "USING (true); -- SEED:S4", marker assente
   // nella fixture Python). Per la migration Python (policy invoices_select) usiamo
-  // fixRlsSpyS3 -> altrimenti la fix JS fallirebbe il pattern.
+  // la fix per-ecosistema -> altrimenti la fix JS fallirebbe il pattern.
   if (cat === 'rls' && isPyMigration && ruleId === 'RLS003_PERMISSIVE_TRUE') {
+    // postgres-py (layout 'migrations/', non-Supabase): idioma current_setting.
+    if (isPgMigration) {
+      return { kind: 'rls', apply: fixRlsPgS3, signature: 'fix-py-s3-invoices-current-setting' };
+    }
+    // supabase-py (layout 'supabase/migrations/'): idioma auth.uid() (invariato).
     return { kind: 'rls', apply: fixRlsSpyS3, signature: 'fix-spy-s3-invoices-auth-uid' };
   }
 

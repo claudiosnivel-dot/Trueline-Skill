@@ -151,11 +151,23 @@ const PACK_FIXTURES = {
     fixtureApp: resolve(ROOT, 'eval', 'ecosystems', 'postgres-jsts', 'reference-app'),
     registry: resolve(ROOT, 'eval', 'ecosystems', 'postgres-jsts', 'registry.json'),
   },
-  // postgres-py: corpo DETECTION-PARAMETRICO (SP-2). Floor=[secret,dependency-vuln,
-  // rls]: NESSUN binding del floor è semgrep -> needsDocker=false (conformance SENZA
-  // docker). Il ramo rls è legato a rls_check (oracolo statico custom, vedi RLS_CHECK).
+  // SP-6: Python+Postgres (non-Supabase), tier VERIFIED. verified_set=[secret,rls,
+  // dead-code] (parità con supabase-py/supabase-jsts; prima promozione verified di un
+  // ecosistema NON-Supabase). Corpo VERIFIED-PARITY (kind:'verified'): RIUSA i criteri
+  // 1/2/5/6 del corpo detection-parametrico (PARAMETRICI sul manifest, L-COL-029) e
+  // sostituisce il criterio 3 con la VERIFIED-PARITY parametrica (NON forkato: lo
+  // STESSO runVerifiedBody di supabase-py). Il loop/fix-provider deterministico (T2.1)
+  // porta a `verified` ogni categoria del verified_set: oracolo LEGATO riesieguito
+  // PULITO su copia isolata + invarianza characterization; per rls ANCHE invarianza
+  // RLS a RUNTIME via characterizeRls (T1.2) sul Postgres condiviso, con la
+  // migration-dir risolta MANIFEST-DRIVEN (oracles.rls.scan -> 'migrations/' per
+  // postgres-py, O-COL-011/L-COL-029). PY-S6 secret-in-history -> mitigated-residual
+  // (mai verified); dependency-vuln/injection restano detection-only, mai
+  // auto-promosse. Floor=[secret,dependency-vuln,rls]: nessun binding del floor è
+  // semgrep -> il criterio 2 NON richiede docker; il criterio 3 RLS-runtime usa docker
+  // (DB-test) ma DEGRADA dichiarato se assente (mai un falso verde).
   'postgres-py': {
-    kind: 'detection',
+    kind: 'verified',
     fixtureApp: resolve(ROOT, 'eval', 'ecosystems', 'postgres-py', 'reference-app'),
     registry: resolve(ROOT, 'eval', 'ecosystems', 'postgres-py', 'registry.json'),
   },
