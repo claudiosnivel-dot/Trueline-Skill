@@ -192,6 +192,81 @@ check(
   sbNoLangResult.candidates.includes('supabase-py'),
 );
 
+// ── T2.3 — firebase-jsts: classificazione + accessor ──────────────────────────
+
+// Caso Fb-1 (positivo): firebase.json + package.json -> firebase-jsts.
+// Passata 1: files_any["firebase.json","firestore.rules"] -> hits=1 (firebase.json).
+// firebase-jsts vince su tutti i lang_any-only (postgres-jsts, postgres-py) perché
+// ha un segnale forte (files_any); supabase-jsts/supabase-py non combaciamo
+// (nessun supabase/ o config.toml).
+const fbJson = mkdtempSync(join(tmpdir(), 'eco-fbjson-'));
+writeFileSync(join(fbJson, 'firebase.json'), '{}');
+writeFileSync(join(fbJson, 'package.json'), '{}');
+check(
+  'classify(firebase.json + package.json) = firebase-jsts (positivo 1)',
+  classify(fbJson) === 'firebase-jsts',
+);
+
+// Caso Fb-2 (positivo): firestore.rules + package.json -> firebase-jsts.
+// Passata 1: hits=1 (firestore.rules). Stesso ragionamento di Fb-1.
+const fbRules = mkdtempSync(join(tmpdir(), 'eco-fbrules-'));
+writeFileSync(join(fbRules, 'firestore.rules'), 'rules_version = \'2\';\n');
+writeFileSync(join(fbRules, 'package.json'), '{}');
+check(
+  'classify(firestore.rules + package.json) = firebase-jsts (positivo 2)',
+  classify(fbRules) === 'firebase-jsts',
+);
+
+// Caso Fb-3 (negativo/precisione): package.json + src/ ma NESSUN firebase.json /
+// firestore.rules -> NON firebase-jsts. Passata 1: firebase-jsts hits=0 (nessun
+// segnale forte); postgres-jsts non ha files_any -> passata 2 lang_any-only ->
+// postgres-jsts (fallback corretto).
+const fbNeg = mkdtempSync(join(tmpdir(), 'eco-fbneg-'));
+writeFileSync(join(fbNeg, 'package.json'), '{}');
+mkdirSync(join(fbNeg, 'src'), { recursive: true });
+writeFileSync(join(fbNeg, 'src', 'index.ts'), '');
+check(
+  'classify(package.json + src/, NESSUN firebase.json/firestore.rules) != firebase-jsts (precisione)',
+  classify(fbNeg) !== 'firebase-jsts',
+);
+check(
+  'classify(package.json + src/, NESSUN firebase.json/firestore.rules) = postgres-jsts (fallback corretto)',
+  classify(fbNeg) === 'postgres-jsts',
+);
+
+// Anti-regressione con firebase-jsts caricato: le classificazioni precedenti devono
+// restare stabili.
+const fbAntiSb = mkdtempSync(join(tmpdir(), 'eco-fbantisb-'));
+mkdirSync(join(fbAntiSb, 'supabase'), { recursive: true });
+writeFileSync(join(fbAntiSb, 'supabase', 'config.toml'), '');
+writeFileSync(join(fbAntiSb, 'package.json'), '{}');
+check(
+  'anti-regressione (con firebase-jsts): supabase/config.toml + package.json = supabase-jsts',
+  classify(fbAntiSb) === 'supabase-jsts',
+);
+
+const fbAntiPg = mkdtempSync(join(tmpdir(), 'eco-fbantipg-'));
+writeFileSync(join(fbAntiPg, 'package.json'), '{}');
+check(
+  'anti-regressione (con firebase-jsts): solo package.json = postgres-jsts',
+  classify(fbAntiPg) === 'postgres-jsts',
+);
+
+const fbAntiEmpty = mkdtempSync(join(tmpdir(), 'eco-fbantiempty-'));
+check(
+  'anti-regressione (con firebase-jsts): repo vuoto = null',
+  classify(fbAntiEmpty) === null,
+);
+
+// Accessor firebase-jsts: authzSurfaceCategory, oraclesFor, floorOf.
+const mFb = all.find((x) => x.id === 'firebase-jsts');
+check('firebase-jsts caricato nel manifest set', mFb !== undefined);
+check('authzSurfaceCategory(firebase-jsts) = authz', authzSurfaceCategory(mFb) === 'authz');
+check('oraclesFor(firebase-jsts).authz.tool = firestore_rules_check', oraclesFor(mFb).authz && oraclesFor(mFb).authz.tool === 'firestore_rules_check');
+check('floorOf(firebase-jsts) include secret', floorOf(mFb).includes('secret'));
+check('floorOf(firebase-jsts) include dependency-vuln', floorOf(mFb).includes('dependency-vuln'));
+check('floorOf(firebase-jsts) include authz', floorOf(mFb).includes('authz'));
+
 const failed = results.filter((r) => !r.ok);
 console.log(`\n${failed.length === 0 ? 'OK' : 'FAIL'} — ${results.length - failed.length}/${results.length}`);
 process.exit(failed.length === 0 ? 0 : 1);

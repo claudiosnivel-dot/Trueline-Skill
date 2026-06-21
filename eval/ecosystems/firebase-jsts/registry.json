@@ -1,0 +1,81 @@
+{
+  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack firebase-jsts (SP-5, T1.2). Stesso schema di eval/ecosystems/postgres-py/registry.json. Per ogni difetto seminato FB-S1..FB-S5: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso (tier detection, fase 1 L-COL-030: tutti detection-only, verified_set vuoto), ancora ispezionabile (file+marker | lockfile+symbol | file+marker+match_path), scope di scansione dell'oracolo, e note. Il floor [secret, dependency-vuln, authz] e' obbligatorio; FB-S4 (injection) e FB-S5 (dead-code) sono bonus non-floor. authz-surface qui = Firestore security rules (Firebase): `allow ... if true` = autorizzazione ASSENTE (CWE-862 Missing Authorization, threat model 07 §4.3), divergenza intenzionale dal CWE-285 della famiglia RLS.",
+  "schema_version": "1.0",
+  "milestone": "SP-5",
+  "ecosystem": "firebase-jsts",
+  "reference_app": "./reference-app",
+  "defects": [
+    {
+      "id": "FB-S1",
+      "category": "secret",
+      "source_oracle": "gitleaks",
+      "owasp": "A07:2025",
+      "cwe": "CWE-798",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "serviceAccount.json",
+        "marker": "SEED:FB-S1"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Credenziali hardcoded committate: serviceAccount.json contiene una private_key di service account (type=service_account, private_key BEGIN/END, client_email, private_key_id), PRESENTE nel working tree e rilevata dall'oracolo legato (gitleaks working-tree). Il marker SEED:FB-S1 vive nel file che LEGGE il service account (src/firebase.ts) perche' un file JSON non puo' ospitare commenti. Tier detection (fase 1): trovata, non auto-fixata. Contrasto PULITO: src/firebase.ts initFromEnv legge le credenziali da process.env.FIREBASE_PRIVATE_KEY / FIREBASE_CLIENT_EMAIL (env-read, gitleaks-clean). Scelta di design deliberata: NESSUN apiKey web in stile AIza... e' presente nella fixture (sarebbe un falso positivo gitleaks, dato che le web apiKey Firebase sono pubbliche per natura)."
+    },
+    {
+      "id": "FB-S2",
+      "category": "dependency-vuln",
+      "source_oracle": "osv",
+      "owasp": "A06:2025",
+      "cwe": "CWE-20",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "package-lock.json",
+        "lockfile": "package-lock.json",
+        "symbol": "lodash@4.17.20"
+      },
+      "scan_scope": "lockfile",
+      "notes": "Dipendenza vulnerabile reale pinnata: lodash@4.17.20 (osv flagga GHSA-35jh-r3h4-6jhm / CVE-2021-23337, Command Injection via template). Rilevata dall'oracolo legato (osv) sul lockfile package-lock.json (lockfileVersion 3, osv-scanner-parsabile). Le altre dipendenze (firebase, firebase-admin) restano pulite. owasp/cwe come riportati da osv = confronto SOFT/esterno (CWE-20 e' il cwe nativo emesso da osv-scanner per questo advisory; A06:2025 = Vulnerable and Outdated Components). Tier detection: trovata, prioritizzata, non auto-bumpata nel set verificato (fase 1, verified_set vuoto)."
+    },
+    {
+      "id": "FB-S3",
+      "category": "authz",
+      "source_oracle": "firestore-rules",
+      "owasp": "A01:2025",
+      "cwe": "CWE-862",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "firestore.rules",
+        "marker": "SEED:FB-S3",
+        "match_path": "/databases/{database}/documents/public_notes/{noteId}"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Regola `allow read, write: if true;` sulla collection public_notes: autorizzazione ASSENTE (chiunque legge/scrive). L'oracolo firestore-rules emette FIRESTORE001_PUBLIC_ALLOW; normalize -> CWE-862/A01:2025. CWE-862 (Missing Authorization) e' deliberato: `if true` = authz ASSENTE, allineato al threat model 07 §4.3, divergenza intenzionale dal CWE-285 della famiglia RLS (dove l'authz e' PRESENTE ma permissiva). La collection di contrasto private_docs usa regole owner-scoped (request.auth.uid == resource.data.ownerId per read/update/delete; create vincolata a ownerId == auth.uid): isolamento reale, NON deve produrre finding (precisione). L'oracolo firestore-rules emette ESATTAMENTE 1 finding sull'intero file."
+    },
+    {
+      "id": "FB-S4",
+      "category": "injection",
+      "source_oracle": "semgrep",
+      "owasp": "A05:2025",
+      "cwe": "CWE-78",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "src/routes/search.ts",
+        "marker": "SEED:FB-S4"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Bonus, NON-floor. OS command injection: searchUnsafe costruisce un comando di shell concatenando req.query.q non sanificato e lo passa a child_process.exec (shell-string invece di array di argomenti). Categoria injection (OWASP A05:2025, CWE-78 OS Command Injection). Il contrasto searchSafe valida l'input e usa execFile('grep', [..., q, ...]) (nessuna shell) e NON deve produrre finding (precisione)."
+    },
+    {
+      "id": "FB-S5",
+      "category": "dead-code",
+      "source_oracle": "knip",
+      "owasp": "-",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "src/dead.ts",
+        "symbol": "unusedHelper",
+        "marker": "SEED:FB-S5"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Bonus, NON-floor. Funzione unusedHelper esportata da src/dead.ts e MAI referenziata nel progetto: knip la segnala come unused export. Il contrasto usedHelper e' importato e chiamato da src/index.ts allo startup (riferimento reale) e NON viene segnalato da knip (precisione). Categoria dead-code; owasp/cwe non applicabili (omessi/'-')."
+    }
+  ]
+}

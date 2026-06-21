@@ -110,6 +110,12 @@ const RUN_SEMGREP = resolve(ROOT, 'trueline', 'scripts', 'oracles', 'run_semgrep
 // ruolo authz-surface su Postgres non-Supabase via current_setting). Statico
 // (analizza la DDL delle migration, NON esegue il DB): nessuna dipendenza docker.
 const RLS_CHECK = resolve(ROOT, 'trueline', 'scripts', 'oracles', 'rls_check.mjs');
+// firebase-jsts (SP-5): oracolo authz custom sulle Firestore Security Rules, legato
+// dal pack firebase-jsts per la categoria authz (tool=firestore_rules_check, kind:
+// 'firestore-rules'). Statico (analizza il testo dei file .rules, NON esegue il
+// Firestore Rules engine): nessuna dipendenza docker -> il floor [secret,
+// dependency-vuln,authz] non richiede docker per il criterio 2.
+const FIRESTORE_RULES_CHECK = resolve(ROOT,'trueline','scripts','oracles','firestore_rules_check.mjs');
 // dead-code (verified_set, SP-4): wrapper unico (knip JS / vulture Python), il tool
 // effettivo è scelto dal binding manifest (oracles['dead-code'].tool).
 const RUN_DEADCODE = resolve(ROOT, 'trueline', 'scripts', 'oracles', 'run_deadcode.mjs');
@@ -169,6 +175,12 @@ const PACK_FIXTURES = {
     fixtureApp: resolve(ROOT, 'eval', 'ecosystems', 'supabase-py', 'reference-app'),
     registry: resolve(ROOT, 'eval', 'ecosystems', 'supabase-py', 'registry.json'),
   },
+  // SP-5: JS/TS+Firebase, corpo DETECTION-PARAMETRICO (kind:'detection',
+  // verified_set=[]). Floor=[secret,dependency-vuln,authz]: il binding authz è
+  // legato a firestore_rules_check (oracolo statico custom, vedi
+  // FIRESTORE_RULES_CHECK), NON a semgrep -> needsDocker=false (conformance del
+  // criterio 2 SENZA docker, come postgres-py).
+  'firebase-jsts': { kind: 'detection', fixtureApp: resolve(ROOT,'eval','ecosystems','firebase-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','firebase-jsts','registry.json') },
 };
 
 // ---------------------------------------------------------------------------
@@ -212,6 +224,12 @@ function canonOracle(name) {
   const n = String(name || '').toLowerCase();
   if (n === 'osv' || n === 'osv-scanner') return 'osv-scanner';
   if (n === 'rls' || n === 'rls-check' || n === 'rls_check') return 'rls-check';
+  // authz/Firestore (firebase-jsts, SP-5): il registry ancora source_oracle a
+  // 'firestore-rules' e normalize emette source_oracle.oracle='firestore-rules'.
+  // Mappiamo ESPLICITAMENTE anche il nome-tool del binding (firestore_rules_check)
+  // alla stessa forma canonica, così il match del criterio 2 è robusto a entrambe
+  // le forme (coerente con gli arm osv/rls qui sopra).
+  if (n === 'firestore-rules' || n === 'firestore_rules' || n === 'firestore_rules_check') return 'firestore-rules';
   return n; // gitleaks | semgrep | knip
 }
 
@@ -910,6 +928,30 @@ function detectCategory({ cat, tool, binding, copyDir, copyBase, manifest }) {
     try { native = JSON.parse(r.stdout); } catch { /* gestito */ }
     if (!native) return { error: `rls_check: output non parsabile (exit=${r.status})` };
     return { findings: safeNormalize('rls', native, opts) };
+  }
+  if (tool === 'firestore_rules_check') {
+    // authz (firebase-jsts) -> firestore_rules_check <copy>/<scanDir>. La dir di
+    // scansione viene dal binding (manifest.oracles.authz.scan), default ["."].
+    // firestore_rules_check è STATICO (analizza il testo dei file .rules, non esegue
+    // il Firestore Rules engine) -> nessuna dipendenza docker nel floor.
+    //
+    // NOTA (oracle name per normalize): safeNormalize è invocato con
+    // 'firestore-rules' — l'ESATTO nome-oracolo che normalize riconosce
+    // (ORACLE_ALIASES) e che produce finding con category='authz' e
+    // source_oracle.oracle='firestore-rules' (vedi normalizeFirestoreRules). NON
+    // 'authz' (che è la CATEGORIA, non un oracolo: normalize lancerebbe e
+    // safeNormalize tornerebbe []). Così il source_oracle del finding combacia col
+    // registry (source_oracle:'firestore-rules', via canonOracle) e il SEED authz è
+    // COLTO dal criterio 2. Come per rls_check, l'output del tool è già
+    // eval/-ancorato (location.file), quindi opts.base resta copyBase.
+    const scanDirs = (binding.scan && binding.scan.length) ? binding.scan : ['.'];
+    const scanned = scanDirs.find((d) => existsSync(join(copyDir, d)));
+    const target = scanned ? join(copyDir, scanned) : copyDir;
+    const r = nodeRun(FIRESTORE_RULES_CHECK, [target]);
+    let native = null;
+    try { native = JSON.parse(r.stdout); } catch { /* gestito */ }
+    if (!native) return { error: `firestore_rules_check: output non parsabile (exit=${r.status})` };
+    return { findings: safeNormalize('firestore-rules', native, opts) };
   }
   return { error: `oracolo non gestito per la categoria ${cat}: ${tool}` };
 }
