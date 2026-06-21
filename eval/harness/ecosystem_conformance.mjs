@@ -147,7 +147,7 @@ const PACK_FIXTURES = {
     gate: M5_GATE,
   },
   'postgres-jsts': {
-    kind: 'detection',
+    kind: 'verified',
     fixtureApp: resolve(ROOT, 'eval', 'ecosystems', 'postgres-jsts', 'reference-app'),
     registry: resolve(ROOT, 'eval', 'ecosystems', 'postgres-jsts', 'registry.json'),
   },
