@@ -1,8 +1,9 @@
 {
-  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack supabase-py (SP-3, T1.2). Stesso schema di eval/ecosystems/postgres-py/registry.json. Per ogni difetto seminato SPY-S1..SPY-S5: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso (tier detection, fase 1 L-COL-030: tutti detection-only, verified_set vuoto), ancora ispezionabile (file+marker | lockfile+symbol | table+policy), scope di scansione dell'oracolo, e note. Il floor [secret, dependency-vuln, rls] e' obbligatorio; SPY-S4 (injection) e SPY-S5 (dead-code) sono bonus non-floor. authz-surface qui = RLS Supabase (auth.uid()).",
+  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack supabase-py (SP-4, T1.1: estende SP-3 a verify-capable). Stesso schema di eval/ecosystems/postgres-py/registry.json. Per ogni difetto seminato SPY-S1..SPY-S6: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso (tier VERIFIED, verified_set = [secret, rls, dead-code], parita con supabase-jsts), ancora ispezionabile (file+marker | lockfile+symbol | table+policy), scope di scansione dell'oracolo, e note. Il floor [secret, dependency-vuln, rls] e' obbligatorio; SPY-S4 (injection) e SPY-S5 (dead-code) sono bonus non-floor. Stati-fix attesi: SPY-S1 (secret working-tree) -> verified; SPY-S3 (rls RLS003) -> verified; SPY-S5 (dead-code) -> verified; SPY-S2 (dependency-vuln) -> detection-only; SPY-S4 (injection bonus) -> detection-only; SPY-S6 (secret-in-history) -> mitigated-residual (la history non e' riscritta: purgarla e' distruttivo/human-gated, mai verified, L-COL-024/L-COL-006). authz-surface qui = RLS Supabase (auth.uid()).",
   "schema_version": "1.0",
-  "milestone": "SP-3",
+  "milestone": "SP-4",
   "ecosystem": "supabase-py",
+  "verified_set": ["secret", "rls", "dead-code"],
   "reference_app": "eval/ecosystems/supabase-py/reference-app",
   "defects": [
     {
@@ -11,13 +12,13 @@
       "source_oracle": "gitleaks",
       "owasp": "A07:2025",
       "cwe": "CWE-798",
-      "expected_fix_state": "detection-only",
+      "expected_fix_state": "verified",
       "anchor": {
         "file": "app/config.py",
         "marker": "SEED:SPY-S1"
       },
       "scan_scope": "working-tree",
-      "notes": "Credenziali hardcoded nel sorgente (DATABASE_URL Postgres/Supabase con password live + una service_role key Supabase JWT-like 'eyJ...' ad alta entropia), PRESENTI nel working tree. Tier detection (fase 1): trovate dall'oracolo legato (gitleaks working-tree), non auto-fixate. Andrebbero lette da os.environ."
+      "notes": "Credenziali hardcoded nel sorgente (DATABASE_URL Postgres/Supabase con password live + una service_role key Supabase JWT-like 'eyJ...' ad alta entropia), PRESENTI nel working tree. Tier VERIFIED (SP-4): la fix sostituisce il letterale col SOLO os.environ; gitleaks working-tree torna pulito su app/config.py -> stato `verified` (oracolo, non parere). La suite di caratterizzazione (tests/test_characterization.py) vincola la fix a preservare il contratto (con env impostata, get_database_url/get_service_role_key tornano il valore d'ambiente, invariante prima/dopo)."
     },
     {
       "id": "SPY-S2",
@@ -32,7 +33,7 @@
         "symbol": "pyyaml@5.3.1"
       },
       "scan_scope": "lockfile",
-      "notes": "Dipendenza vulnerabile reale pinnata: PyYAML==5.3.1 (osv emette il package come pyyaml@5.3.1; flagga GHSA-8q59-q68h-6hv4 / CVE-2020-14343, arbitrary code execution via yaml.load di input non fidato; anche PYSEC-2021-142). Rilevata dall'oracolo legato (osv) sul lockfile. owasp/cwe come riportati da osv = confronto SOFT/esterno (CWE-20 e' il cwe nativo emesso da osv-scanner per questi advisory; A06:2025 = Vulnerable and Outdated Components). Tier detection: trovata, prioritizzata, non auto-bumpata nel set verificato (fase 1, verified_set vuoto)."
+      "notes": "Dipendenza vulnerabile reale pinnata: PyYAML==5.3.1 (osv emette il package come pyyaml@5.3.1; flagga GHSA-8q59-q68h-6hv4 / CVE-2020-14343, arbitrary code execution via yaml.load di input non fidato; anche PYSEC-2021-142). Rilevata dall'oracolo legato (osv) sul lockfile. owasp/cwe come riportati da osv = confronto SOFT/esterno (CWE-20 e' il cwe nativo emesso da osv-scanner per questi advisory; A06:2025 = Vulnerable and Outdated Components). Tier VERIFIED (SP-4): dependency-vuln resta FUORI dal verified_set = [secret, rls, dead-code], quindi detection-only: trovata, prioritizzata, NON auto-bumpata nel set verificato (un bump puo' rompere; resta human-gated, coverage dichiarata, mai falso verde)."
     },
     {
       "id": "SPY-S3",
@@ -40,7 +41,7 @@
       "source_oracle": "rls-check",
       "owasp": "A01:2025",
       "cwe": "CWE-285",
-      "expected_fix_state": "detection-only",
+      "expected_fix_state": "verified",
       "anchor": {
         "file": "supabase/migrations/0001_init.sql",
         "table": "public.invoices",
@@ -68,14 +69,28 @@
       "category": "dead-code",
       "source_oracle": "vulture",
       "owasp": "-",
-      "expected_fix_state": "detection-only",
+      "expected_fix_state": "verified",
       "anchor": {
         "file": "app/dead.py",
         "symbol": "_unused_helper",
         "marker": "SEED:SPY-S5"
       },
       "scan_scope": "working-tree",
-      "notes": "Bonus, NON-floor (gateato da T2.0). Funzione _unused_helper MAI referenziata in app/dead.py: vulture la segnala come unused function. Il contrasto used_helper e' chiamato da app/main.py allo startup (riferimento reale) e NON viene segnalato da vulture (precisione). Categoria dead-code; owasp/cwe non applicabili (omessi/'-')."
+      "notes": "Bonus, NON-floor (gateato da T2.0). Funzione _unused_helper MAI referenziata in app/dead.py: vulture la segnala come unused function. Il contrasto used_helper e' chiamato da app/main.py allo startup (riferimento reale) e NON viene segnalato da vulture (precisione). Categoria dead-code; owasp/cwe non applicabili (omessi/'-'). Tier VERIFIED (SP-4): dead-code e' nel verified_set; rimuovere _unused_helper porta vulture a 0 finding su dead.py -> `verified`, mentre la suite di caratterizzazione resta verde (used_helper() == 7, invariante)."
+    },
+    {
+      "id": "SPY-S6",
+      "category": "secret",
+      "source_oracle": "gitleaks",
+      "owasp": "A07:2025",
+      "cwe": "CWE-798",
+      "expected_fix_state": "mitigated-residual",
+      "anchor": {
+        "file": "app/legacy_credentials.py",
+        "marker": "SEED:SPY-S6"
+      },
+      "scan_scope": "history",
+      "notes": "Secret-in-history (parita con supabase-jsts S2). Una chiave 'sk_live_...' Stripe-like ad alta entropia e' stata committata in app/legacy_credentials.py e RIMOSSA nel commit successivo: vive SOLO nella git history del repo INTERNO della fixture. gitleaks <fixture> history la trova (rule trueline-stripe-like-key); gitleaks <fixture> working-tree NON la trova (file assente su disco). Stato-fix atteso: `mitigated-residual`, MAI `verified`: rimuovere il file dal working tree mitiga ma NON purga la history; la purga (git filter-repo / riscrittura) e' DISTRUTTIVA e human-gated (L-COL-024), il report dichiara il residuo e non promette 'sicuro' (L-COL-006). DIVERSO dal valore di SPY-S1 (vivono in scope distinti: working-tree vs history)."
     }
   ]
 }
