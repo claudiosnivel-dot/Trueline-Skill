@@ -1,8 +1,9 @@
 {
-  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack postgres-jsts (SP-1, T1.2). Stesso schema di eval/harness/expected/registry.json. Per ogni difetto seminato PG-S1..PG-S4: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso (tier detection, fase 1 L-COL-030: tutti detection-only, verified_set vuoto), ancora ispezionabile (file+marker | lockfile+symbol), scope di scansione dell'oracolo, e note. Il floor [secret, dependency-vuln, authz] e' obbligatorio; PG-S4 (injection) e' bonus non-floor. authz-surface qui = route-authz nell'app (non RLS-al-DB).",
+  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack postgres-jsts (SP-7, T1.1: promozione da detection [SP-1] a VERIFY-capable). Stesso schema di eval/ecosystems/postgres-py/registry.json. Per ogni difetto seminato PG-S1..PG-S6: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso (tier VERIFIED, verified_set = [secret, dead-code], parita JS con supabase-jsts), ancora ispezionabile (file+marker | lockfile+symbol | file+symbol), scope di scansione dell'oracolo, e note. Il floor [secret, dependency-vuln, authz] e' obbligatorio; PG-S4 (injection) e PG-S5 (dead-code) sono bonus non-floor; PG-S6 (secret-in-history) e' un seed verify-capability. NB: postgres-jsts NON ha RLS-al-DB (la sua authz-surface e' route-authz via semgrep): rls NON entra nel verified_set, niente DB-test runtime ne' migrations/. Stati-fix attesi: PG-S1 (secret working-tree) -> verified; PG-S5 (dead-code) -> verified; PG-S2 (dependency-vuln) -> detection-only; PG-S3 (route-authz) -> detection-only; PG-S4 (injection bonus) -> detection-only; PG-S6 (secret-in-history) -> mitigated-residual (la history non e' riscritta: purgarla e' distruttiva/human-gated, mai verified, L-COL-024/L-COL-006).",
   "schema_version": "1.0",
-  "milestone": "SP-1",
+  "milestone": "SP-7",
   "ecosystem": "postgres-jsts",
+  "verified_set": ["secret", "dead-code"],
   "reference_app": "eval/ecosystems/postgres-jsts/reference-app",
   "defects": [
     {
@@ -11,13 +12,13 @@
       "source_oracle": "gitleaks",
       "owasp": "A07:2025",
       "cwe": "CWE-798",
-      "expected_fix_state": "detection-only",
+      "expected_fix_state": "verified",
       "anchor": {
         "file": "src/config.ts",
         "marker": "SEED:PG-S1"
       },
       "scan_scope": "working-tree",
-      "notes": "Credenziali hardcoded nel sorgente (connection string Postgres con password + token sk_live), PRESENTI nel working tree. Tier detection (fase 1): trovate dall'oracolo legato (gitleaks working-tree), non auto-fixate. Andrebbero lette da process.env."
+      "notes": "Credenziali hardcoded nel sorgente (connection string Postgres con password live + token sk_live ad alta entropia), PRESENTI nel working tree. Tier VERIFIED (SP-7): la fix sostituisce il literal col SOLO process.env; gitleaks working-tree torna pulito su src/config.ts -> stato `verified` (oracolo, non parere). La suite di caratterizzazione (tests/characterization.test.mjs, node:test) vincola la fix a preservare il contratto (con env impostata, config.databaseUrl/serviceToken tornano il valore d'ambiente, invariante prima/dopo)."
     },
     {
       "id": "PG-S2",
@@ -32,7 +33,7 @@
         "symbol": "minimist@1.2.0"
       },
       "scan_scope": "lockfile",
-      "notes": "Dipendenza vulnerabile reale pinnata: minimist@1.2.0 (osv flagga GHSA-vh95-rmgr-6w4m, Prototype Pollution; anche GHSA-xvch-5gv4-984h). Rilevata dall'oracolo legato (osv) sul lockfile. CWE atteso = CWE-1321 (Prototype Pollution), allineato al CWE nativo emesso da osv-scanner per questo GHSA (registro falsificabile: l'atteso combacia col fatto dell'oracolo). Tier detection: trovata, prioritizzata, non auto-bumpata nel set verificato (fase 1, verified_set vuoto)."
+      "notes": "Dipendenza vulnerabile reale pinnata: minimist@1.2.0 (osv flagga GHSA-vh95-rmgr-6w4m, Prototype Pollution; anche GHSA-xvch-5gv4-984h). Rilevata dall'oracolo legato (osv) sul lockfile. CWE atteso = CWE-1321 (Prototype Pollution), allineato al CWE nativo emesso da osv-scanner per questo GHSA (registro falsificabile: l'atteso combacia col fatto dell'oracolo). Tier VERIFIED (SP-7): dependency-vuln resta FUORI dal verified_set = [secret, dead-code], quindi detection-only: trovata, prioritizzata, NON auto-bumpata nel set verificato (un bump puo' rompere; resta human-gated, coverage dichiarata, mai falso verde)."
     },
     {
       "id": "PG-S3",
@@ -46,7 +47,7 @@
         "marker": "SEED:PG-S3"
       },
       "scan_scope": "working-tree",
-      "notes": "Rotta mutante (router.post) che esegue pool.query('INSERT ...') SENZA alcun controllo di identita/ruolo (route-authz, authz-surface non-Supabase). Gateata da T2.2/T3.1 (dipende dal ruleset del pack). La rotta di contrasto POST /bookings/secure verifica verifyToken PRIMA dell'INSERT e NON deve produrre finding (precisione)."
+      "notes": "Rotta mutante (router.post) che esegue pool.query('INSERT ...') SENZA alcun controllo di identita/ruolo (route-authz, authz-surface non-Supabase: postgres-jsts NON ha RLS-al-DB). La rotta di contrasto POST /bookings/secure verifica verifyToken PRIMA dell'INSERT e NON deve produrre finding (precisione). Tier VERIFIED (SP-7): route-authz resta FUORI dal verified_set (non auto-fixabile in-scope, come injection in v1), quindi detection-only: trovata e prioritizzata, non auto-promossa."
     },
     {
       "id": "PG-S4",
@@ -60,7 +61,35 @@
         "marker": "SEED:PG-S4"
       },
       "scan_scope": "working-tree",
-      "notes": "Bonus, NON-floor. SQL costruito per concatenazione di input utente in pool.query (string-concat invece di parametro posizionale $1). Categoria injection (OWASP A05:2025, CWE-89). Inoltrata dalla GET /bookings/:id verso findBookingByIdUnsafe."
+      "notes": "Bonus, NON-floor. SQL costruito per concatenazione di input utente in pool.query (string-concat invece di parametro posizionale $1), inoltrato dalla GET /bookings/:id verso findBookingByIdUnsafe. Categoria injection (OWASP A05:2025, CWE-89). La controparte sicura listBookingsForTenant usa pool.query('... WHERE tenant_id = $1', [tenantId]) e NON deve produrre finding (precisione). Tier VERIFIED (SP-7): injection resta FUORI dal verified_set, quindi detection-only (come in supabase-jsts/postgres-py): trovata, non auto-fixata in-scope."
+    },
+    {
+      "id": "PG-S5",
+      "category": "dead-code",
+      "source_oracle": "knip",
+      "owasp": "-",
+      "expected_fix_state": "verified",
+      "anchor": {
+        "file": "src/dead.ts",
+        "symbol": "unusedDeadHelper",
+        "marker": "SEED:PG-S5"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Bonus, NON-floor (gateato dal tier verified). Funzione unusedDeadHelper esportata MAI importata da nessun modulo (l'entry e' src/index.ts e non risale fin qui): knip la segnala come unused-export. Il contrasto usedHelper e' importato e chiamato da src/index.ts allo startup (riferimento reale) e NON viene segnalato da knip (precisione: knip.json usa ignoreExportsUsedInFile per non flaggare i tipi usati nel proprio file). Categoria dead-code; owasp/cwe non applicabili (omessi/'-'). Tier VERIFIED (SP-7): dead-code e' nel verified_set; rimuovere unusedDeadHelper porta knip a 0 finding su src/dead.ts -> `verified`, mentre la suite di caratterizzazione resta verde (usedHelper() == 7, invariante)."
+    },
+    {
+      "id": "PG-S6",
+      "category": "secret",
+      "source_oracle": "gitleaks",
+      "owasp": "A07:2025",
+      "cwe": "CWE-798",
+      "expected_fix_state": "mitigated-residual",
+      "anchor": {
+        "file": "src/legacy/credentials.ts",
+        "marker": "SEED:PG-S6"
+      },
+      "scan_scope": "history",
+      "notes": "Secret-in-history (parita con postgres-py PY-S6 / supabase-jsts S2). Una chiave 'sk_live_...' Stripe-like ad alta entropia e' stata committata in src/legacy/credentials.ts e RIMOSSA nel commit successivo: vive SOLO nella git history del repo INTERNO della fixture. gitleaks <fixture> history la trova (rule trueline-stripe-like-key); gitleaks <fixture> working-tree NON la trova (file assente su disco). Stato-fix atteso: `mitigated-residual`, MAI `verified`: rimuovere il file dal working tree mitiga ma NON purga la history; la purga (git filter-repo / riscrittura) e' DISTRUTTIVA e human-gated (L-COL-024), il report dichiara il residuo e non promette 'sicuro' (L-COL-006). DIVERSO dal valore di PG-S1 (vivono in scope distinti: working-tree vs history)."
     }
   ]
 }

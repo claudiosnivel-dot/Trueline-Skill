@@ -27,6 +27,7 @@ import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 
 import { removePySymbol } from './py_deadcode_edit.mjs';
+import { removeTsSymbol } from './ts_deadcode_edit.mjs';
 import { resolveRlsMigrationsDir, resolveRlsMigrationFile } from './rls_scan.mjs';
 
 // Path RELATIVO STORICO della migration primaria (layout Supabase). Conservato
@@ -352,6 +353,100 @@ function fixSecretHistorySpyS6() {
   };
 }
 
+// =============================================================================
+// FIX JS/TS NON-Supabase (SP-7, postgres-jsts) — additive. BINDING dei seed-path
+// di postgres-jsts ai rami JS/TS GIA' ESISTENTI del dispatch (selectKnownFix):
+// PG-S1 secret -> process.env ; PG-S5 dead-code -> rimozione simbolo (knip).
+// PG-S6 secret-in-history riusa SENZA modifiche il ramo legacy/credentials.ts ->
+// fixSecretHistoryS2 (mitigated-residual). Nessun nuovo algoritmo: si lega il
+// path/simbolo del seed alla macchina di fix esistente.
+// =============================================================================
+
+// Path della config TS della fixture postgres-jsts (layout 'src/config.ts', SENZA
+// 'lib/'): distinto dal CONFIG_REL Supabase ('src/lib/config.ts') -> i due rami
+// secret-WT non si sovrappongono (selettore keyed sul path).
+const PG_CONFIG_REL = 'src/config.ts';
+
+// PG-S1 — secret working-tree (postgres-jsts): rimuove i literal hardcoded
+// (const DATABASE_URL = "postgres://...:password@..." e const SERVICE_TOKEN =
+// "sk_live_PGS1...") in src/config.ts e fa leggere la config dal SOLO process.env.
+// Cosi' gitleaks working-tree torna PULITO su src/config.ts -> verified. La suite
+// di caratterizzazione (node:test) resta VERDE: con DATABASE_URL/SERVICE_TOKEN
+// impostate, config.databaseUrl/serviceToken tornano il valore d'ambiente (il ramo
+// "env presente" e' preservato; il fallback hardcoded diventa "").
+//
+// DIVERSO da fixSecretS1 (Supabase, src/lib/config.ts, un solo
+// SUPABASE_SERVICE_ROLE_KEY): qui i literal sono due const SEPARATE e la lettura e'
+// `process.env.X ?? CONST`. Rimuoviamo le due const e degradiamo il fallback a "".
+function fixSecretPgS1(dir) {
+  const p = resolve(dir, PG_CONFIG_REL);
+  if (!existsSync(p)) return { ok: false, detail: `file assente: ${PG_CONFIG_REL}` };
+  let src = readFileSync(p, 'utf8');
+  const before = src;
+
+  // 1) Rimuovi la dichiarazione `const DATABASE_URL = "...";` (puo' essere su piu'
+  //    righe: il literal e' su una riga separata).
+  src = src.replace(/const\s+DATABASE_URL\s*=\s*\n?\s*"[^"]*";\s*\n?/, '');
+  // 2) Rimuovi la dichiarazione `const SERVICE_TOKEN = "...";`.
+  src = src.replace(/const\s+SERVICE_TOKEN\s*=\s*\n?\s*"[^"]*";\s*\n?/, '');
+  // 3) Degrada i fallback hardcoded a "" (env-only): il ramo "env presente" resta
+  //    invariato (con env impostata, l'output e' identico prima/dopo).
+  src = src.replace(/process\.env\.DATABASE_URL\s*\?\?\s*DATABASE_URL/, 'process.env.DATABASE_URL ?? ""');
+  src = src.replace(/process\.env\.SERVICE_TOKEN\s*\?\?\s*SERVICE_TOKEN/, 'process.env.SERVICE_TOKEN ?? ""');
+
+  if (src === before) {
+    return { ok: false, detail: 'PG-S1: literal hardcoded non trovato in src/config.ts (pattern cambiato?)' };
+  }
+  writeFileSync(p, src, 'utf8');
+  return { ok: true, detail: 'PG-S1: literal hardcoded in src/config.ts rimossi (config legge dal solo process.env)' };
+}
+
+// PG-S5 — dead-code TS (postgres-jsts): rimuove in modo SICURO la definizione del
+// simbolo morto segnalato da knip (finding {file, symbol}, ruleId unused-export).
+// Delega all'helper riusabile removeTsSymbol (ts_deadcode_edit.mjs): rimuove SOLO
+// la definizione top-level esportata (non rompe il modulo); se il simbolo non e'
+// un export top-level fallisce ONESTAMENTE (mai una rimozione approssimata). Gate
+// umano: L-COL-021 (in eval auto-approvato dal loop). Dopo, knip NON segnala piu'
+// il simbolo -> verified; il contrasto usedHelper resta intatto (la suite di
+// caratterizzazione resta verde).
+//
+// DIVERSO da fixDeadcodeS8 (m5/supabase-jsts): la' il finding e' un FILE
+// interamente non referenziato (knip unused-file, location.symbol assente) e la
+// fix corretta e' rimuovere il file; qui il finding ha un SIMBOLO (unused-export)
+// dentro un file che contiene anche codice vivo (usedHelper) -> si rimuove il SOLO
+// simbolo. Il selettore discrimina i due casi sulla PRESENZA di location.symbol.
+function fixDeadcodeTsSymbol(dir, finding) {
+  const rel = String((finding && finding.location && finding.location.file) || '')
+    .replace(/\\/g, '/');
+  const symbol = (finding && finding.location && finding.location.symbol) || '';
+  if (!rel || !symbol) {
+    return { ok: false, detail: `PG-S5: finding senza file/symbol (file=${rel || '?'} symbol=${symbol || '?'})` };
+  }
+  const absFile = resolveTsFileInCopy(dir, rel);
+  if (!absFile) {
+    return { ok: false, detail: `PG-S5: file TS non risolto nella copia (${rel})` };
+  }
+  const r = removeTsSymbol(absFile, symbol);
+  if (!r.ok) return { ok: false, detail: `PG-S5: ${r.detail}` };
+  return { ok: true, detail: `PG-S5: ${r.detail}` };
+}
+
+// Risolve il path ASSOLUTO del file .ts/.js nella COPIA `dir` a partire dal path
+// (eventualmente repo-relativo) del finding. Strategia: prende il segmento a
+// partire da "src/" (layout della fixture); fallback al path cosi' com'e' se gia'
+// risolve dentro la copia. NON esce mai dalla copia (nessun ../ verso l'esterno).
+function resolveTsFileInCopy(dir, rel) {
+  const norm = rel.replace(/\\/g, '/');
+  const m = /(?:^|\/)(src\/.+\.(?:ts|tsx|js|jsx|mjs|cjs))$/.exec(norm);
+  if (m) {
+    const cand = resolve(dir, m[1]);
+    if (existsSync(cand)) return cand;
+  }
+  const direct = resolve(dir, norm);
+  if (existsSync(direct)) return direct;
+  return null;
+}
+
 // Mappa controlId(rule_id) -> costruttore di patch.
 const FIX_TABLE = {
   // gitleaks: il rule_id varia per regola; mappiamo per categoria nel selettore.
@@ -427,19 +522,40 @@ function selectKnownFix(finding) {
     return { kind: 'dead-code', apply: fixDeadcodeSymbol, signature: `fix-spy-s5-remove-symbol:${sym}` };
   }
 
-  // --- RAMO JS/TS (invariato) ----------------------------------------------
+  // --- RAMO JS/TS (invariato per m5/supabase-jsts; additivo per postgres-jsts) --
   if (cat === 'secret') {
-    // secret-in-history (S2): path src/legacy/credentials.ts (non esiste piu' nel
-    // working tree) -> rotazione simulata, mitigated-residual.
+    // secret-in-history (S2 / PG-S6): path .../legacy/credentials.ts (non esiste
+    // piu' nel working tree) -> rotazione simulata, mitigated-residual. Il pattern
+    // 'legacy/credentials.ts$' copre SIA supabase-jsts S2 (src/legacy/credentials.ts)
+    // SIA postgres-jsts PG-S6 (src/legacy/credentials.ts): stesso esito, ramo
+    // BIT-invariante riusato senza modifiche (binding per path).
     if (/legacy\/credentials\.ts$/.test(file)) {
       return { kind: 'secret-history', apply: fixSecretHistoryS2, signature: 'rotate-s2-no-rewrite' };
     }
-    // secret working-tree (S1): config.ts -> rimuovi il literal.
+    // secret working-tree postgres-jsts (PG-S1): src/config.ts (SENZA 'lib/') ->
+    // rimuovi i literal hardcoded, leggi dal solo process.env. Precede il ramo
+    // Supabase 'lib/config.ts': i path sono disgiunti (src/config.ts vs
+    // src/lib/config.ts), quindi additivo e non interferente.
+    if (/(^|\/)src\/config\.ts$/.test(file)) {
+      return { kind: 'secret', apply: fixSecretPgS1, signature: 'fix-pg-s1-env-config-ts' };
+    }
+    // secret working-tree Supabase (S1): src/lib/config.ts -> rimuovi il literal.
     if (/lib\/config\.ts$/.test(file)) {
       return { kind: 'secret', apply: fixSecretS1, signature: 'fix-s1-env-config' };
     }
   }
   if (cat === 'dead-code') {
+    // DISCRIMINANTE additivo (BIT-invariante per m5): knip emette due forme di
+    // finding dead-code -> unused-FILE (file interamente non referenziato,
+    // location.symbol ASSENTE: m5/supabase-jsts S8) vs unused-EXPORT/-type/...
+    // (SIMBOLO morto dentro un file con codice vivo, location.symbol PRESENTE:
+    // postgres-jsts PG-S5 unusedDeadHelper). Solo il caso con simbolo passa per la
+    // rimozione-simbolo (removeTsSymbol); il caso file-intero resta su fixDeadcodeS8
+    // (rimozione del file) -> il ramo m5 e' BIT-invariante.
+    const tsSym = (finding.location && finding.location.symbol) || '';
+    if (tsSym) {
+      return { kind: 'dead-code', apply: fixDeadcodeTsSymbol, signature: `fix-pg-s5-remove-ts-symbol:${tsSym}` };
+    }
     return { kind: 'dead-code', apply: fixDeadcodeS8, signature: 'fix-s8-remove-dead-export' };
   }
   return null;
