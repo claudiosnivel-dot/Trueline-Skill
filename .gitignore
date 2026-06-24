@@ -7,3 +7,8 @@ dist/
 
 # SP-1: per-ecosystem fixture apps are gitignored, on-disk inner repos (mirror eval/reference-app/)
 eval/ecosystems/*/reference-app/
+
+# BD-1 (T1.3): le reference-app dei fixture di build-discipline sono inner-repo con
+# node_modules provvigionate offline (knip/typescript copiati dal canonico) -> gitignorate.
+# I seeded-blueprint/ restano TRACKED (sono il materiale di gate del fixture).
+eval/build-discipline/*/reference-app/
