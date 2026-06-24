@@ -74,6 +74,7 @@ rimanda. Carica **solo** la riga della modalita attiva.
 | `references/modes/bootstrap.md` | ● | | |
 | `references/modes/build.md` | | ● | |
 | `references/modes/remediate.md` | | | ● |
+| `references/build-discipline.md` (disciplina di costruzione, `L-COL-031`) | | ● | ● |
 | `references/blueprint/atomic-task-schema.md` | ● | ○ (consuma i criteri) | |
 | `references/blueprint/self-check-checklist.md` | ● | | |
 | `references/blueprint/template/` | ● | | |
