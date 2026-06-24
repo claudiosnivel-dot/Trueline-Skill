@@ -13,9 +13,18 @@
 //
 // Uso:
 //   node run_loop.mjs [--eval] [--mode=build|remediate] [--keep]
-//     --eval    auto-approva il gate umano in modo deterministico (solo-eval).
-//     --mode    modalita per l'asimmetria git/checkpoint (default remediate).
-//     --keep    NON cancella la copia temp (debug). Default: cleanup sempre.
+//                     [--fixture-app=<dir>] [--blueprint=<dir>]
+//     --eval        auto-approva il gate umano in modo deterministico (solo-eval).
+//     --mode        modalita per l'asimmetria git/checkpoint (default remediate).
+//     --keep        NON cancella la copia temp (debug). Default: cleanup sempre.
+//     --fixture-app EVAL-ONLY (BD-1): reference-app SORGENTE da copiare al posto
+//                   della canonica (sourceApp per createVerifyWorkspace). Con
+//                   questo flag, run_loop calcola il TIDY ADVISORY (disciplina
+//                   di costruzione, momento 3) e lo attacca a
+//                   report.build_discipline. SENZA il flag, comportamento
+//                   IDENTICO a oggi (default canonico, nessun build_discipline).
+//     --blueprint   EVAL-ONLY (BD-1): dir del seeded-blueprint del fixture
+//                   (riservato al driver dell'harness; registrato nel report).
 //   Stampa un JSON di esito su stdout. Exit 0 sempre che la sessione giri
 //   (l'esito di merito e' nel JSON; il GATE M1 e' in eval/harness).
 //
@@ -29,6 +38,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { normalize } from '../findings/normalize.mjs';
 import { validateMany } from '../findings/validate_finding.mjs';
 import { createVerifyWorkspace } from './verify_workspace.mjs';
+import { tidyAdvisory } from './build_discipline.mjs';
 import { deterministicFixProvider } from './fix_provider.mjs';
 import { runFindingLoop } from './loop.mjs';
 import { runCheckpoint, loadCharacterization } from '../checkpoint/checkpoint.mjs';
@@ -223,7 +233,21 @@ function main() {
   const modeArg = (argv.find((a) => a.startsWith('--mode=')) || '').split('=')[1];
   const mode = modeArg === 'build' ? 'build' : 'remediate';
 
-  const ws = createVerifyWorkspace({ id: `loop-${RUN_OPTS.runId}` });
+  // BD-1 EVAL-ONLY (ADDITIVO): --fixture-app=<dir> sostituisce la reference-app
+  // sorgente copiata (sourceApp), e abilita il tidy advisory. --blueprint=<dir>
+  // registra la dir del seeded-blueprint del fixture (riservata all'harness).
+  // SENZA questi flag, fixtureApp/blueprintDir restano null e ogni path sotto
+  // resta BIT-INVARIANTE (sourceApp default = canonica, nessun build_discipline).
+  const fixtureAppArg = (argv.find((a) => a.startsWith('--fixture-app=')) || '').split('=').slice(1).join('=');
+  const fixtureApp = fixtureAppArg ? fixtureAppArg : null;
+  const blueprintArg = (argv.find((a) => a.startsWith('--blueprint=')) || '').split('=').slice(1).join('=');
+  const blueprintDir = blueprintArg ? blueprintArg : null;
+
+  // createVerifyWorkspace riceve sourceApp SOLO quando --fixture-app e' passato:
+  // altrimenti l'opzione e' assente -> default canonico (path BIT-invariante).
+  const wsOpts = { id: `loop-${RUN_OPTS.runId}` };
+  if (fixtureApp) wsOpts.sourceApp = fixtureApp;
+  const ws = createVerifyWorkspace(wsOpts);
   const report = {
     mode, evalMode, workspace: ws.dir, fixtureMutated: false, findings: [], checkpoint: null, git: {},
   };
@@ -271,14 +295,28 @@ function main() {
     const manifest = activeId ? loadManifest(activeId) : null;
     report.ecosystem = activeId;
     const all = collectFindings(ws.dir);
-    const inScope = selectInScope(all, manifest);
+
+    // BUILD-DISCIPLINE (BD-1, EVAL-ONLY): col fixture-app la copia E' l'artefatto
+    // POST-COSTRUZIONE da GIUDICARE, non un repo da bonificare. Quindi:
+    //   - NIENTE loop di remediation (inScope vuoto): la disciplina COSTRUISCE e
+    //     poi l'oracolo GIUDICA — non si auto-fixa il difetto di costruzione
+    //     (altrimenti l'orfano nuovo verrebbe rimosso e control1 non lo vedrebbe).
+    //   - BASELINE VUOTA: il checkpoint deve trattare i difetti del fixture come
+    //     NUOVI (introdotti dalla costruzione) -> l'orfano dead-code della fixture
+    //     `orphan-injecting` rende control1 ROSSO (gate §7.3b); la fixture
+    //     `overcomplicated-correct` (zero dead-code/secret) resta VERDE.
+    // SENZA --fixture-app (fixtureApp null) i due valori sono calcolati ESATTAMENTE
+    // come prima (selectInScope + baseline da `all`) -> path BIT-invariante.
+    const inScope = fixtureApp ? [] : selectInScope(all, manifest);
 
     // BASELINE (04 §6): fingerprint di TUTTO cio' che e' pre-esistente PRIMA
     // delle fix. Il checkpoint finale gate-a sui finding NUOVI (delta): il
     // dead-code incidentale di db.ts (residuo S6, fuori dal set seminato M1) e'
     // pre-existing -> NON blocca il controllo 1 (resta segnalato, non cancellato
     // in autonomia, L-COL-021). // TODO M3+: remediation piena del residuo.
-    const baseline = new Set(all.map((f) => f.fingerprint));
+    // Col fixture-app la baseline e' VUOTA (vedi sopra): i difetti del fixture
+    // sono NUOVI per definizione (costruzione da giudicare).
+    const baseline = fixtureApp ? new Set() : new Set(all.map((f) => f.fingerprint));
     report.baselineSize = baseline.size;
 
     // (4) loop per-finding sul set in-scope.
@@ -317,6 +355,19 @@ function main() {
       green: cp.green, summary: cp.summary, degraded: cp.degraded,
       controls: cp.controls.map((c) => ({ id: c.id, name: c.name, status: c.status, green: c.green, detail: c.detail })),
     };
+
+    // (5.5) TIDY ADVISORY (BD-1, momento 3 — solo con --fixture-app, EVAL-ONLY).
+    //   La disciplina di costruzione EMETTE un segnale ISPEZIONABILE di
+    //   complessita di scrittura sui sorgenti del fixture (copia ws.dir).
+    //   *** ADVISORY, MAI GATE (L-COL-006): tidyAdvisory NON e' negli input di
+    //   runCheckpoint (calcolato DOPO il checkpoint, attaccato SOLO al report)
+    //   -> il flag complexity_flag puo' essere true MENTRE cp.green e' true
+    //   (sotto-test §7.2a). *** SENZA --fixture-app questo blocco non esiste:
+    //   nessun report.build_discipline -> shape BIT-invariante.
+    if (fixtureApp) {
+      report.build_discipline = tidyAdvisory(ws.dir, { runOpts: RUN_OPTS });
+      if (blueprintDir) report.build_discipline.blueprint_dir = blueprintDir;
+    }
 
     // (6) DECISIONI del modello git a strati (esercitate, non eseguite su remote).
     //     a) merge gated dal checkpoint + deploy-coupling, per i tre casi.

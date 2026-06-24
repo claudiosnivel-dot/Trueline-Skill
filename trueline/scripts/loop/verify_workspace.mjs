@@ -22,8 +22,16 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(__dirname, '..', '..', '..');
 
 export const CANONICAL_REFERENCE_APP = resolve(REPO_ROOT, 'eval', 'reference-app');
-// Radice delle copie temporanee (gitignorata: vedi .gitignore "eval/.tmp-verify/").
-export const TMP_VERIFY_ROOT = resolve(REPO_ROOT, 'eval', '.tmp-verify');
+// Radice delle copie temporanee (gitignorata: vedi .gitignore "eval/.tmp-*/").
+// ADDITIVO (BD-1): un override via env TRUELINE_TMP_VERIFY_ROOT consente a un harness di
+// isolare le proprie copie in una radice PRIVATA (es. per-pid) ed evitare la contesa
+// Windows sulla .tmp-verify CONDIVISA (race cpSync/chmod sotto esecuzioni back-to-back).
+// Default = comportamento storico: env ASSENTE -> bit-invariante per m1..m5 /
+// ecosystem_conformance / run_eval (che NON impostano l'env). Il guardrail di
+// destroyVerifyWorkspace usa questa stessa costante, quindi resta coerente.
+export const TMP_VERIFY_ROOT = process.env.TRUELINE_TMP_VERIFY_ROOT
+  ? resolve(process.env.TRUELINE_TMP_VERIFY_ROOT)
+  : resolve(REPO_ROOT, 'eval', '.tmp-verify');
 
 // Cosa NON copiare: node_modules e' enorme e non serve agli oracoli del loop
 // (rls_check/gitleaks/knip leggono i sorgenti). MA knip ha bisogno del suo
@@ -73,13 +81,23 @@ function rmWithRetry(target, attempts = 5) {
   if (lastErr) throw lastErr;
 }
 
-// Crea una copia temporanea isolata della reference app canonica.
+// Crea una copia temporanea isolata della reference app.
 //
 // Opzioni:
 //   id            etichetta della copia (default: timestamp+random). La dir e'
 //                 eval/.tmp-verify/<id>.
 //   includeGit    copia anche .git (default true: necessario per lo scope
 //                 history di S2 e per i commit isolati del loop).
+//   sourceApp     ADDITIVO (BD-1): dir SORGENTE da copiare. Default
+//                 CANONICAL_REFERENCE_APP -> comportamento BIT-INVARIANTE
+//                 (i chiamanti esistenti non passano sourceApp e copiano la
+//                 canonica esattamente come prima). Override usato SOLO dal
+//                 path eval-only di run_loop (--fixture-app) per copiare una
+//                 reference-app di fixture al posto della canonica. La
+//                 DESTINAZIONE resta SEMPRE eval/.tmp-verify/<id> (dentro
+//                 TMP_VERIFY_ROOT) -> i guardrail di destroyVerifyWorkspace
+//                 restano INVARIATI (rifiutano la canonica e i path fuori da
+//                 TMP_VERIFY_ROOT, indipendentemente dalla sorgente).
 //   linkNodeModules  se true, NON copia node_modules ma lo richiama via symlink
 //                 (piu' veloce). Default: false (copia integrale, piu' robusta
 //                 su Windows dove i symlink possono richiedere privilegi).
@@ -87,6 +105,9 @@ function rmWithRetry(target, attempts = 5) {
 // Ritorna { dir, id, cleanup }.
 export function createVerifyWorkspace(opts = {}) {
   const { includeGit = true } = opts;
+  // sourceApp ADDITIVO: default = canonica (BIT-invariante). Se passato, e' la
+  // reference-app del fixture da copiare. Risolto a path assoluto.
+  const sourceApp = opts.sourceApp ? resolve(opts.sourceApp) : CANONICAL_REFERENCE_APP;
   // id UNICO-per-run: pid + contatore monotono (NO Date.now/Math.random). SEMPRE
   // derivato da uniqueWorkspaceId, ANCHE quando il chiamante passa un'etichetta:
   // l'etichetta diventa il PREFISSO e vi appendiamo pid+counter. Il default di
@@ -98,8 +119,8 @@ export function createVerifyWorkspace(opts = {}) {
   // m1/m2/m3 rossi INTERMITTENTI. Ora l'unicita' e' incondizionata.
   const id = uniqueWorkspaceId(opts.id);
 
-  if (!existsSync(CANONICAL_REFERENCE_APP)) {
-    throw new Error(`reference-app canonica assente: ${CANONICAL_REFERENCE_APP}`);
+  if (!existsSync(sourceApp)) {
+    throw new Error(`reference-app sorgente assente: ${sourceApp}`);
   }
 
   mkdirSync(TMP_VERIFY_ROOT, { recursive: true });
@@ -113,11 +134,11 @@ export function createVerifyWorkspace(opts = {}) {
   // node_modules perche' run_deadcode (knip) richiede il binario locale del
   // progetto target (node_modules/knip/bin/knip.js) — senza, l'oracolo
   // dead-code fallirebbe. Includiamo .git per lo scope history.
-  cpSync(CANONICAL_REFERENCE_APP, dir, {
+  cpSync(sourceApp, dir, {
     recursive: true,
     dereference: false,
     filter: (src) => {
-      const base = src.slice(CANONICAL_REFERENCE_APP.length + 1).split(/[\\/]/)[0];
+      const base = src.slice(sourceApp.length + 1).split(/[\\/]/)[0];
       if (!includeGit && base === '.git') return false;
       if (SKIP_TOP_LEVEL.has(base)) return false;
       return true;
