@@ -128,6 +128,7 @@ Ogni modalità tira **solo** i reference che le servono. Questo è il cuore dell
 | `modes/bootstrap.md` | ● | | |
 | `modes/build.md` | | ● | |
 | `modes/remediate.md` | | | ● |
+| `build-discipline.md` (disciplina di costruzione, `L-COL-031`) | | ● | ● |
 | `blueprint/atomic-task-schema.md` | ● | ○ (consuma i criteri) | |
 | `blueprint/self-check-checklist.md` | ● | | |
 | `blueprint/template/` | ● | | |

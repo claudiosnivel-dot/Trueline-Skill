@@ -24,6 +24,7 @@ correttezza. Detto in chiaro all'utente; niente falso "via libera" (`L-COL-006`)
 
 | File | Perché |
 |---|---|
+| `references/build-discipline.md` | disciplina di *costruzione* — in REMEDIATE attivi i momenti **1+3** + la disciplina di fix; il momento 2 test-first è superato dalla baseline di caratterizzazione (`L-COL-031`) |
 | `references/oracles/thresholds.md` | soglie di severità per il checkpoint e budget del loop |
 | `references/oracles/semgrep-ai-ruleset/` | ruleset Semgrep curato (vendorizzato, offline) |
 | `references/conventions/named-standards.md` | vocabolario OWASP 2025 / ASVS / CWE + standard RLS |
@@ -166,6 +167,12 @@ quando tutti i finding fixabili sono chiusi:
   rosso (una fix ne ha introdotto uno nuovo) → rientra nel loop
 ```
 
+**Disciplina di fix — root-cause-before-patch** (`build-discipline.md` §3,
+`L-COL-031`): prima di ri-editare nel loop RED, modella l'intorno e la **causa
+radice** del finding, poi applica la **patch minima** che la attacca — evita il
+difetto "sporco su sporco". Advisory, mai gate: il re-run dello **stesso** oracolo
+emette il verdetto (`L-COL-002`).
+
 **Invariante chiave (06-CHARACTERIZATION-TESTS §4):** un'asserzione-guardia rotta
 dopo la fix = regressione → `verification-failed`. Un'asserzione-impattata deve
 aggiornare il comportamento atteso (gate umano) — non va letta come regressione,
@@ -191,6 +198,14 @@ intento è qualcosa che la skill non fa da sé.
 
 ## Disciplina REMEDIATE
 
+- **Disciplina di costruzione** (`references/build-discipline.md`, `L-COL-031`): in
+  REMEDIATE sono attivi i momenti **1 (gate delle assunzioni)** e **3 (scrittura
+  minima e chirurgica)** + la **disciplina di fix root-cause-before-patch** sul
+  loop RED (§5). Il **momento 2 (test-first che traduce l'AC) è superato** dalla
+  baseline di caratterizzazione (§2, `06`): non c'è un blueprint con
+  `acceptance_criteria` da tradurre, e non si scrive un test-che-fallisce-prima per
+  una fix — la rete è la caratterizzazione del comportamento corrente
+  (partizione guardia/impattate). Guida la scrittura, non giudica (`L-COL-002`).
 - **Oracle-as-judge** (`L-COL-002`): nessun finding è "risolto" perché l'LLM lo
   dichiara; solo l'oracolo riesieguito pulito + test verdi portano a `verified`.
 - **Characterization come prerequisito** (`L-COL-004`): nessuna fix su codice

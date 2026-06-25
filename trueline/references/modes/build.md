@@ -20,6 +20,7 @@ task atomico diceva, niente morto, niente vuln note, niente regressioni
 
 | File | Perché |
 |---|---|
+| `references/build-discipline.md` | disciplina di *costruzione* (i 3 momenti + fix root-cause + confine oracle-as-judge) — guida la scrittura, non giudica (`L-COL-031`) |
 | `references/oracles/thresholds.md` | soglie di severità per il controllo 2 e budget del loop |
 | `references/oracles/semgrep-ai-ruleset/` | ruleset Semgrep curato (vendorizzato, offline) |
 | `references/conventions/named-standards.md` | vocabolario OWASP 2025 / ASVS / CWE + standard RLS |
@@ -69,6 +70,30 @@ Da `SESSION-STATE` + blueprint, rispettando le dipendenze del DAG
 Sul **branch di lavoro** (`trueline/build/<macrotask>`). Mai direttamente su
 `main`. La costruzione consuma i `definition_of_done` + `acceptance_criteria`
 del task come specifica da soddisfare, non come checklist a posteriori.
+
+La **disciplina di costruzione** (`references/build-discipline.md`, `L-COL-031`)
+governa il *come* si scrive ogni task atomico, in **tre momenti** — guidano la
+scrittura, **non** giudicano (l'oracolo resta il giudice, `L-COL-002`):
+
+1. **Gate delle assunzioni** *(Think Before Coding)*: prima di scrivere, enumera
+   le assunzioni, presenta le interpretazioni se più d'una, **fermati** se
+   ambiguo, e riconcilia contro gli `acceptance_criteria`. **Floor
+   deterministico:** un `then` con un token vago bannato ("funziona bene",
+   "robusto", "sicuro", "performante", "user-friendly") o senza osservabile è
+   flaggato da `scripts/blueprint/ac_observability_check.mjs` → ritorno al
+   blueprint (`11` §5.2). L'ambiguità più profonda resta advisory
+   (`self-check-checklist.md` §6), mai gate (`L-COL-006`).
+2. **Test-first che *traduce* l'AC**: scrive prima il `target_test` che fallisce,
+   poi il codice. Le **asserzioni** del test **derivano dagli `acceptance_criteria`
+   (given/when/then) del blueprint** e tracciano ad essi; l'LLM fa scaffold/wiring,
+   **non inventa** il comportamento asserito. Un test che diverge dal suo AC è un
+   difetto-blueprint (`L-COL-019`).
+3. **Scrittura minima e chirurgica** *(Simplicity First + Surgical Changes)*: il
+   diff più piccolo che fa passare il test; niente astrazioni speculative; ogni
+   riga traccia al task; **non lascia orfani nuovi** (allineato a `L-COL-021`,
+   nessuna cancellazione autonoma). A chiusura, una **passata di tidy advisory**
+   registra una nota ispezionabile `{advisory:true, complexity_flag:...}` **fuori**
+   dagli input del checkpoint — mai un verdetto.
 
 Se un task tocca **codice pre-esistente non testato** (legacy senza copertura),
 la skill genera prima la caratterizzazione della porzione toccata
@@ -144,6 +169,25 @@ macrotask secondo il DAG.
 ---
 
 ## Disciplina BUILD
+
+**Disciplina di SCRITTURA** (`references/build-discipline.md`, `L-COL-031`) — il
+*come* si scrive ogni task:
+
+- **Gate delle assunzioni** *(Think Before Coding)*: enumera le assunzioni,
+  fermati se ambiguo, riconcilia contro gli `acceptance_criteria`; floor
+  deterministico `ac_observability_check.mjs` sui `then` non-osservabili.
+- **Test-first che traduce l'AC**: scrivi il test che fallisce; le asserzioni
+  derivano dagli `acceptance_criteria` del blueprint, non si inventano (`L-COL-019`).
+- **Scrittura minima e chirurgica** *(Simplicity First + Surgical Changes)*: il
+  diff più piccolo che fa passare il test; ogni riga traccia al task; **non
+  introdurre orfani** (allineato a `L-COL-021`); tidy advisory ispezionabile,
+  fuori dal checkpoint.
+- **Fix root-cause-before-patch** *(systematic-debugging)*: nel loop RED, modella
+  la causa radice prima di ri-editare; poi la patch minima.
+
+**Questi guidano la scrittura, l'oracolo resta il giudice** (`L-COL-002`).
+
+**Disciplina di GATE** — il *chi giudica*:
 
 - **Oracle-as-judge** (`L-COL-002`): verde/rosso viene dall'oracolo, mai dall'LLM.
 - **Acceptance tests come oracolo del controllo 4** (`L-COL-019`): è l'aggancio tra
