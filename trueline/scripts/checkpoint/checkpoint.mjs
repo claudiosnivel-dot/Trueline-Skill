@@ -41,6 +41,8 @@ import {
   control2CategoriesFrom,
 } from './thresholds.mjs';
 import { classify, loadManifest } from '../ecosystem/resolve.mjs';
+import { loadTasks } from '../blueprint/blueprint_tasks.mjs';
+import { runTargetFile } from './run_file.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..', '..', '..');
@@ -420,7 +422,47 @@ export function control3Regressions(referenceApp, { mode = 'remediate', characte
 // REMEDIATE: invarianza comportamentale (06 §4) — identica logica del controllo 3
 // con la partition (GUARD invarianti, IMPACTED re-baselined). Con una suite
 // presente, green = guard invarianti. SENZA characterization: M1 invariato.
-export function control4Conformance(referenceApp, { mode = 'remediate', characterization = null, finding = null } = {}) {
+export function control4Conformance(referenceApp, { mode = 'remediate', characterization = null, finding = null, blueprintDir = null, manifest = null } = {}) {
+  // --- RAMO AC-ACCEPTANCE (AT-1 Fase A) ---------------------------------------
+  // Si attiva SOLO in BUILD con un blueprint esplicito (blueprintDir) E un
+  // run_file nel manifest (test_runner.run_file). PREEMPTA la characterization:
+  // quando attivo, il controllo 4 e' il test d'accettazione AC per-task (esegue i
+  // target_test del blueprint che esistono su disco, uno per uno). Senza queste
+  // condizioni cade al ramo legacy -> output BYTE-IDENTICO a oggi (BIT-invarianza).
+  //
+  // SCOPE (L-COL-006): in scope = i target_test il cui `file` ESISTE sul disco;
+  // i mancanti (task non ancora costruiti in una BUILD incrementale) sono SALTATI,
+  // mai RED. In-scope vuoto = DEGRADATO (non verde), mai falso verde.
+  // FLOOR ANTI-VACUO: un file con <1 test eseguito e' RED (un file vuoto non puo'
+  // far passare l'accettazione). Un target_test rosso e' RED. Un errore
+  // d'esecuzione e' status='error'. L'oracolo e' l'exit/output reale (L-COL-002).
+  const runFileTpl = manifest && manifest.test_runner && manifest.test_runner.run_file;
+  if (mode === 'build' && blueprintDir && runFileTpl) {
+    let tasks;
+    try { tasks = loadTasks(blueprintDir); }
+    catch (e) { return { id: 4, name: 'conformance', status: 'error', green: false, detail: `blueprint non caricabile: ${e.message}` }; }
+    const inScope = [];
+    for (const t of tasks) for (const tt of (t.target_tests || [])) {
+      if (existsSync(join(referenceApp, tt.file))) inScope.push(tt.file);
+    }
+    inScope.sort();
+    if (inScope.length === 0) {
+      return { id: 4, name: 'conformance', status: 'degraded', green: false, detail: 'nessun target_test materializzato sul disco (BUILD incrementale): controllo DEGRADATO, NON verde' };
+    }
+    const fails = [];
+    for (const file of inScope) {
+      const r = runTargetFile(referenceApp, file, runFileTpl);
+      if (r.error) return { id: 4, name: 'conformance', status: 'error', green: false, detail: `errore d'esecuzione ${file}: ${r.detail}` };
+      if (r.testCount < 1) fails.push(`${file} (vacuo: nessun test eseguito)`);
+      else if (!r.passed) fails.push(`${file} (test rosso)`);
+    }
+    const green = fails.length === 0;
+    return {
+      id: 4, name: 'conformance', status: green ? 'green' : 'red', green,
+      detail: green ? `accettazione AC: ${inScope.length} target_test verdi` : `accettazione AC fallita: ${fails.join('; ')}`,
+    };
+  }
+  // --- RAMO LEGACY (invariato): characterization / npm test / degradato -------
   const charz = characterization || loadCharacterization(referenceApp);
   if (charz) {
     const inv = characterizationInvariance(referenceApp, charz, finding);
@@ -537,12 +579,16 @@ export function runCheckpoint(referenceApp, opts = {}) {
     // usa il ramo cablato v1 INVARIATO. Mai inventato: una dir non classificabile
     // resta null (la skill dichiara "non supportato", non finge un ecosistema).
     manifest = resolveManifest(referenceApp),
+    // blueprintDir: opt-in AT-1 Fase A. Quando presente (BUILD) attiva il ramo
+    // AC-acceptance del controllo 4 (esegue i target_test del blueprint). Default
+    // null -> ramo legacy del controllo 4 INVARIATO (BIT-invarianza senza --blueprint).
+    blueprintDir = null,
   } = opts;
 
   const c1 = control1DeadCode(referenceApp, { baseline, runOpts });
   const c2 = control2Security(referenceApp, { baseline, runOpts, withOsv, manifest });
   const c3 = control3Regressions(referenceApp, { mode, characterization, finding });
-  const c4 = control4Conformance(referenceApp, { mode, characterization, finding });
+  const c4 = control4Conformance(referenceApp, { mode, characterization, finding, blueprintDir, manifest });
 
   const controls = [c1, c2, c3, c4];
   const green = controls.every((c) => c.green === true);
