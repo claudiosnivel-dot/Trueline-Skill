@@ -64,3 +64,13 @@ ownership del macrotask). La parte semantica resta alla
 (artefatti osservabili); `acceptance_criteria` = "e fa la cosa giusta"
 (asserzioni comportamentali). Sono **questi** che il controllo conformità-logica
 usa come oracolo. `target_tests` è il ponte da criterio a eseguibile.
+
+## Provenienza del target_test — tag `covers:` (anti-tamper, BUILD `--blueprint`)
+
+Nel **file** del `target_test`, ogni blocco che esercita un AC porta `covers: <AC-id>`
+**in un commento** (`// covers: AC-1`). È la controparte *eseguibile* del campo
+`covers` del blueprint: in BUILD col controllo 4 attivo (`--blueprint`), un AC valutato
+non tracciato da alcun suo target_test in-scope rende il controllo 4 **rosso prima di
+eseguire** (`scripts/blueprint/ac_assertion_trace_check.mjs`). Per-AC globale, ancorato
+all'id, string-aware. **Questo schema e `validate_blueprint` restano invariati**: il
+tag è una convenzione del file di test, non un campo del task.

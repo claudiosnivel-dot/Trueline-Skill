@@ -43,6 +43,7 @@ import {
 import { classify, loadManifest } from '../ecosystem/resolve.mjs';
 import { loadTasks } from '../blueprint/blueprint_tasks.mjs';
 import { runTargetFile } from './run_file.mjs';
+import { assertionTrace } from '../blueprint/ac_assertion_trace_check.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..', '..', '..');
@@ -448,6 +449,17 @@ export function control4Conformance(referenceApp, { mode = 'remediate', characte
     inScope.sort();
     if (inScope.length === 0) {
       return { id: 4, name: 'conformance', status: 'degraded', green: false, detail: 'nessun target_test materializzato sul disco (BUILD incrementale): controllo DEGRADATO, NON verde' };
+    }
+    // <<< AT-1 Fase B — precondizione di TRACE (PRIMA di eseguire) >>>
+    // Ogni AC valutato deve tracciare (tag covers: in commento) a un suo target_test
+    // in-scope. Un AC valutato non tracciato → oracolo d'accettazione non valido →
+    // controllo 4 RED PRIMA dell'esecuzione (anti-tamper della provenienza, L-COL-032/B).
+    const trace = assertionTrace(tasks, referenceApp, inScope);
+    if (!trace.ok) {
+      return {
+        id: 4, name: 'conformance', status: 'red', green: false,
+        detail: `target_test non tracciabile all'AC — oracolo non valido: ${trace.detail}`,
+      };
     }
     const fails = [];
     for (const file of inScope) {

@@ -20,7 +20,7 @@
 # Idempotente: se .git esiste gia', non rifa nulla.
 set -e
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-FIXTURES="faithful failing empty partial"
+FIXTURES="faithful failing empty partial tampered-untagged tag-in-stringa ac-multi-file covers-scalare tag-spurio mixed-coverage"
 
 for d in $FIXTURES; do
   app="$ROOT/eval/anti-tamper/$d/reference-app"
@@ -45,4 +45,4 @@ for d in $FIXTURES; do
   fi
 done
 
-echo "Fixtures AT-1 Fase A finalizzati (inner .git, zero node_modules)."
+echo "Fixtures AT-1 Fase A+B finalizzati (inner .git, zero node_modules)."

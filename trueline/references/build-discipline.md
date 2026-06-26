@@ -79,9 +79,18 @@ controllo 4:
   **difetto-blueprint / violazione d'integrità del controllo 4** (`L-COL-019`
   tiene il giudice di proprietà del blueprint, non dell'LLM in BUILD).
 
-*La meccanizzazione piena della tracciabilità AC ↔ asserzioni è hand-off
-esplicito al deliverable di anti-tamper (fase moat successiva); qui il momento 2
-è ristretto a "tradurre l'AC in forma eseguibile".*
+**Convenzione di provenienza (meccanizzata, AT-1 Fase B).** Ogni blocco del
+`target_test` che esercita un AC porta un tag `covers: <AC-id>` **in un commento**
+(`// covers: AC-1`, anche di coda: `expect(...); // covers: AC-1`). In BUILD con
+`--blueprint`, il controllo 4 esige che ogni AC **valutato** sia tracciato da ≥1 suo
+`target_test` in-scope così taggato: un AC non tracciato rende il controllo 4 **rosso
+prima di eseguire** (oracolo `scripts/blueprint/ac_assertion_trace_check.mjs`, sibling
+di `validate_blueprint`). È **per-AC globale** (basta un file coprante taggato) e
+**ancorato all'id** (`AC-1` ≠ `AC-10`); un tag dentro una **stringa** non conta
+(string-aware). La presenza-del-tag è un **floor deterministico** (`L-COL-006`): prova
+*che* il file dichiara quale AC esercita, **non** che l'asserzione sia semanticamente
+fedele (quello resta advisory). Lo schema del task e `validate_blueprint` **non
+cambiano**: il tag vive nel file di test, non nel blueprint.
 
 ### Momento 3 — Scrittura minima e chirurgica *(Simplicity First + Surgical Changes)*
 
