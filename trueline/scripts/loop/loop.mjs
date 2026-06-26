@@ -41,6 +41,7 @@ const ORACLES = resolve(__dirname, '..', 'oracles');
 const RUN_GITLEAKS = resolve(ORACLES, 'run_gitleaks.mjs');
 const RLS_CHECK = resolve(ORACLES, 'rls_check.mjs');
 const RUN_DEADCODE = resolve(ORACLES, 'run_deadcode.mjs');
+const FIRESTORE_RULES_CHECK = resolve(ORACLES, 'firestore_rules_check.mjs');
 const GO_BIN = process.platform === 'win32' ? 'C:/Users/claud/go/bin' : '/c/Users/claud/go/bin';
 
 // --- Re-run dell'oracolo per-categoria (stesso oracolo, stesso rule_id) ------
@@ -48,7 +49,7 @@ const GO_BIN = process.platform === 'win32' ? 'C:/Users/claud/go/bin' : '/c/User
 // Riesegue, sulla COPIA, lo STESSO oracolo che ha prodotto il finding e ritorna
 // i finding normalizzati. La verifica per-finding (05 §6) cerca se il finding
 // (per fingerprint) e' ancora presente.
-function rerunOracleFor(finding, dir, runOpts) {
+export function rerunOracleFor(finding, dir, runOpts) {
   const env = { ...process.env, PATH: `${process.env.PATH || ''}${delimiter}${GO_BIN}` };
   const run = (script, args, cwd = dir) => {
     const res = spawnSync(process.execPath, [script, ...args], {
@@ -98,6 +99,12 @@ function rerunOracleFor(finding, dir, runOpts) {
         oracle = 'knip'; scope = 'working-tree';
         res = run(RUN_DEADCODE, [dir]);
       }
+      break;
+    case 'authz':
+      // SP-8: authz dichiarativa Firestore. L'oracolo cammina `dir` per firestore.rules
+      // ed emette {findings:[...]} (category 'authz'). Prova STATICA (no runtime).
+      oracle = 'firestore-rules'; scope = 'working-tree';
+      res = run(FIRESTORE_RULES_CHECK, [dir]);
       break;
     default:
       return { ok: false, findings: [], detail: `categoria non rieseguibile: ${finding.category}` };
