@@ -350,7 +350,7 @@ function main() {
     //     col baseline-delta: gate-a sui finding NUOVI sopra soglia (04 §6). Con
     //     characterization presente i controlli 3/4 usano l'invarianza (06 §4):
     //     GUARD invarianti (vs baseline originale), IMPACTED gia' re-baselined.
-    const cp = runCheckpoint(ws.dir, { mode, runOpts: RUN_OPTS, withOsv: false, baseline });
+    const cp = runCheckpoint(ws.dir, { mode, runOpts: RUN_OPTS, withOsv: false, baseline, blueprintDir });
     report.checkpoint = {
       green: cp.green, summary: cp.summary, degraded: cp.degraded,
       controls: cp.controls.map((c) => ({ id: c.id, name: c.name, status: c.status, green: c.green, detail: c.detail })),
