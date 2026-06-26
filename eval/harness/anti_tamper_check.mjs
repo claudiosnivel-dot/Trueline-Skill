@@ -124,6 +124,20 @@ const FIXTURES = {
   },
 };
 
+// Fixture di scenario TRACE (AT-1 Fase B). Stessa anatomia: reference-app inner-repo
+// (provisionata dall'orchestratore) + seeded-blueprint. Il driver e l'igiene li
+// trattano come i 4 Fase A.
+const TRACE_FIXTURES = {
+  'tampered-untagged': { referenceApp: resolve(FIX_ROOT, 'tampered-untagged', 'reference-app'), blueprint: resolve(FIX_ROOT, 'tampered-untagged', 'seeded-blueprint') },
+  'tag-in-stringa':    { referenceApp: resolve(FIX_ROOT, 'tag-in-stringa', 'reference-app'),    blueprint: resolve(FIX_ROOT, 'tag-in-stringa', 'seeded-blueprint') },
+  'ac-multi-file':     { referenceApp: resolve(FIX_ROOT, 'ac-multi-file', 'reference-app'),     blueprint: resolve(FIX_ROOT, 'ac-multi-file', 'seeded-blueprint') },
+  'covers-scalare':    { referenceApp: resolve(FIX_ROOT, 'covers-scalare', 'reference-app'),    blueprint: resolve(FIX_ROOT, 'covers-scalare', 'seeded-blueprint') },
+  'tag-spurio':        { referenceApp: resolve(FIX_ROOT, 'tag-spurio', 'reference-app'),        blueprint: resolve(FIX_ROOT, 'tag-spurio', 'seeded-blueprint') },
+  'mixed-coverage':    { referenceApp: resolve(FIX_ROOT, 'mixed-coverage', 'reference-app'),    blueprint: resolve(FIX_ROOT, 'mixed-coverage', 'seeded-blueprint') },
+};
+// Unione per precondizione + igiene (Fase A + Fase B condividono .git/provisioning).
+const ALL_FIXTURES = { ...FIXTURES, ...TRACE_FIXTURES };
+
 // supabase/config.toml minimale deposto nella COPIA per attivare il ramo AC
 // (classify -> supabase-jsts -> manifest.test_runner.run_file). NON deve contenere
 // segreti (control2 gitleaks scansiona il working-tree della copia): solo un marker.
@@ -203,6 +217,23 @@ function copyFixture(label, sourceApp, { dropTests = false } = {}) {
   return { dir, cleanup };
 }
 
+// Rimuove/aggiunge il tag `covers: <acId>` in un file della COPIA (mai nell'originale):
+// serve alle prove di falsificabilita' (untag → RED; tag → verde). Idempotente.
+function retagInCopy(copyDir, relFile, { removeAc = null, addAc = null } = {}) {
+  const p = join(copyDir, relFile);
+  if (!existsSync(p)) return false;
+  let txt = readFileSync(p, 'utf8');
+  if (removeAc) {
+    // Rimuove le righe-commento che taggano <acId> (i fixture usano righe dedicate;
+    // gli AC-id sono alfanumerici+trattino → nessun metacarattere da escapare).
+    const re = new RegExp('covers:\\s*' + removeAc + '\\b');
+    txt = txt.split('\n').filter((l) => !(/^\s*(\/\/|#|--)/.test(l) && re.test(l))).join('\n');
+  }
+  if (addAc) txt = `// covers: ${addAc}\n${txt}`;
+  writeFileSync(p, txt);
+  return true;
+}
+
 // assertIsolatedRepo inline (L-COL-024): il toplevel della copia NON deve risolvere
 // al repo ESTERNO né alla reference-app originale (sarebbe contaminazione).
 function isIsolatedCopy(copyDir, originalApp) {
@@ -261,7 +292,7 @@ function assert(name, ok, detail) {
 // ===========================================================================
 function checkPreconditions() {
   const missing = [];
-  for (const [id, fx] of Object.entries(FIXTURES)) {
+  for (const [id, fx] of Object.entries(ALL_FIXTURES)) {
     const gitDir = resolve(fx.referenceApp, '.git');
     if (!existsSync(gitDir)) missing.push(`${id}: reference-app/.git assente (${gitDir}) — esegui eval/anti-tamper/provision_fixtures.sh (orchestratore, L-COL-024)`);
     if (!existsSync(fx.blueprint)) missing.push(`${id}: seeded-blueprint assente (${fx.blueprint})`);
@@ -420,13 +451,155 @@ function subTestFlagNotDisk() {
 }
 
 // ===========================================================================
+// (7) tampered-untagged — controls[3] RED (trace), detail "non tracciabile".
+//     Falsificabilita': aggiungi il tag su una copia → verde (eseguito).
+// ===========================================================================
+function subTestTamperedUntagged() {
+  console.log('');
+  console.log('(7) tampered-untagged — target_test in-scope SENZA tag covers → controls[3] RED (trace):');
+  const fx = TRACE_FIXTURES['tampered-untagged'];
+  const copy = copyFixture('tampered-untagged', fx.referenceApp);
+  try {
+    const d = driveCheckpointStable(copy.dir, fx.blueprint, { requireGreen: false });
+    if (!d.c4) { assert('(7) JSON ben formato', false, `exit=${d.status}`); return; }
+    assert('(7) controls[3].green === false (AC non tracciato → RED)', d.c4.green === false,
+      `green=${d.c4.green} status=${d.c4.status}`);
+    assert('(7) detail menziona "non tracciabile" (trace, non esecuzione)',
+      /non tracciabile|oracolo non valido/i.test(String(d.c4.detail || '')), `detail="${d.c4.detail}"`);
+    // Precondizione PRIMA dell'esecuzione: il file PASSEREBBE; il detail NON e' d'esecuzione.
+    assert('(7) il RED e\' di TRACE, non d\'esecuzione (no "test rosso"/"vacuo")',
+      !/test rosso|vacuo/i.test(String(d.c4.detail || '')), `detail="${d.c4.detail}"`);
+  } finally { copy.cleanup(); }
+  // Falsificabilita': aggiungi il tag su una copia separata → verde.
+  const copy2 = copyFixture('tampered-untagged-fix', fx.referenceApp);
+  try {
+    retagInCopy(copy2.dir, 'tests/a.test.mjs', { addAc: 'AC-1' });
+    const d2 = driveCheckpointStable(copy2.dir, fx.blueprint, { requireGreen: true });
+    assert('(7-falsif) aggiunto il tag covers: AC-1 → controls[3] verde (eseguito e passa)',
+      d2.c4 && d2.c4.green === true, d2.c4 ? `status=${d2.c4.status}` : 'no c4');
+  } finally { copy2.cleanup(); }
+}
+
+// ===========================================================================
+// (8) tag-in-stringa — covers solo dentro una stringa → controls[3] RED (trace).
+// ===========================================================================
+function subTestTagInStringa() {
+  console.log('');
+  console.log('(8) tag-in-stringa — "covers" solo in una stringa (non commento) → controls[3] RED:');
+  const fx = TRACE_FIXTURES['tag-in-stringa'];
+  const copy = copyFixture('tag-in-stringa', fx.referenceApp);
+  try {
+    const d = driveCheckpointStable(copy.dir, fx.blueprint, { requireGreen: false });
+    if (!d.c4) { assert('(8) JSON ben formato', false, `exit=${d.status}`); return; }
+    assert('(8) controls[3].green === false (tag in stringa non conta → RED)', d.c4.green === false,
+      `green=${d.c4.green} status=${d.c4.status}`);
+    assert('(8) detail di trace ("non tracciabile")',
+      /non tracciabile|oracolo non valido/i.test(String(d.c4.detail || '')), `detail="${d.c4.detail}"`);
+  } finally { copy.cleanup(); }
+}
+
+// ===========================================================================
+// (9) ac-multi-file — AC-1 coperto da A (taggato) + B (no), entrambi in-scope →
+//     verde (per-AC globale). Falsificabilita': untag A → RED.
+// ===========================================================================
+function subTestAcMultiFile() {
+  console.log('');
+  console.log('(9) ac-multi-file — A taggato + B no (entrambi in-scope) → verde (per-AC globale):');
+  const fx = TRACE_FIXTURES['ac-multi-file'];
+  const copy = copyFixture('ac-multi-file', fx.referenceApp);
+  try {
+    const d = driveCheckpointStable(copy.dir, fx.blueprint, { requireGreen: true });
+    assert('(9) controls[3].green === true (basta A taggato)', d.c4 && d.c4.green === true,
+      d.c4 ? `status=${d.c4.status} detail="${d.c4.detail}"` : 'no c4');
+  } finally { copy.cleanup(); }
+  // Falsificabilita': togli il tag da A (B gia' senza) → nessun file coprante taggato → RED.
+  const copy2 = copyFixture('ac-multi-file-untag', fx.referenceApp);
+  try {
+    retagInCopy(copy2.dir, 'tests/a.test.mjs', { removeAc: 'AC-1' });
+    const d2 = driveCheckpointStable(copy2.dir, fx.blueprint, { requireGreen: false });
+    assert('(9-falsif) tolto il tag da A → controls[3] RED (trace)',
+      d2.c4 && d2.c4.green === false && /non tracciabile/i.test(String(d2.c4.detail || '')),
+      d2.c4 ? `status=${d2.c4.status} detail="${d2.c4.detail}"` : 'no c4');
+  } finally { copy2.cleanup(); }
+}
+
+// ===========================================================================
+// (10) covers-scalare — covers scalare, file taggato → verde.
+// ===========================================================================
+function subTestCoversScalare() {
+  console.log('');
+  console.log('(10) covers-scalare — covers come scalare (non lista), file taggato → verde:');
+  const fx = TRACE_FIXTURES['covers-scalare'];
+  const copy = copyFixture('covers-scalare', fx.referenceApp);
+  try {
+    const d = driveCheckpointStable(copy.dir, fx.blueprint, { requireGreen: true });
+    assert('(10) controls[3].green === true (covers scalare normalizzato + tag presente)',
+      d.c4 && d.c4.green === true, d.c4 ? `status=${d.c4.status}` : 'no c4');
+  } finally { copy.cleanup(); }
+}
+
+// ===========================================================================
+// (11) tag-spurio — tag reale AC-1 + tag spurio AC-99 → verde (spurio ignorato).
+// ===========================================================================
+function subTestTagSpurio() {
+  console.log('');
+  console.log('(11) tag-spurio — covers: AC-1 (reale) + covers: AC-99 (spurio) → verde:');
+  const fx = TRACE_FIXTURES['tag-spurio'];
+  const copy = copyFixture('tag-spurio', fx.referenceApp);
+  try {
+    const d = driveCheckpointStable(copy.dir, fx.blueprint, { requireGreen: true });
+    assert('(11) controls[3].green === true (AC-1 traccia; AC-99 ignorato senza errori)',
+      d.c4 && d.c4.green === true, d.c4 ? `status=${d.c4.status} detail="${d.c4.detail}"` : 'no c4');
+  } finally { copy.cleanup(); }
+}
+
+// ===========================================================================
+// (12) mixed-coverage — A (presente, taggato) + B (mancante) → verde. Untag A → RED.
+// ===========================================================================
+function subTestMixedCoverage() {
+  console.log('');
+  console.log('(12) mixed-coverage — A presente+taggato, B mancante (saltato) → verde:');
+  const fx = TRACE_FIXTURES['mixed-coverage'];
+  const copy = copyFixture('mixed-coverage', fx.referenceApp);
+  try {
+    const d = driveCheckpointStable(copy.dir, fx.blueprint, { requireGreen: true });
+    assert('(12) controls[3].green === true (A traccia; skip di B non maschera)',
+      d.c4 && d.c4.green === true, d.c4 ? `status=${d.c4.status} detail="${d.c4.detail}"` : 'no c4');
+  } finally { copy.cleanup(); }
+  // Falsificabilita': untag A (B comunque mancante) → AC-1 non tracciato → RED.
+  const copy2 = copyFixture('mixed-coverage-untag', fx.referenceApp);
+  try {
+    retagInCopy(copy2.dir, 'tests/a.test.mjs', { removeAc: 'AC-1' });
+    const d2 = driveCheckpointStable(copy2.dir, fx.blueprint, { requireGreen: false });
+    assert('(12-falsif) tolto il tag da A → controls[3] RED (lo skip di B non maschera)',
+      d2.c4 && d2.c4.green === false && /non tracciabile/i.test(String(d2.c4.detail || '')),
+      d2.c4 ? `status=${d2.c4.status} detail="${d2.c4.detail}"` : 'no c4');
+  } finally { copy2.cleanup(); }
+}
+
+// ===========================================================================
+// (13) ortogonalita' — validate_blueprint PASS su ogni fixture trace (struttura
+//      valida) mentre il trace li DISTINGUE (verde/rosso sopra).
+// ===========================================================================
+function subTestOrthogonality() {
+  console.log('');
+  console.log('(13) ortogonalita\' — validate_blueprint PASS su tutti i fixture trace:');
+  const VALIDATE = resolve(ROOT, 'trueline', 'scripts', 'blueprint', 'validate_blueprint.mjs');
+  for (const [id, fx] of Object.entries(TRACE_FIXTURES)) {
+    const r = nodeRun(VALIDATE, [fx.blueprint]);
+    assert(`(13) [${id}] validate_blueprint exit 0 (struttura valida)`, r.status === 0,
+      `exit=${r.status}`);
+  }
+}
+
+// ===========================================================================
 // 0-CONTAMINAZIONE: HEAD interno di OGNI fixture + HEAD esterno invariati,
 // fixture bit-identica (snapshot status interno invariato), nessun residuo temp.
 // ===========================================================================
 function assertHygiene(snapshots, outerHeadBefore) {
   console.log('');
   console.log('0-contaminazione — HEAD interno/esterno invariati, fixture bit-identica, nessun residuo .tmp-at:');
-  for (const [id, fx] of Object.entries(FIXTURES)) {
+  for (const [id, fx] of Object.entries(ALL_FIXTURES)) {
     const snap = snapshots[id];
     const headAfter = gitRead(fx.referenceApp, ['rev-parse', 'HEAD']).stdout;
     const statusAfter = gitRead(fx.referenceApp, ['status', '--porcelain']).stdout;
@@ -451,7 +624,7 @@ function assertHygiene(snapshots, outerHeadBefore) {
 // ---------------------------------------------------------------------------
 function main() {
   console.log('============================================================');
-  console.log(' GATE ANTI-TAMPER (AT-1 Fase A, T3.1.2) — il controllo 4 = test d\'accettazione AC (spec §7)');
+  console.log(' GATE ANTI-TAMPER (AT-1 Fase A+B — esecuzione + trace, spec §7)');
   console.log(`   fixture root : ${FIX_ROOT}`);
   console.log('   (1) faithful      — controls[3].green === true (test-gate AC reale)');
   console.log('   (2) failing       — controls[3].green === false (test rosso)');
@@ -459,6 +632,8 @@ function main() {
   console.log('   (4) partial       — controls[3].green === true (file mancante saltato)');
   console.log('   (5) not-built     — controls[3].status === degraded (in-scope vuoto)');
   console.log('   (6) flag-not-disk — senza --blueprint (legacy) ≠ con --blueprint (green AC)');
+  console.log('   (7)..(12) trace      — tampered-untagged/tag-in-stringa/ac-multi-file/covers-scalare/tag-spurio/mixed-coverage');
+  console.log('   (13) ortogonalita    — validate_blueprint PASS su tutti i fixture trace');
   console.log('============================================================');
 
   // --- PRECONDIZIONE: .git/seeded-blueprint/node/run_file ------------------
@@ -485,7 +660,7 @@ function main() {
   // Snapshot d'integrità (sola lettura) PRIMA dei sotto-test — criterio 0-contam.
   const outerHeadBefore = gitRead(ROOT, ['rev-parse', 'HEAD']).stdout;
   const snapshots = {};
-  for (const [id, fx] of Object.entries(FIXTURES)) {
+  for (const [id, fx] of Object.entries(ALL_FIXTURES)) {
     snapshots[id] = {
       head: gitRead(fx.referenceApp, ['rev-parse', 'HEAD']).stdout,
       status: gitRead(fx.referenceApp, ['status', '--porcelain']).stdout,
@@ -499,6 +674,13 @@ function main() {
   subTestPartial();
   subTestNotBuilt();
   subTestFlagNotDisk();
+  subTestTamperedUntagged();
+  subTestTagInStringa();
+  subTestAcMultiFile();
+  subTestCoversScalare();
+  subTestTagSpurio();
+  subTestMixedCoverage();
+  subTestOrthogonality();
 
   // --- 0-contaminazione ----------------------------------------------------
   cleanAtTmp();
