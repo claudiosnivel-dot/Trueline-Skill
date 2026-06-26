@@ -187,12 +187,18 @@ const PACK_FIXTURES = {
     fixtureApp: resolve(ROOT, 'eval', 'ecosystems', 'supabase-py', 'reference-app'),
     registry: resolve(ROOT, 'eval', 'ecosystems', 'supabase-py', 'registry.json'),
   },
-  // SP-5: JS/TS+Firebase, corpo DETECTION-PARAMETRICO (kind:'detection',
-  // verified_set=[]). Floor=[secret,dependency-vuln,authz]: il binding authz è
-  // legato a firestore_rules_check (oracolo statico custom, vedi
+  // SP-5→SP-8: JS/TS+Firebase. SP-8 promuove il pack a tier VERIFIED
+  // (kind:'verified', verified_set=[secret,dead-code,authz]): il criterio 3
+  // verified-parity porta a `verified` FB-S1 (secret serviceAccount.json), FB-S5
+  // (dead-code unusedHelper) e FB-S3 (authz Firestore — oracolo firestore_rules_check
+  // STATICO riesieguito PULITO: scope onesto L-COL-006, NON invarianza runtime;
+  // emulatore Firestore non disponibile). Floor=[secret,dependency-vuln,authz]: il
+  // binding authz è legato a firestore_rules_check (oracolo statico custom, vedi
   // FIRESTORE_RULES_CHECK), NON a semgrep -> needsDocker=false (conformance del
-  // criterio 2 SENZA docker, come postgres-py).
-  'firebase-jsts': { kind: 'detection', fixtureApp: resolve(ROOT,'eval','ecosystems','firebase-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','firebase-jsts','registry.json') },
+  // criterio 2 SENZA docker, come postgres-py). Il ramo RLS-runtime del criterio 3
+  // resta SALTATO (vset.includes('rls') === false). fixtureApp/registry invariati
+  // (cambia solo il kind + i dati del registry/manifest di T5).
+  'firebase-jsts': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','firebase-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','firebase-jsts','registry.json') },
 };
 
 // ---------------------------------------------------------------------------
@@ -843,6 +849,15 @@ function collectFindingsForLoop(dir, manifest) {
     if (j) out.push(...normForLoop(tool === 'vulture' ? 'vulture' : 'knip', j, 'working-tree'));
   }
 
+  // authz -> firestore_rules_check (cammina `dir` per firestore.rules). (SP-8)
+  // Statico: l'oracolo emette { findings:[...] } (category 'authz' via normalize
+  // 'firestore-rules'). cwd=dir come gli altri oracoli -> fingerprint-parity col loop.
+  if (bindings.authz && bindings.authz.tool === 'firestore_rules_check') {
+    const r = nodeRun(FIRESTORE_RULES_CHECK, [dir], dir);
+    let j = null; try { j = JSON.parse(r.stdout); } catch { /* */ }
+    if (j && Array.isArray(j.findings)) out.push(...normForLoop('firestore-rules', j, 'working-tree'));
+  }
+
   return out;
 }
 
@@ -874,6 +889,14 @@ function pickSeedFinding(findings, seed) {
     return findings.find((f) => f.category === 'dead-code'
       && (anchorSymbol ? f.location.symbol === anchorSymbol : true)
       && (anchorFile ? fileEndsWith(f) : true));
+  }
+  if (cat === 'authz') {
+    // SP-8: la regola Firestore vulnerabile FB-S3 vive in firestore.rules; il match
+    // forte è l'anchor.match_path (rule path) == location.symbol del finding authz.
+    const wantPath = String(anchor.match_path || '');
+    return findings.find((f) => f.category === 'authz'
+      && (anchorFile ? fileEndsWith(f) : true)
+      && (wantPath ? (f.location.symbol === wantPath) : true));
   }
   // categorie non-loop (dependency-vuln/injection): nessun rappresentante del loop.
   return undefined;
