@@ -447,6 +447,82 @@ function resolveTsFileInCopy(dir, rel) {
   return null;
 }
 
+// =============================================================================
+// FIX FIREBASE (SP-8, firebase-jsts) — additive. authz Firestore (if true ->
+// owner-scoped) + secret serviceAccount.json. Dispatch in selectKnownFix
+// keyed su cat==='authz' && firestore.rules e cat==='secret' && serviceAccount.json:
+// path DISGIUNTI dai rami esistenti -> nessuna interferenza (BIT-invariante).
+// =============================================================================
+
+// Risolve firestore.rules (di solito alla radice della copia) — mai fuori dalla copia.
+function resolveFirestoreFileInCopy(dir, rel) {
+  const norm = String(rel || 'firestore.rules').replace(/\\/g, '/');
+  const m = /(?:^|\/)([^/]*firestore\.rules)$/.exec(norm);
+  const cand = resolve(dir, m ? m[1] : 'firestore.rules');
+  if (existsSync(cand)) return cand;
+  const direct = resolve(dir, norm);
+  return existsSync(direct) ? direct : null;
+}
+
+// FB-S3 (authz Firestore): riscrive `allow ...: if true;` in regola OWNER-SCOPED.
+// firestore_rules_check considera PULITA una condizione non-literal-true che contiene
+// un OWNER_COMPARISON_TOKEN ('resource.data' / 'request.auth.uid ==') — analogo
+// dichiarativo del transfer RLS (USING(true)->auth.uid()). Tollera `if true` e `if (true)`.
+//
+// IMPORTANTE (riscrittura per-riga, non globale sul testo): la doc-comment in cima al
+// file `firestore.rules` puo' CITARE la forma vulnerabile fra backtick (es.
+// "una collection con `allow read, write: if true;`"). Una replace sul testo intero
+// colpirebbe la PRIMA occorrenza — cioe' il COMMENTO — lasciando intatta la regola
+// reale e l'oracolo continuerebbe a flaggare. Si itera per riga e si scarta la
+// porzione di COMMENTO (`//...`) e gli span in backtick prima di cercare il match,
+// applicando la sostituzione SOLO sulla prima riga di CODICE che concede `if true`.
+function fixFirestoreRules(dir, finding) {
+  const rel = (finding && finding.location && finding.location.file) || 'firestore.rules';
+  const p = resolveFirestoreFileInCopy(dir, rel);
+  if (!p) return { ok: false, detail: `FB-S3: firestore.rules non risolto (${rel})` };
+  const src = readFileSync(p, 'utf8');
+  const re = /(allow\s+[\w,\s]+:\s*if\s+)\(?\s*true\s*\)?(\s*;)/;
+  const lines = src.split('\n');
+  let changed = false;
+  for (let i = 0; i < lines.length; i += 1) {
+    // Porzione di CODICE della riga: rimuove gli span in backtick (doc) e il
+    // commento di riga `//...`. Se qui non c'e' match, la riga e' solo prosa.
+    const codeOnly = lines[i].replace(/`[^`]*`/g, '').replace(/\/\/.*$/, '');
+    if (!re.test(codeOnly)) continue;
+    lines[i] = lines[i].replace(re, '$1request.auth != null && request.auth.uid == resource.data.ownerId$2  // FIX:FB-S3');
+    changed = true;
+    break;
+  }
+  if (!changed) return { ok: false, detail: 'FB-S3: "allow ...: if true;" non trovato (fuori dai commenti)' };
+  const after = lines.join('\n');
+  if (after === src) return { ok: false, detail: 'FB-S3: nessuna modifica applicata' };
+  writeFileSync(p, after, 'utf8');
+  return { ok: true, detail: 'FB-S3: allow if true -> owner-scoped (resource.data.ownerId)' };
+}
+
+// FB-S1 (secret in serviceAccount.json): NEUTRALIZZA il valore private_key (il segreto
+// committato) con un placeholder non-segreto, cosi' gitleaks working-tree e' pulito.
+// Mantiene il file (struttura JSON intatta) -> nessun side-effect su knip/altri oracoli.
+function fixSecretFbS1(dir, finding) {
+  const rel = (finding && finding.location && finding.location.file) || 'serviceAccount.json';
+  const norm = String(rel).replace(/\\/g, '/');
+  const m = /(?:^|\/)([^/]*serviceAccount\.json)$/.exec(norm);
+  const p = (() => {
+    const cand = resolve(dir, m ? m[1] : 'serviceAccount.json');
+    if (existsSync(cand)) return cand;
+    const direct = resolve(dir, norm);
+    return existsSync(direct) ? direct : null;
+  })();
+  if (!p) return { ok: false, detail: `FB-S1: serviceAccount.json non risolto (${rel})` };
+  const src = readFileSync(p, 'utf8');
+  // Sostituisce il valore di "private_key": "...PEM..." con "" (placeholder; il segreto
+  // reale va in FIREBASE_PRIVATE_KEY / secret-manager — il file committato resta template).
+  const after = src.replace(/("private_key"\s*:\s*)"(?:[^"\\]|\\.)*"/, '$1""');
+  if (after === src) return { ok: false, detail: 'FB-S1: campo private_key non trovato' };
+  writeFileSync(p, after, 'utf8');
+  return { ok: true, detail: 'FB-S1: private_key neutralizzata (placeholder; leggere da env)' };
+}
+
 // Mappa controlId(rule_id) -> costruttore di patch.
 const FIX_TABLE = {
   // gitleaks: il rule_id varia per regola; mappiamo per categoria nel selettore.
@@ -501,6 +577,17 @@ function selectKnownFix(finding) {
 
   if (cat === 'rls' && FIX_TABLE[ruleId]) {
     return FIX_TABLE[ruleId];
+  }
+
+  // --- RAMO AUTHZ FIRESTORE (SP-8, additivo) --------------------------------
+  if (cat === 'authz' && /firestore\.rules$/.test(file)) {
+    const mp = (finding.location && finding.location.symbol) || '';
+    return { kind: 'authz', apply: fixFirestoreRules, signature: `fix-fb-s3-owner-scope:${mp}` };
+  }
+  // --- RAMO SECRET FIREBASE serviceAccount.json (SP-8, additivo) -------------
+  // Precede i rami config.ts: il path serviceAccount.json e' disgiunto -> non interferisce.
+  if (cat === 'secret' && /serviceAccount\.json$/.test(file)) {
+    return { kind: 'secret', apply: fixSecretFbS1, signature: 'fix-fb-s1-neutralize-service-account' };
   }
 
   if (cat === 'secret' && isPy) {
