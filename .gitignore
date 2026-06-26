@@ -12,3 +12,8 @@ eval/ecosystems/*/reference-app/
 # node_modules provvigionate offline (knip/typescript copiati dal canonico) -> gitignorate.
 # I seeded-blueprint/ restano TRACKED (sono il materiale di gate del fixture).
 eval/build-discipline/*/reference-app/
+
+# AT-1 Fase A: le reference-app dei fixture anti-tamper sono inner-repo (node:test, zero
+# npm install) provvigionati dall'orchestratore -> gitignorate. I seeded-blueprint/ restano
+# TRACKED (sono il materiale di gate del fixture).
+eval/anti-tamper/*/reference-app/
