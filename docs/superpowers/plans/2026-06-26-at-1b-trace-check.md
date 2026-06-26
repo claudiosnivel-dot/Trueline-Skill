@@ -1213,10 +1213,13 @@ Poi riallinea l'install globale (copia-sopra da `dist/trueline.staging/.`, `pgsq
 
 | Onda | Task | `dipende_da` | Builder | Verifier (k) |
 |---|---|---|---|---|
-| **W1** | T1 checker, T2 fixture, T3 doc | — (indipendenti) | T1 **Opus**, T2/T3 **Sonnet** | Opus (T1 **k=2**) |
-| **W2** | T4 wiring | T1 | **Opus** | Opus |
-| **W3** | T5 keystone | T1, T2, T4 | **Opus** | Opus **k=2** |
-| **W4** | T6 integrazione | T5 (+ tutti) | — (orchestratore) | — |
+| **W1** | T1 checker ‖ T3 doc | — (indipendenti) | T1 **Opus**, T3 **Sonnet** | Opus **k=2** |
+| **W2** | T2 fixture | **T1** (`fixture_trace_check` importa `textTracesAc`) | **Sonnet** | Opus **k=2** |
+| **W3** | T4 wiring | T1, **T2** (il test usa le fixture trace) | **Opus** | Opus **k=2** |
+| **W4** | T5 keystone | T1, T2, T4 | **Opus** | Opus **k=2** |
+| **(fuori workflow)** | T6 integrazione | T5 (+ tutti) | — (orchestratore SERIALE) | — |
+
+> **Nota DAG (correzione del plan):** `fixture_trace_check.mjs` (T2) importa `textTracesAc` da T1, e `checkpoint.trace.test.mjs` (T4) esercita le fixture create da T2 → l'ordine reale è **T1 → T2 → T4 → T5** (T3 indipendente, gira in W1 con T1). Il keystone (T5) si verifica nel workflow solo **strutturalmente + exit-2 precondizione** (gli agenti non provisionano i `.git` dei fixture nuovi, `L-COL-024`); il gate pieno exit-0 è l'orchestratore (T6). La logica di trace è comunque provata da gate RUNNABILI in-workflow: T1 (unit), T2 (`fixture_trace_check` 12/12), T4 (`checkpoint.trace.test` sulle fixture reali).
 
 - **Model policy** (`DYNAMIC-WORKFLOWS` §5): verifier **sempre Opus**; **niente Haiku**. Builder Opus per la logica delicata (checker string-aware, wiring BIT-invariante, keystone); Sonnet per fixture/doc (meccanici).
 - **Pipeline per task:** build → verify(×k) vs il gate del task → fix-loop solo su rosso → l'orchestratore committa **solo sul verde**.
