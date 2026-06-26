@@ -80,7 +80,7 @@ const EXIT_USAGE = 2; // uso scorretto
 // -----------------------------------------------------------------------------
 function parseArgs(argv) {
   const positional = [];
-  const flags = { mode: 'build', eval: false, noOsv: false, inPlace: false, allowCanonical: false, keep: false, baseline: null };
+  const flags = { mode: 'build', eval: false, noOsv: false, inPlace: false, allowCanonical: false, keep: false, baseline: null, blueprint: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--eval') flags.eval = true;
@@ -92,6 +92,11 @@ function parseArgs(argv) {
     else if (a.startsWith('--mode=')) flags.mode = a.slice('--mode='.length);
     else if (a === '--baseline') flags.baseline = argv[++i];
     else if (a.startsWith('--baseline=')) flags.baseline = a.slice('--baseline='.length);
+    // --blueprint <dir>: opt-in AT-1 Fase A. Attiva il ramo AC-acceptance del
+    // controllo 4 (esegue i target_test del blueprint). Assente -> null -> ramo
+    // legacy INVARIATO (BIT-invarianza senza il flag).
+    else if (a === '--blueprint') flags.blueprint = argv[++i];
+    else if (a.startsWith('--blueprint=')) flags.blueprint = a.slice('--blueprint='.length);
     else if (a.startsWith('--')) { /* flag ignota: la ignoriamo, niente sorprese */ }
     else positional.push(a);
   }
@@ -192,7 +197,7 @@ function main() {
       emit({ ok: false, error: `projectDir assente: ${projectDir}` });
       process.exit(EXIT_EXEC_ERROR);
     }
-    const report = runOn(projectDir, { ...flags, baseline, copied: false, workspace: projectDir });
+    const report = runOn(projectDir, { ...flags, baseline, copied: false, workspace: projectDir, blueprint: flags.blueprint });
     // In-place: nessuna copia -> niente snapshot del fixture (il chiamante e'
     // owner della dir). Coerente col default sull'exit: errore di esecuzione
     // (oracolo non girato) -> exit 1 (NON verde); altrimenti 0 (esito nel JSON).
@@ -226,7 +231,7 @@ function main() {
   let report;
   try {
     ws = createVerifyWorkspace({ id: `checkpoint-${RUN_OPTS.runId}`, includeGit: true });
-    report = runOn(ws.dir, { ...flags, baseline, copied: true, workspace: ws.dir });
+    report = runOn(ws.dir, { ...flags, baseline, copied: true, workspace: ws.dir, blueprint: flags.blueprint });
   } catch (e) {
     report = { ok: false, error: `copia/esecuzione fallita: ${e && e.message ? e.message : e}` };
   } finally {
@@ -255,7 +260,7 @@ function main() {
 }
 
 // Esegue il checkpoint su `dir` (assoluto) e ne modella il report strutturato.
-function runOn(dir, { mode, eval: evalMode, noOsv, baseline, copied, workspace }) {
+function runOn(dir, { mode, eval: evalMode, noOsv, baseline, copied, workspace, blueprint }) {
   // PATH arricchito col go/bin noto (gitleaks/osv vivono li', non sul PATH).
   // checkpoint.mjs lo ri-arricchisce per ogni oracolo; lo facciamo anche qui
   // per coerenza se in futuro si invocassero tool dal processo padre.
@@ -268,12 +273,12 @@ function runOn(dir, { mode, eval: evalMode, noOsv, baseline, copied, workspace }
   // oracolo che non gira NON e' "verde", quindi non promuoviamo nulla; al
   // massimo ripetiamo la lettura). Distinto dal retry del LOOP (O-COL-006), che
   // re-applica una FIX. Cap piccolo: un errore persistente resta error/ok:false.
-  let cp = runCheckpoint(dir, { mode, baseline, runOpts: RUN_OPTS, withOsv: !noOsv });
+  let cp = runCheckpoint(dir, { mode, baseline, runOpts: RUN_OPTS, withOsv: !noOsv, blueprintDir: blueprint });
   let attempts = 1;
   const MAX_MEASURE_ATTEMPTS = 3;
   while (cp.controls.some((c) => c.status === 'error') && attempts < MAX_MEASURE_ATTEMPTS) {
     attempts += 1;
-    cp = runCheckpoint(dir, { mode, baseline, runOpts: RUN_OPTS, withOsv: !noOsv });
+    cp = runCheckpoint(dir, { mode, baseline, runOpts: RUN_OPTS, withOsv: !noOsv, blueprintDir: blueprint });
   }
 
   const controls = cp.controls.map(shapeControl);
