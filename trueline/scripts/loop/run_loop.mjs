@@ -56,6 +56,8 @@ const RUN_GITLEAKS = resolve(ORACLES, 'run_gitleaks.mjs');
 const RLS_CHECK = resolve(ORACLES, 'rls_check.mjs');
 const RUN_DEADCODE = resolve(ORACLES, 'run_deadcode.mjs');
 const RUN_SEMGREP = resolve(ORACLES, 'run_semgrep.mjs');
+// authz Firestore (SP-8): oracolo statico delle Security Rules (riuso SP-5).
+const FIRESTORE_RULES_CHECK = resolve(ORACLES, 'firestore_rules_check.mjs');
 const GO_BIN = process.platform === 'win32' ? 'C:/Users/claud/go/bin' : '/c/Users/claud/go/bin';
 
 const RUN_OPTS = { runId: 'loop-session', createdAt: '1970-01-01T00:00:00.000Z' };
@@ -103,6 +105,15 @@ function collectFindings(dir) {
 
   const dc = runOracle(RUN_DEADCODE, [dir], dir);
   if (dc.ok) findings.push(...norm('knip', dc.json, 'working-tree'));
+
+  // authz Firestore (SP-8): firestore_rules_check cammina `dir` per firestore.rules
+  // e ne emette i rilievi (category 'authz'). Additivo: senza firestore.rules nella
+  // copia l'oracolo non emette finding -> baseline/scope BIT-invarianti per i pack
+  // non-Firestore. Prova STATICA (no emulatore, L-COL-006).
+  const fr = runOracle(FIRESTORE_RULES_CHECK, [dir], dir);
+  if (fr.ok && fr.json && Array.isArray(fr.json.findings)) {
+    findings.push(...norm('firestore-rules', fr.json, 'working-tree'));
+  }
 
   // semgrep (M4, 07 §4): pattern vietati injection/authz (S6/S7), detection-only.
   // Collezionati SOLO per la baseline pre-fix (non per il loop): cosi' il checkpoint
@@ -204,6 +215,14 @@ function selectInScope(findings, manifest = null) {
     if (f.category === 'dead-code') {
       // Solo il file morto seminato S8 (unused.ts).
       if (baseName(f.location.file) === 'unused.ts') push(f);
+      continue;
+    }
+
+    if (f.category === 'authz') {
+      // SP-8: la regola Firestore vulnerabile FB-S3 vive in firestore.rules.
+      // Guardia su 'authz' nel verified_set del manifest (filtro in cima al loop):
+      // senza manifest authz NON e' nel set -> mai ammessa (BIT-invariante).
+      if (baseName(f.location.file) === 'firestore.rules') push(f);
       continue;
     }
 
