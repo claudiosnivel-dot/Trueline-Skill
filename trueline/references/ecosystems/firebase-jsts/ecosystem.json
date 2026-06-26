@@ -1,6 +1,7 @@
 {
+  "$comment": "authz verified = firestore_rules_check statico ri-eseguito pulito (regola non-`if true` owner-scoped); NON invarianza runtime (emulatore Firestore non disponibile) — L-COL-006.",
   "id": "firebase-jsts",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "languages": ["js", "ts"],
   "backend": "firebase",
   "detect": { "files_any": ["firebase.json", "firestore.rules"], "lang_any": ["package.json"] },
@@ -9,10 +10,11 @@
     "secret":          { "tool": "gitleaks", "shared": true },
     "dependency-vuln": { "tool": "osv", "lockfiles": ["package-lock.json", "pnpm-lock.yaml", "yarn.lock"] },
     "authz":           { "tool": "firestore_rules_check", "kind": "firestore-rules", "scan": ["."], "role": "authz-surface" },
-    "injection":       { "tool": "semgrep", "ruleset": "ruleset/" }
+    "injection":       { "tool": "semgrep", "ruleset": "ruleset/" },
+    "dead-code":       { "tool": "knip" }
   },
   "test_runner": { "detect": ["vitest", "jest", "mocha"] },
   "floor":        ["secret", "dependency-vuln", "authz"],
-  "verified_set": [],
+  "verified_set": ["secret", "dead-code", "authz"],
   "coverage_policy": "declared"
 }

@@ -1,8 +1,9 @@
 {
   "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack firebase-jsts (SP-5, T1.2). Stesso schema di eval/ecosystems/postgres-py/registry.json. Per ogni difetto seminato FB-S1..FB-S5: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso (tier detection, fase 1 L-COL-030: tutti detection-only, verified_set vuoto), ancora ispezionabile (file+marker | lockfile+symbol | file+marker+match_path), scope di scansione dell'oracolo, e note. Il floor [secret, dependency-vuln, authz] e' obbligatorio; FB-S4 (injection) e FB-S5 (dead-code) sono bonus non-floor. authz-surface qui = Firestore security rules (Firebase): `allow ... if true` = autorizzazione ASSENTE (CWE-862 Missing Authorization, threat model 07 §4.3), divergenza intenzionale dal CWE-285 della famiglia RLS.",
   "schema_version": "1.0",
-  "milestone": "SP-5",
+  "milestone": "SP-8",
   "ecosystem": "firebase-jsts",
+  "verified_set": ["secret", "dead-code", "authz"],
   "reference_app": "./reference-app",
   "defects": [
     {
@@ -11,7 +12,7 @@
       "source_oracle": "gitleaks",
       "owasp": "A07:2025",
       "cwe": "CWE-798",
-      "expected_fix_state": "detection-only",
+      "expected_fix_state": "verified",
       "anchor": {
         "file": "serviceAccount.json",
         "marker": "SEED:FB-S1"
@@ -40,7 +41,7 @@
       "source_oracle": "firestore-rules",
       "owasp": "A01:2025",
       "cwe": "CWE-862",
-      "expected_fix_state": "detection-only",
+      "expected_fix_state": "verified",
       "anchor": {
         "file": "firestore.rules",
         "marker": "SEED:FB-S3",
@@ -68,7 +69,7 @@
       "category": "dead-code",
       "source_oracle": "knip",
       "owasp": "-",
-      "expected_fix_state": "detection-only",
+      "expected_fix_state": "verified",
       "anchor": {
         "file": "src/dead.ts",
         "symbol": "unusedHelper",
