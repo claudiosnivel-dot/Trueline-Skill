@@ -732,6 +732,84 @@ function normalizeVulture(native, ctx) {
   return out;
 }
 
+// --- go-deadcode (dead-code Go — Eco-F5b) ------------------------------------
+// Nativo (da run_deadcode.mjs --tool=go-deadcode): { tool:'go-deadcode',
+//   issues:[{ symbol, file, line, kind:'unused-function' }] }. category=dead-code;
+//   severity=LOW (igiene, come knip/vulture). Un'issue = una funzione Go top-level
+//   irraggiungibile. Emettiamo un finding per simbolo, location.symbol=symbol (il
+//   symbol-carrier). Il fingerprint e' ANCORATO al simbolo (NON alla riga, che
+//   deadcode sposta): stessa funzione morta -> stesso fingerprint prima e dopo la
+//   fix, cosi' il loop (stillPresent per fingerprint) la riconosce.
+function normalizeGoDeadcode(native, ctx) {
+  const issues = native && Array.isArray(native.issues) ? native.issues : [];
+  const out = [];
+  for (const issue of issues) {
+    const normalizedPath = normalizePath(issue.file || '', { base: ctx.base });
+    const symbol = issue.symbol || undefined;
+    const ruleId = String(issue.kind || 'unused-function');
+    // match_signature: tipo-di-morto + simbolo + path (NON la riga).
+    const matchSignature = [ruleId, symbol || '', normalizedPath].join('|');
+    out.push(baseFinding(ctx, {
+      category: 'dead-code',
+      severity: 'LOW',
+      location: {
+        file: normalizedPath,
+        start_line: intOr(issue.line, 0),
+        end_line: intOr(issue.line, 0),
+        ...(symbol ? { symbol } : {}),
+      },
+      evidence: `Funzione Go irraggiungibile (${ruleId}): ${symbol || '?'} in ${normalizedPath} (go-deadcode).`,
+      source_oracle: {
+        oracle: 'go-deadcode',
+        tool_version: ctx.toolVersions['go-deadcode'],
+        rule_id: ruleId,
+      },
+      fingerprint: fingerprintOf({ oracle: 'go-deadcode', ruleId, normalizedPath, matchSignature }),
+      remediation_hint: 'Rimuovere la funzione morta (previo gate umano).',
+    }));
+  }
+  return out;
+}
+
+// --- dart (dead-code Dart/Flutter — Eco-F5b) ---------------------------------
+// Nativo (da run_deadcode.mjs --tool=dart): { tool:'dart', issues:[{ symbol, file,
+//   line, kind, code('unused_element'|'dead_code'), message }] }. category=dead-code;
+//   severity=LOW (igiene). Un'issue = un simbolo Dart non referenziato (o un blocco
+//   dead_code). Emettiamo un finding per simbolo, location.symbol=symbol (il
+//   symbol-carrier, quando presente). Il fingerprint e' ANCORATO al simbolo (NON
+//   alla riga): stesso simbolo morto -> stesso fingerprint prima e dopo la fix.
+function normalizeDart(native, ctx) {
+  const issues = native && Array.isArray(native.issues) ? native.issues : [];
+  const out = [];
+  for (const issue of issues) {
+    const normalizedPath = normalizePath(issue.file || '', { base: ctx.base });
+    const symbol = issue.symbol || undefined;
+    const code = String(issue.code || issue.kind || 'unused_element').toLowerCase();
+    const ruleId = code === 'dead_code' ? 'dead-code' : 'unused-element';
+    // match_signature: tipo-di-morto + simbolo + path (NON la riga).
+    const matchSignature = [ruleId, symbol || '', normalizedPath].join('|');
+    out.push(baseFinding(ctx, {
+      category: 'dead-code',
+      severity: 'LOW',
+      location: {
+        file: normalizedPath,
+        start_line: intOr(issue.line, 0),
+        end_line: intOr(issue.line, 0),
+        ...(symbol ? { symbol } : {}),
+      },
+      evidence: `Simbolo Dart non utilizzato (${ruleId}): ${symbol || '?'} in ${normalizedPath} (dart analyze).`,
+      source_oracle: {
+        oracle: 'dart',
+        tool_version: ctx.toolVersions.dart,
+        rule_id: ruleId,
+      },
+      fingerprint: fingerprintOf({ oracle: 'dart', ruleId, normalizedPath, matchSignature }),
+      remediation_hint: 'Rimuovere il simbolo morto (previo gate umano).',
+    }));
+  }
+  return out;
+}
+
 function makeKnipFinding(ctx, { ruleId, normalizedPath, symbol, startLine, evidence }) {
   // match_signature: tipo-di-morto + simbolo + path (NON la riga).
   const matchSignature = [ruleId, symbol || '', normalizedPath].join('|');
@@ -1080,6 +1158,12 @@ const ORACLE_ALIASES = {
   deadcode: 'knip',
   'dead-code': 'knip',
   vulture: 'vulture',
+  'go-deadcode': 'go-deadcode',
+  go_deadcode: 'go-deadcode',
+  godeadcode: 'go-deadcode',
+  dart: 'dart',
+  'dart-analyze': 'dart',
+  dart_analyze: 'dart',
   osv: 'osv',
   'osv-scanner': 'osv',
   semgrep: 'semgrep',
@@ -1095,7 +1179,7 @@ export function normalize(oracle, native, opts = {}) {
   const canon = ORACLE_ALIASES[String(oracle).toLowerCase()];
   if (!canon) {
     throw new Error(
-      `oracolo sconosciuto: "${oracle}" (ammessi: gitleaks, rls-check, firestore-rules, knip, vulture, osv, semgrep)`,
+      `oracolo sconosciuto: "${oracle}" (ammessi: gitleaks, rls-check, firestore-rules, knip, vulture, go-deadcode, dart, osv, semgrep)`,
     );
   }
   const ctx = {
@@ -1113,6 +1197,8 @@ export function normalize(oracle, native, opts = {}) {
       'appsync-auth': 'appsync-auth-check',
       knip: 'knip',
       vulture: 'vulture',
+      'go-deadcode': 'go-deadcode',
+      dart: 'dart',
       osv: 'osv-scanner',
       semgrep: 'semgrep',
       ...(opts.toolVersions || {}),
@@ -1137,6 +1223,10 @@ export function normalize(oracle, native, opts = {}) {
       return normalizeKnip(native, ctx);
     case 'vulture':
       return normalizeVulture(native, ctx);
+    case 'go-deadcode':
+      return normalizeGoDeadcode(native, ctx);
+    case 'dart':
+      return normalizeDart(native, ctx);
     case 'osv':
       return normalizeOsv(native, ctx);
     case 'semgrep':

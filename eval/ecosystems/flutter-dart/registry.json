@@ -1,9 +1,9 @@
 {
-  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack flutter-dart (eco-F5a, tier verified-secret). Per ogni difetto seminato FD-S1..FD-S3: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso. Il floor [secret, dependency-vuln, authz] e' obbligatorio. FD-S1 = secret hardcoded (gitleaks, working-tree) -> VERIFIED (eco-F5a): fix sostituisce il literal _supabaseServiceKey con Platform.environment['SUPABASE_SERVICE_KEY'], gitleaks WT torna pulito. FD-S2 = dipendenza vulnerabile reale archive@3.3.0 (osv, lockfile pubspec.lock, advisories GHSA-9v85-q87q-g4vg + GHSA-r285-q736-9v95) -> detection-only. FD-S3 = mutazione Supabase senza verifica identita (semgrep, best-effort Dart sperimentale) -> detection-only. authz-surface = route-authz Supabase (supabase.from().insert/update/delete senza auth.currentUser check). NON RLS-al-DB. Semgrep Dart e' sperimentale -> authz/injection best-effort, oracolo degrada onesto (L-COL-006). verified_set=[secret] (eco-F5a, L-COL-030 fase 2).",
+  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack flutter-dart (eco-F5b, tier verified-secret+dead-code). Per ogni difetto seminato FD-S1..FD-S4: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso. Il floor [secret, dependency-vuln, authz] e' obbligatorio. FD-S1 = secret hardcoded (gitleaks, working-tree) -> VERIFIED (eco-F5a): fix sostituisce il literal _supabaseServiceKey con Platform.environment['SUPABASE_SERVICE_KEY'], gitleaks WT torna pulito. FD-S2 = dipendenza vulnerabile reale archive@3.3.0 (osv, lockfile pubspec.lock, advisories GHSA-9v85-q87q-g4vg + GHSA-r285-q736-9v95) -> detection-only. FD-S3 = mutazione Supabase senza verifica identita (semgrep, best-effort Dart sperimentale) -> detection-only. authz-surface = route-authz Supabase (supabase.from().insert/update/delete senza auth.currentUser check). NON RLS-al-DB. Semgrep Dart e' sperimentale -> authz/injection best-effort, oracolo degrada onesto (L-COL-006). FD-S4 = dead-code _unusedHelper in lib/dead.dart (dart analyze, UNUSED_ELEMENT) -> VERIFIED (eco-F5b). verified_set=[secret,dead-code] (eco-F5b, L-COL-030 fase 2).",
   "schema_version": "1.0",
-  "milestone": "eco-F5a",
+  "milestone": "eco-F5b",
   "ecosystem": "flutter-dart",
-  "verified_set": ["secret"],
+  "verified_set": ["secret","dead-code"],
   "reference_app": "eval/ecosystems/flutter-dart/reference-app",
   "defects": [
     {
@@ -48,6 +48,20 @@
       },
       "scan_scope": "working-tree",
       "notes": "Funzione createPost (lib/routes/posts.dart) che chiama supabase.from('posts').insert(data) SENZA verificare supabase.auth.currentUser: chiunque puo' inserire record (CWE-862, A01:2025). Analogo deletePost chiama .delete() senza auth check. Semgrep (flutter-dart-supabase-mutate-no-auth-check, Dart sperimentale): rileva il sink insert/delete nel corpo senza pattern-not-inside auth.currentUser. Best-effort: Dart e' linguaggio sperimentale in semgrep -> l'oracolo puo' degradare onesto (assenza finding != assenza difetto, L-COL-006). Contrasto PULITO: createPostSafe/updatePostSafe verificano supabase.auth.currentUser prima di ogni mutazione e NON devono produrre finding (precisione). health.dart usa solo .select() (sola lettura) e NON e' bersaglio. Tier detection: trovato, non auto-fixato."
+    },
+    {
+      "id": "FD-S4",
+      "category": "dead-code",
+      "source_oracle": "dart",
+      "owasp": "-",
+      "expected_fix_state": "verified",
+      "anchor": {
+        "file": "lib/dead.dart",
+        "symbol": "_unusedHelper",
+        "marker": "SEED:FLUTTERDART-DC"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Bonus, NON-floor (gateato da verify via dart analyze). Funzione privata _unusedHelper top-level in lib/dead.dart, MAI referenziata: dart analyze --format=machine segnala UNUSED_ELEMENT (\"The declaration '_unusedHelper' isn't referenced.\"). Il contrasto usedHelper e' una funzione pubblica top-level che dart analyze NON segnala come unused_element (le dichiarazioni pubbliche potrebbero essere usate da importatori esterni: nessun finding, precisione). Categoria dead-code; owasp/cwe non applicabili (omessi/'-'). Tier VERIFIED (eco-F5b): dead-code e' nel verified_set; rimuovere _unusedHelper da lib/dead.dart porta dart analyze a 0 UNUSED_ELEMENT su dead.dart -> fix_state `verified`."
     }
   ]
 }

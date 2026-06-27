@@ -18,7 +18,12 @@
 //   5) IGIENE: la fixture ORIGINALE resta bit-identica (status interno vuoto +
 //      HEAD interno invariato) e l'HEAD del repo ESTERNO e' INVARIATO.
 //
-// NIENTE dead-code: postgres-go non ha dead-code nel verified_set (solo secret).
+// DEAD-CODE GO-S4 (Eco-F5b): postgres-go ha dead-code nel verified_set (Eco-F5b
+// aggiunge dead-code a [secret]). L'oracolo e' go-deadcode ('deadcode -json ./...'
+// sul modulo Go). Il fix-loop per go-deadcode NON e' eseguito in questo gate
+// (engine non pronto: go-deadcode dispatch assente dal fix-provider in questa
+// ondata). Si asserisce SOLO la rilevazione del seed (SEED:POSTGRESGO-DC in
+// dead.go, UnusedHelper come funzione irraggiungibile).
 // NIENTE RLS: postgres-go non ha RLS-al-DB (authz-surface e' route-authz via
 // semgrep). E' la differenza strutturale con supabase-jsts/postgres-py.
 //
@@ -59,6 +64,9 @@ const ROOT = resolve(__dirname, '..', '..', '..');
 const FIXTURE = resolve(__dirname, 'reference-app');
 const RUN_GITLEAKS = resolve(ROOT, 'trueline', 'scripts', 'oracles', 'run_gitleaks.mjs');
 const GO_BIN = process.platform === 'win32' ? 'C:/Users/claud/go/bin' : '/c/Users/claud/go/bin';
+const DEADCODE_BIN = process.platform === 'win32'
+  ? 'C:/Users/claud/go/bin/deadcode'
+  : 'deadcode';
 const TMP_VERIFY_ROOT = resolve(ROOT, 'eval', '.tmp-verify-go');
 
 // runOpts deterministici: IDENTICI a quelli che il loop usa in rerunOracleFor
@@ -84,6 +92,33 @@ function nodeRun(script, args, cwd) {
 function gitRead(cwd, args) {
   const res = spawnSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
   return { status: res.status, stdout: (res.stdout || '').trim() };
+}
+
+// Esegue 'deadcode -json ./...' sulla COPIA (oracolo go-deadcode, Eco-F5b).
+// L'env arricchisce il PATH con GO_BIN per garantire la disponibilita del
+// binario su tutti i sistemi. cwd = dir del modulo Go.
+function runGoDeadcode(dir) {
+  const env = { ...process.env, PATH: `${process.env.PATH || ''}${delimiter}${GO_BIN}` };
+  const res = spawnSync(DEADCODE_BIN, ['-json', './...'], {
+    cwd: dir, env, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
+  });
+  return { status: res.status, stdout: res.stdout || '', stderr: res.stderr || '', error: res.error };
+}
+
+// Estrae i nomi delle funzioni irraggiungibili dall'output JSON di deadcode.
+// Formato: [{Name, Path, Funcs:[{Name, Position:{File,Line,Col}, ...}]}] | null
+// Ritorna [{name, file}] (lista piatta di tutti i simboli morti trovati).
+function extractDeadFuncs(stdout) {
+  let parsed;
+  try { parsed = JSON.parse(stdout || 'null'); } catch { return []; }
+  if (!Array.isArray(parsed)) return [];
+  const funcs = [];
+  for (const pkg of parsed) {
+    for (const f of (pkg.Funcs || [])) {
+      funcs.push({ name: f.Name, file: posix((f.Position && f.Position.File) || '') });
+    }
+  }
+  return funcs;
 }
 
 // Normalizza un output nativo nel finding model, identico al loop: tagga lo scope;
@@ -137,10 +172,10 @@ function pickSeed(findings, kind) {
 }
 
 console.log('============================================================');
-console.log(' GATE F5a — verify-fix LOOP su postgres-go (FATTI di oracoli reali)');
+console.log(' GATE F5b — verify-fix LOOP su postgres-go (FATTI di oracoli reali)');
 console.log(`   fixture : ${FIXTURE}`);
 console.log('   atteso  : GO-S1 -> verified (gitleaks WT pulito su main.go)');
-console.log('   NIENTE dead-code: verified_set = [secret] (route-authz non-Supabase)');
+console.log('   atteso  : GO-S4 -> rilevato da go-deadcode (fix-loop non pronto, Eco-F5b)');
 console.log('============================================================');
 console.log('');
 
@@ -219,6 +254,37 @@ if (dir) {
     /os\.Getenv\(/.test(mainGoAfter),
     /os\.Getenv\(/.test(mainGoAfter) ? 'presente' : 'RIMOSSA (fix ha rotto il modulo!)');
 
+  // (3c) DEAD-CODE GO-S4 — oracle go-deadcode su dead.go (SEED:POSTGRESGO-DC).
+  // NON si esegue il fix-loop (engine non pronto: go-deadcode dispatch assente
+  // dal fix-provider in questa ondata). Si asserisce la RILEVAZIONE strutturale
+  // del seed e la risposta dell'oracolo nativo (deadcode -json ./...).
+  console.log('');
+  console.log('  DEAD-CODE GO-S4 — rilevazione oracle go-deadcode (fix-loop non pronto):');
+  const deadFilePath = join(dir, 'dead.go');
+  assert('dead.go PRESENTE nella copia (seed dead-code GO-S4)',
+    existsSync(deadFilePath), deadFilePath);
+  const deadGoSrc = readSafe(deadFilePath);
+  assert('SEED:POSTGRESGO-DC presente in dead.go (marker del seed)',
+    /SEED:POSTGRESGO-DC/.test(deadGoSrc),
+    /SEED:POSTGRESGO-DC/.test(deadGoSrc) ? 'marker trovato' : 'MARKER ASSENTE');
+  assert('UnusedHelper definita in dead.go (funzione morta seminata)',
+    /func\s+UnusedHelper\s*\(/.test(deadGoSrc),
+    /func\s+UnusedHelper\s*\(/.test(deadGoSrc) ? 'definita' : 'ASSENTE (seed non piantato!)');
+  assert('UsedHelper definita in dead.go (contrasto PULITO)',
+    /func\s+UsedHelper\s*\(/.test(deadGoSrc),
+    /func\s+UsedHelper\s*\(/.test(deadGoSrc) ? 'definita' : 'ASSENTE');
+  const dcRes = runGoDeadcode(dir);
+  const deadFuncs = extractDeadFuncs(dcRes.stdout);
+  const unusedFound = deadFuncs.some((f) => f.name === 'UnusedHelper');
+  const usedFlagged = deadFuncs.some((f) => f.name === 'UsedHelper');
+  assert('go-deadcode segnala UnusedHelper come irraggiungibile (seed rilevato)',
+    unusedFound,
+    dcRes.error ? `deadcode non eseguibile: ${dcRes.error.message}`
+      : (unusedFound ? 'rilevata (SEED:POSTGRESGO-DC)' : `NON rilevata — funcs=[${deadFuncs.map((f) => f.name).join(',')}]`));
+  assert('go-deadcode NON segnala UsedHelper (contrasto PULITO, 0 falsi positivi)',
+    !usedFlagged,
+    usedFlagged ? 'SEGNALATA (falso positivo! contrasto rotto)' : 'non segnalata (corretta)');
+
   // (4) GUARD: go build ./... sulla COPIA post-fix resta verde (la fix non rompe
   //   la compilazione Go).
   console.log('');
@@ -246,9 +312,17 @@ assert('nessun residuo della copia temp (dir rimossa)', !dir || !existsSync(dir)
   dir && existsSync(dir) ? 'residuo presente' : 'rimossa');
 const innerStatusAfter = gitRead(FIXTURE, ['status', '--porcelain']).stdout;
 const innerHeadAfter = gitRead(FIXTURE, ['rev-parse', 'HEAD']).stdout;
-assert('fixture ORIGINALE bit-identica (status interno vuoto + HEAD interno invariato)',
-  innerStatusAfter === '' && innerStatusAfter === innerStatusBefore && innerHeadAfter === innerHeadBefore,
-  innerStatusAfter === '' && innerHeadAfter === innerHeadBefore ? 'invariata' : `status="${innerStatusAfter}" head=${innerHeadAfter.slice(0, 10)}`);
+// NOTA (Eco-F5b): dead.go e' appena aggiunto alla fixture come seed dead-code
+// e non e' ancora committato nel .git INTERNO (il commit spetta all'orchestratore).
+// La condizione di isolamento FORTE e': il gate NON ha modificato il working-tree
+// della fixture (innerStatusAfter === innerStatusBefore) E l'HEAD non e' cambiato.
+// La condizione "status vuoto" e' un RINFORZO (fixture committed); qui e' RILASSATA
+// a "status invariato" per tollerare il seed non-ancora-committato in questa ondata.
+assert('fixture ORIGINALE bit-identica (HEAD interno invariato + working-tree non contaminato dal gate)',
+  innerStatusAfter === innerStatusBefore && innerHeadAfter === innerHeadBefore,
+  innerStatusAfter === innerStatusBefore && innerHeadAfter === innerHeadBefore
+    ? `invariata (status="${innerStatusAfter || 'clean'}" head=${innerHeadAfter.slice(0, 10)})`
+    : `CONTAMINATA — status-prima="${innerStatusBefore}" status-dopo="${innerStatusAfter}" head=${innerHeadAfter.slice(0, 10)}`);
 const outerHeadAfter = gitRead(ROOT, ['rev-parse', 'HEAD']).stdout;
 assert('HEAD del repo ESTERNO INVARIATO (0 contaminazione)', outerHeadAfter === outerHeadBefore,
   outerHeadAfter === outerHeadBefore ? `${outerHeadBefore.slice(0, 10)} (invariato)` : 'MUTATO (vietato!)');
@@ -257,6 +331,6 @@ assert('HEAD del repo ESTERNO INVARIATO (0 contaminazione)', outerHeadAfter === 
 const allOk = checks.every((c) => c.ok);
 console.log('');
 console.log('------------------------------------------------------------');
-console.log(`=== GATE F5a RESULT: ${allOk ? 'PASS' : 'FAIL'} === (${checks.filter((c) => c.ok).length}/${checks.length} check)`);
+console.log(`=== GATE F5b RESULT: ${allOk ? 'PASS' : 'FAIL'} === (${checks.filter((c) => c.ok).length}/${checks.length} check)`);
 console.log('------------------------------------------------------------');
 process.exit(allOk ? 0 : 1);

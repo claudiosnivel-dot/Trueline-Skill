@@ -961,14 +961,16 @@ function collectFindingsForLoop(dir, manifest) {
     if (j) out.push(...normForLoop('rls-check', j, 'static-ddl'));
   }
 
-  // dead-code -> wrapper run_deadcode col tool del binding (vulture per Python).
+  // dead-code -> wrapper run_deadcode col tool del binding. knip (JS, default) /
+  // vulture (Python) / go-deadcode (Go) / dart (Dart, eco-F5b): dispatch keyed sul
+  // tool del manifest, additivo (knip/vulture invariati: knip=default, gli altri --tool=).
   if (bindings['dead-code']) {
     const tool = bindings['dead-code'].tool || 'knip';
-    const r = (tool === 'vulture')
-      ? nodeRun(RUN_DEADCODE, [dir, '--tool=vulture'], dir)
-      : nodeRun(RUN_DEADCODE, [dir], dir);
+    const r = (tool === 'knip')
+      ? nodeRun(RUN_DEADCODE, [dir], dir)
+      : nodeRun(RUN_DEADCODE, [dir, `--tool=${tool}`], dir);
     let j = null; try { j = JSON.parse(r.stdout); } catch { /* */ }
-    if (j) out.push(...normForLoop(tool === 'vulture' ? 'vulture' : 'knip', j, 'working-tree'));
+    if (j) out.push(...normForLoop(tool === 'knip' ? 'knip' : tool, j, 'working-tree'));
   }
 
   // authz -> firestore_rules_check (cammina `dir` per firestore.rules). (SP-8)

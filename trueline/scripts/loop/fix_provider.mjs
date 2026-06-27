@@ -28,6 +28,8 @@ import { resolve, join } from 'node:path';
 
 import { removePySymbol } from './py_deadcode_edit.mjs';
 import { removeTsSymbol } from './ts_deadcode_edit.mjs';
+import { removeGoSymbol } from './go_deadcode_edit.mjs';
+import { removeDartSymbol } from './dart_deadcode_edit.mjs';
 import { resolveRlsMigrationsDir, resolveRlsMigrationFile } from './rls_scan.mjs';
 
 // Path RELATIVO STORICO della migration primaria (layout Supabase). Conservato
@@ -953,6 +955,89 @@ function selectPerLangSecretFix(file) {
   return PERLANG_SECRET_FIXES.find((spec) => spec.ext.test(file)) || null;
 }
 
+// =============================================================================
+// FIX DEAD-CODE GO / DART (Eco-F5b) — additivo. Promuove i pack postgres-go e
+// flutter-dart al tier `verified` sulla categoria `dead-code`. Dispatch in
+// selectKnownFix keyed su cat==='dead-code' + ESTENSIONE del file (.go / .dart):
+// estensioni DISGIUNTE dai rami dead-code esistenti (.ts knip, .py vulture) ->
+// knip/vulture/ts/py INTATTI (BIT-invariante). Ogni fix rimuove la SOLA funzione
+// morta segnalata (go-deadcode / dart analyze) delegando all'helper riusabile, che
+// rimuove SOLO la definizione top-level e FALLISCE ONESTAMENTE se il simbolo non e'
+// una funzione top-level (mai una rimozione approssimata). Gate umano: L-COL-021
+// (in eval auto-approvato dal loop). Dopo la fix l'oracolo NON segnala piu' il
+// simbolo -> verified; il contrasto pulito (UsedHelper / usedHelper) resta intatto.
+// =============================================================================
+
+// Risolve il path ASSOLUTO del file .go nella COPIA `dir` dal path (eventualmente
+// repo-relativo) del finding. Modulo Go flat: il seed (dead.go) vive alla radice
+// della copia. NON esce mai dalla copia (nessun ../ verso l'esterno).
+function resolveGoFileInCopy(dir, rel) {
+  const norm = String(rel || '').replace(/\\/g, '/');
+  // Path cosi' com'e' relativo alla copia (caso piu' comune dopo normalize).
+  const direct = resolve(dir, norm);
+  if (existsSync(direct)) return direct;
+  // Basename alla radice della copia (modulo Go flat: dead.go).
+  const base = norm.split('/').pop();
+  if (base) {
+    const cand = resolve(dir, base);
+    if (existsSync(cand)) return cand;
+  }
+  return null;
+}
+
+// Risolve il path ASSOLUTO del file .dart nella COPIA `dir`. Layout flutter-dart:
+// i sorgenti vivono sotto 'lib/'. Prende il segmento da "lib/" se presente; altrimenti
+// il path diretto. NON esce mai dalla copia.
+function resolveDartFileInCopy(dir, rel) {
+  const norm = String(rel || '').replace(/\\/g, '/');
+  const m = /(?:^|\/)(lib\/.+\.dart)$/.exec(norm);
+  if (m) {
+    const cand = resolve(dir, m[1]);
+    if (existsSync(cand)) return cand;
+  }
+  const direct = resolve(dir, norm);
+  if (existsSync(direct)) return direct;
+  return null;
+}
+
+// GO-S4 — dead-code Go (postgres-go): rimuove in modo SICURO la funzione top-level
+// morta segnalata da go-deadcode (finding {file, symbol}, ruleId unused-function).
+// Delega a removeGoSymbol (go_deadcode_edit.mjs). Dopo, 'deadcode -json ./...' NON
+// segnala piu' la funzione -> verified; UsedHelper (chiamata da init()) resta intatta.
+function fixDeadcodeGoSymbol(dir, finding) {
+  const rel = String((finding && finding.location && finding.location.file) || '').replace(/\\/g, '/');
+  const symbol = (finding && finding.location && finding.location.symbol) || '';
+  if (!rel || !symbol) {
+    return { ok: false, detail: `GO-S4: finding senza file/symbol (file=${rel || '?'} symbol=${symbol || '?'})` };
+  }
+  const absFile = resolveGoFileInCopy(dir, rel);
+  if (!absFile) {
+    return { ok: false, detail: `GO-S4: file Go non risolto nella copia (${rel})` };
+  }
+  const r = removeGoSymbol(absFile, symbol);
+  if (!r.ok) return { ok: false, detail: `GO-S4: ${r.detail}` };
+  return { ok: true, detail: `GO-S4: ${r.detail}` };
+}
+
+// FD-S4 — dead-code Dart (flutter-dart): rimuove in modo SICURO la funzione top-level
+// morta segnalata da dart analyze (finding {file, symbol}, ruleId unused-element).
+// Delega a removeDartSymbol (dart_deadcode_edit.mjs). Dopo, 'dart analyze' NON segnala
+// piu' UNUSED_ELEMENT per il simbolo -> verified; usedHelper (pubblica) resta intatta.
+function fixDeadcodeDartSymbol(dir, finding) {
+  const rel = String((finding && finding.location && finding.location.file) || '').replace(/\\/g, '/');
+  const symbol = (finding && finding.location && finding.location.symbol) || '';
+  if (!rel || !symbol) {
+    return { ok: false, detail: `FD-S4: finding senza file/symbol (file=${rel || '?'} symbol=${symbol || '?'})` };
+  }
+  const absFile = resolveDartFileInCopy(dir, rel);
+  if (!absFile) {
+    return { ok: false, detail: `FD-S4: file Dart non risolto nella copia (${rel})` };
+  }
+  const r = removeDartSymbol(absFile, symbol);
+  if (!r.ok) return { ok: false, detail: `FD-S4: ${r.detail}` };
+  return { ok: true, detail: `FD-S4: ${r.detail}` };
+}
+
 // Mappa controlId(rule_id) -> costruttore di patch.
 const FIX_TABLE = {
   // gitleaks: il rule_id varia per regola; mappiamo per categoria nel selettore.
@@ -1092,6 +1177,20 @@ function selectKnownFix(finding) {
     // ogni simbolo morto distinto ha una patch MATERIALMENTE distinta.
     const sym = (finding.location && finding.location.symbol) || '?';
     return { kind: 'dead-code', apply: fixDeadcodeSymbol, signature: `fix-spy-s5-remove-symbol:${sym}` };
+  }
+
+  // --- RAMI DEAD-CODE GO / DART (Eco-F5b, additivi) -------------------------
+  // Keyed su cat==='dead-code' + ESTENSIONE del file (.go / .dart): DISGIUNTE dai
+  // rami dead-code esistenti (.py vulture sopra, .ts knip sotto) -> knip/vulture/
+  // ts/py INTATTI (BIT-invariante). La signature include il simbolo: ogni funzione
+  // morta distinta ha una patch MATERIALMENTE distinta.
+  if (cat === 'dead-code' && /\.go$/.test(file)) {
+    const sym = (finding.location && finding.location.symbol) || '?';
+    return { kind: 'dead-code', apply: fixDeadcodeGoSymbol, signature: `fix-go-s4-remove-func:${sym}` };
+  }
+  if (cat === 'dead-code' && /\.dart$/.test(file)) {
+    const sym = (finding.location && finding.location.symbol) || '?';
+    return { kind: 'dead-code', apply: fixDeadcodeDartSymbol, signature: `fix-fd-s4-remove-func:${sym}` };
   }
 
   // --- RAMO JS/TS (invariato per m5/supabase-jsts; additivo per postgres-jsts) --

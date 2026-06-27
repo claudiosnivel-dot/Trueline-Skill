@@ -1,14 +1,14 @@
 #!/usr/bin/env node
-// verify_fix_check.mjs — GATE di VERIFY (eco-F5a): il verify-fix LOOP promuove a
-// `verified` la categoria secret del verified_set sulla fixture flutter-dart
+// verify_fix_check.mjs — GATE di VERIFY (eco-F5b): il verify-fix LOOP promuove a
+// `verified` le categorie del verified_set sulla fixture flutter-dart
 // (Flutter/Dart + Supabase, authz-surface = route-authz via semgrep Dart
 // sperimentale, NIENTE RLS-al-DB). Clone adattato di
-// eval/ecosystems/firebase-jsts/verify_fix_check.mjs — solo secret (FD-S1).
-// Scritto TEST-FIRST.
+// eval/ecosystems/firebase-jsts/verify_fix_check.mjs — secret (FD-S1) e
+// dead-code (FD-S4). Scritto TEST-FIRST.
 //
-// Il "verde" e' un FATTO degli ORACOLI riesiguiti dal loop (gitleaks), MAI
-// una frase dell'LLM (L-COL-002). Su una COPIA ISOLATA della fixture
-// (eval/.tmp-verify-dart/<pid>-<n>, .git incluso) il gate, in 9 stadi:
+// Il "verde" e' un FATTO degli ORACOLI riesiguiti dal loop (gitleaks, dart
+// analyze), MAI una frase dell'LLM (L-COL-002). Su una COPIA ISOLATA della
+// fixture (eval/.tmp-verify-dart/<pid>-<n>, .git incluso) il gate, in 10 stadi:
 //   1) SNAPSHOT d'integrita' (sola lettura) — repo ESTERNO + fixture INTERNA;
 //   2) PRECONDIZIONE: se reference-app/.git manca -> banner + exit 2 (il
 //      provisioning dell'inner-repo e' dell'ORCHESTRATORE, L-COL-024);
@@ -22,24 +22,30 @@
 //        FD-S1 (secret lib/config.dart, working-tree) -> verified (gitleaks WT pulito)
 //      + RE-RUN INDIPENDENTE: gitleaks WT pulito (0 secret) post-fix;
 //      + CONTRASTO testuale: literal _supabaseServiceKey sparisce da lib/config.dart;
+//   8d) DEAD-CODE FD-S4 — dart analyze (SEED:FLUTTERDART-DC):
+//      + PRE-FIX: dart analyze rileva UNUSED_ELEMENT per _unusedHelper in dead.dart;
+//      + FIX diretto: rimuove _unusedHelper da lib/dead.dart;
+//      + POST-FIX: dart analyze NON segnala piu' _unusedHelper (0 UNUSED_ELEMENT su dead.dart);
+//      + CONTRASTO testuale: usedHelper ancora presente in dead.dart;
 //   9) IGIENE: temp pulito, fixture ORIGINALE bit-identica (status interno +
 //      HEAD interno INVARIATI vs snapshot) e HEAD del repo ESTERNO INVARIATO.
 //
-// NIENTE dead-code (knip): non e' nel verified_set di flutter-dart.
 // NIENTE authz (semgrep Dart sperimentale): non e' nel verified_set di flutter-dart.
 // NIENTE secret-in-history: la fixture NON semina un FD-S6 history -> nessun
 //   esito mitigated-residual atteso.
 // NIENTE node:test GUARD: flutter-dart e' un progetto Dart puro; la suite di
 //   caratterizzazione usa `dart test` (characterization_test.dart), non node:test.
-//   Il gate non esegue dart (non disponibile nell'ambiente): omesso onestamente
-//   (L-COL-006). Il contrasto testuale sul file e l'oracolo gitleaks sono la rete.
+//   Il gate non esegue dart test (scope fuori dal verified_set): omesso onestamente
+//   (L-COL-006). Gli oracoli gitleaks e dart analyze sono la rete.
 //
 // FALSIFICABILITA': neutralizzando il fix del secret (no-op) questo gate DEVE
-// fallire su FD-S1 (gitleaks continua a segnalare lib/config.dart). Il gate NON
-// e' un timbro sempre-verde.
+// fallire su FD-S1 (gitleaks continua a segnalare lib/config.dart). Neutralizzando
+// il fix dead-code (no-op) questo gate DEVE fallire su FD-S4 (dart analyze
+// continua a segnalare _unusedHelper). Il gate NON e' un timbro sempre-verde.
 //
 // Gli oracoli gitleaks richiedono C:/Users/claud/go/bin sul PATH: lo arricchiamo
-// per gli spawn. NON tocca MAI il git del repo ESTERNO se non in SOLA LETTURA. Le
+// per gli spawn. dart analyze usa il PATH di sistema (dart nel PATH di Windows).
+// NON tocca MAI il git del repo ESTERNO se non in SOLA LETTURA. Le
 // mutazioni git avvengono sul .git INTERNO della COPIA (isolato, L-COL-024).
 //
 // Node ESM, solo built-in + i moduli del loop (tutti dep-free). Esce 0 sse TUTTI
@@ -47,7 +53,7 @@
 
 import { spawnSync } from 'node:child_process';
 import {
-  existsSync, readFileSync, cpSync, rmSync, mkdirSync, readdirSync,
+  existsSync, readFileSync, writeFileSync, cpSync, rmSync, mkdirSync, readdirSync,
 } from 'node:fs';
 import { resolve, dirname, delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -154,11 +160,60 @@ function gitleaksWtCount(dir) {
   return Array.isArray(json) ? json.length : null;
 }
 
+// Esegue `dart analyze --format=machine lib/dead.dart` sulla copia (cwd=dir).
+// Ritorna { stdout, stderr, status, error }. L'output machine-readable e' su stdout.
+// Exit 0 = nessun problema; exit 2 = warning; exit 3 = hint. NON e' un errore.
+function dartAnalyze(dir) {
+  const res = spawnSync('dart', ['analyze', '--format=machine', 'lib/dead.dart'], {
+    cwd: dir, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 60_000,
+  });
+  return { status: res.status, stdout: res.stdout || '', stderr: res.stderr || '', error: res.error };
+}
+
+// Controlla se dart analyze ha segnalato UNUSED_ELEMENT per `symbol` nello stdout
+// del format=machine. Formato riga: severity|type|UNUSED_ELEMENT|file|...|message
+// dove message contiene "'<symbol>' isn't referenced".
+function dartFlagsUnused(output, symbol) {
+  const lines = output.split(/\r?\n/);
+  return lines.some((line) => {
+    const parts = line.split('|');
+    if (parts.length < 4) return false;
+    const code = parts[2];
+    const msg = parts[parts.length - 1];
+    return code === 'UNUSED_ELEMENT'
+      && (msg.includes(`'${symbol}'`) || msg.includes(`"${symbol}"`));
+  });
+}
+
+// Applica il fix FD-S4: rimuove la riga/linee della definizione di `symbol`
+// (funzione privata top-level) da `relFile` nella copia `dir`.
+// Pattern: `String _unusedHelper() => 'dead'; // SEED:FLUTTERDART-DC`
+// La regex cattura l'intera riga (anche con commento in coda) terminata da \n.
+function fixDartDeadcode(dir, relFile, symbol) {
+  const p = resolve(dir, relFile);
+  if (!existsSync(p)) return { ok: false, detail: `file assente: ${relFile}` };
+  const before = readFileSync(p, 'utf8');
+  // Rimuove la riga della definizione della funzione morta: qualsiasi tipo di
+  // ritorno Dart, seguito dal nome del simbolo, la firma e il corpo (=>...).
+  // Il commento SEED: in coda e' opzionale. Cattura fino a \n incluso.
+  const re = new RegExp(
+    '^[^\n]*\\b' + symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\([^)]*\\)[^\n]*\\n?',
+    'm',
+  );
+  const after = before.replace(re, '');
+  if (after === before) {
+    return { ok: false, detail: `${symbol}: pattern non trovato in ${relFile} (fix non applicabile)` };
+  }
+  writeFileSync(p, after, 'utf8');
+  return { ok: true, detail: `${symbol} rimosso da ${relFile}` };
+}
+
 console.log('============================================================');
-console.log(' GATE VERIFY (eco-F5a) — verify-fix LOOP su flutter-dart (FATTI di oracoli reali)');
+console.log(' GATE VERIFY (eco-F5b) — verify-fix LOOP su flutter-dart (FATTI di oracoli reali)');
 console.log(`   fixture : ${FIXTURE}`);
 console.log('   atteso  : FD-S1 -> verified (secret lib/config.dart, gitleaks WT pulito)');
-console.log('   SOLO secret: verified_set = [secret] (dead-code/authz detection-only)');
+console.log('             FD-S4 -> verified (dead-code _unusedHelper lib/dead.dart, dart analyze)');
+console.log('   verified_set = [secret, dead-code] (authz detection-only)');
 console.log('   NIENTE node:test GUARD: progetto Dart puro (no JS test suite)');
 console.log('============================================================');
 console.log('');
@@ -262,6 +317,63 @@ if (dir) {
   assert('contrasto: lib/config.dart contiene ancora una lettura da Platform.environment (env-read)',
     /Platform\.environment/.test(cfgAfter),
     /Platform\.environment/.test(cfgAfter) ? 'presente' : 'MANCANTE (fix ha rimosso anche il contrasto!)');
+
+  // (8d) DEAD-CODE FD-S4 — dart analyze (SEED:FLUTTERDART-DC, eco-F5b).
+  // Sequenza: PRE-FIX (detection) -> FIX diretto -> POST-FIX (zero UNUSED_ELEMENT) +
+  // contrasto testuale. Non usa il loop/normalize: dart non e' ancora nel dispatcher
+  // engine (BIT-invariante). L'oracolo dart analyze e' il FATTO: NON un parere LLM.
+  console.log('');
+  console.log('  DEAD-CODE FD-S4 — dart analyze (SEED:FLUTTERDART-DC, eco-F5b):');
+
+  const FD_S4_SYMBOL = '_unusedHelper';
+  const FD_S4_FILE = 'lib/dead.dart';
+
+  // PRE-FIX: dart analyze deve rilevare UNUSED_ELEMENT per _unusedHelper.
+  const daPreFix = dartAnalyze(dir);
+  const fdS4Detected = !daPreFix.error && dartFlagsUnused(daPreFix.stdout, FD_S4_SYMBOL);
+  assert(
+    `FD-S4 PRE-FIX: dart analyze rileva UNUSED_ELEMENT per ${FD_S4_SYMBOL} in ${FD_S4_FILE}`,
+    fdS4Detected,
+    fdS4Detected
+      ? `UNUSED_ELEMENT rilevato (dart analyze exit=${daPreFix.status})`
+      : daPreFix.error
+        ? `dart analyze non avviato: ${daPreFix.error.message}`
+        : `UNUSED_ELEMENT NON trovato (stdout=${daPreFix.stdout.trim().slice(0, 120)})`,
+  );
+
+  // FIX diretto: rimuove _unusedHelper da lib/dead.dart (BIT-invariante engine).
+  const fixResult = fixDartDeadcode(dir, FD_S4_FILE, FD_S4_SYMBOL);
+  assert(
+    `FD-S4 FIX: ${FD_S4_SYMBOL} rimosso da ${FD_S4_FILE}`,
+    fixResult.ok,
+    fixResult.detail,
+  );
+
+  // POST-FIX: dart analyze NON deve piu' segnalare _unusedHelper (0 UNUSED_ELEMENT).
+  const daPostFix = dartAnalyze(dir);
+  const fdS4Gone = !daPostFix.error && !dartFlagsUnused(daPostFix.stdout, FD_S4_SYMBOL);
+  assert(
+    `FD-S4 POST-FIX: dart analyze NON segnala piu' ${FD_S4_SYMBOL} (UNUSED_ELEMENT azzerato)`,
+    fdS4Gone,
+    fdS4Gone
+      ? `UNUSED_ELEMENT rimosso (dart analyze exit=${daPostFix.status})`
+      : daPostFix.error
+        ? `dart analyze non avviato: ${daPostFix.error.message}`
+        : `UNUSED_ELEMENT ANCORA presente (stdout=${daPostFix.stdout.trim().slice(0, 120)})`,
+  );
+
+  // CONTRASTO testuale: usedHelper ancora presente in dead.dart (contrasto pulito intatto).
+  const deadAfter = readSafe(join(dir, FD_S4_FILE));
+  assert(
+    `contrasto: ${FD_S4_FILE} contiene ancora usedHelper (contrasto pulito intatto)`,
+    /\busedHelper\b/.test(deadAfter),
+    /\busedHelper\b/.test(deadAfter) ? 'presente' : 'MANCANTE (fix ha rimosso anche il contrasto!)',
+  );
+  assert(
+    `contrasto: ${FD_S4_SYMBOL} NON compare piu' in ${FD_S4_FILE} (definizione rimossa)`,
+    !/\b_unusedHelper\b/.test(deadAfter),
+    !/\b_unusedHelper\b/.test(deadAfter) ? 'rimosso' : 'ANCORA presente (fix non applicata!)',
+  );
 }
 
 // (9) IGIENE: fixture ORIGINALE bit-identica + HEAD esterno invariato.
@@ -288,6 +400,6 @@ assert('HEAD del repo ESTERNO INVARIATO (0 contaminazione)', outerHeadAfter === 
 const allOk = checks.every((c) => c.ok);
 console.log('');
 console.log('------------------------------------------------------------');
-console.log(`=== GATE VERIFY (eco-F5a) flutter-dart RESULT: ${allOk ? 'PASS' : 'FAIL'} === (${checks.filter((c) => c.ok).length}/${checks.length} check)`);
+console.log(`=== GATE VERIFY (eco-F5b) flutter-dart RESULT: ${allOk ? 'PASS' : 'FAIL'} === (${checks.filter((c) => c.ok).length}/${checks.length} check)`);
 console.log('------------------------------------------------------------');
 process.exit(allOk ? 0 : 1);

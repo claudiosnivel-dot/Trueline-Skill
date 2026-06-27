@@ -10,9 +10,9 @@
     "dependency-vuln": { "tool": "osv", "lockfiles": ["pubspec.lock"] },
     "authz":           { "tool": "semgrep", "ruleset": "ruleset/", "role": "authz-surface" },
     "injection":       { "tool": "semgrep", "ruleset": "ruleset/" },
-    "dead-code":       { "tool": "dart-analyze" }
+    "dead-code":       { "tool": "dart" }
   },
   "floor":        ["secret", "dependency-vuln", "authz"],
-  "verified_set": ["secret"],
+  "verified_set": ["secret","dead-code"],
   "coverage_policy": "declared"
 }

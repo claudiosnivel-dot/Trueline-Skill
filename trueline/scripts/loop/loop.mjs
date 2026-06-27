@@ -75,6 +75,8 @@ export function rerunOracleFor(finding, dir, runOpts) {
   // Path del finding in POSIX (per discriminare JS vs Python in modo additivo).
   const fpath = String((finding.location && finding.location.file) || '').replace(/\\/g, '/');
   const isPy = /\.py$/.test(fpath);
+  const isGo = /\.go$/.test(fpath);
+  const isDart = /\.dart$/.test(fpath);
 
   let oracle; let res; let scope;
   switch (finding.category) {
@@ -99,12 +101,19 @@ export function rerunOracleFor(finding, dir, runOpts) {
       res = run(RLS_CHECK, [resolveRlsMigrationsDir(dir, { manifest: runOpts && runOpts.manifest })]);
       break;
     case 'dead-code':
-      // ECOSYSTEM-AWARE (additivo): dead-code Python -> vulture; JS/TS -> knip
-      // (invariato). Il dispatch e' keyed sull'estensione del file del finding,
-      // cosi' i due ecosistemi coesistono senza rompere il ramo knip esistente.
+      // ECOSYSTEM-AWARE (additivo): dead-code Python -> vulture; Go -> go-deadcode;
+      // Dart -> dart; JS/TS -> knip (invariato). Il dispatch e' keyed sull'estensione
+      // del file del finding (eco-F5b aggiunge go/dart), cosi' gli ecosistemi coesistono
+      // senza rompere il ramo knip/vulture esistente.
       if (isPy) {
         oracle = 'vulture'; scope = 'working-tree';
         res = run(RUN_DEADCODE, [dir, '--tool=vulture']);
+      } else if (isGo) {
+        oracle = 'go-deadcode'; scope = 'working-tree';
+        res = run(RUN_DEADCODE, [dir, '--tool=go-deadcode']);
+      } else if (isDart) {
+        oracle = 'dart'; scope = 'working-tree';
+        res = run(RUN_DEADCODE, [dir, '--tool=dart']);
       } else {
         oracle = 'knip'; scope = 'working-tree';
         res = run(RUN_DEADCODE, [dir]);
