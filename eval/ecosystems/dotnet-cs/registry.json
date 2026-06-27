@@ -1,0 +1,53 @@
+{
+  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack dotnet-cs (eco-F4, tier DETECTION). Per ogni difetto seminato CS-S1..CS-S3: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso (tier detection, fase 1 L-COL-030: tutti detection-only, verified_set vuoto), ancora ispezionabile (file+marker | lockfile+symbol), scope di scansione dell'oracolo, e note. Il floor [secret, dependency-vuln, authz] e' obbligatorio. authz-surface = controller ASP.NET Core: action method mutante ([HttpPost/Put/Delete/Patch]) senza attributo [Authorize] (CWE-862 Missing Authorization, A01:2025). authz = semgrep best-effort (semgrep assente nel sandbox -> degrada onesto, L-COL-006; come postgres-jsts). cwe/owasp per osv (CS-S2) = confronto SOFT (fonte esterna, mappa provvisoria 04).",
+  "schema_version": "1.0",
+  "milestone": "eco-F4",
+  "ecosystem": "dotnet-cs",
+  "verified_set": [],
+  "reference_app": "./reference-app",
+  "defects": [
+    {
+      "id": "CS-S1",
+      "category": "secret",
+      "source_oracle": "gitleaks",
+      "owasp": "A07:2025",
+      "cwe": "CWE-798",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "Controllers/ItemsController.cs",
+        "marker": "SEED:CS-S1"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Credenziale hardcoded nel sorgente C#: private const string AdminApiKey = 'sk_live_...' (Stripe-like key ad alta entropia). Rilevata da gitleaks working-tree con la regola trueline-stripe-like-key (e stripe-access-token nativa). Contrasto PULITO: GetApiKeyFromConfig() legge ITEMS_API_KEY da IConfiguration (env-read, gitleaks-clean). Tier detection (fase 1 L-COL-030): trovata, prioritizzata, non auto-fixata (verified_set vuoto)."
+    },
+    {
+      "id": "CS-S2",
+      "category": "dependency-vuln",
+      "source_oracle": "osv",
+      "owasp": "A06:2025",
+      "cwe": "CWE-755",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "packages.lock.json",
+        "lockfile": "packages.lock.json",
+        "symbol": "Newtonsoft.Json@12.0.3"
+      },
+      "scan_scope": "lockfile",
+      "notes": "Dipendenza vulnerabile reale pinnata: Newtonsoft.Json@12.0.3 in ecosistema NuGet (osv flagga GHSA-5crp-9r3c-p9vr, CVE-2024-21907, DoS per StackOverflow su nesting profondo in deserialize). Fix: aggiornare a >= 13.0.1. Rilevata da osv-scanner sul lockfile packages.lock.json (NuGet, auto-riconosciuto da osv-scanner 1.9.x). cwe/owasp = confronto SOFT (fonte esterna, mappa provvisoria 04). Tier detection: trovata, prioritizzata, non auto-bumpata (verified_set vuoto, L-COL-030)."
+    },
+    {
+      "id": "CS-S3",
+      "category": "authz",
+      "source_oracle": "semgrep",
+      "owasp": "A01:2025",
+      "cwe": "CWE-862",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "Controllers/ItemsController.cs",
+        "marker": "SEED:CS-S3"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Action method [HttpPost] su ItemsController senza attributo [Authorize]: chiunque raggiunga POST /Items puo' creare una risorsa senza autenticazione (authz-surface ASP.NET Core, route-authz non-RLS). Il contrasto [HttpPost('secure')] con [Authorize] NON deve produrre finding (precisione). Oracolo semgrep best-effort (semgrep assente nel sandbox -> degrada onesto, L-COL-006; come postgres-jsts). Tier detection: trovata, prioritizzata, non auto-fixata (verified_set vuoto)."
+    }
+  ]
+}

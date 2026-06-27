@@ -247,6 +247,43 @@ const PACK_FIXTURES = {
   // la sintassi Gen2 in TS resta detection-only). verified_set=[secret,dead-code,authz];
   // floor SENZA semgrep -> criterio 2 senza docker.
   'amplify-jsts': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','amplify-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','amplify-jsts','registry.json') },
+  // eco-F4: PHP+Laravel, tier DETECTION. floor=[secret,dependency-vuln,authz]; authz legato a
+  // semgrep PHP (best-effort, degrada onesto se docker assente). verified_set=[]; coverage_policy='declared'.
+  // PACK_FIXTURES detection: fixtureApp+registry on-disk, corpo runDetectionBody (criteri 1/2/3/5/6).
+  'laravel-php': { kind: 'detection', fixtureApp: resolve(ROOT,'eval','ecosystems','laravel-php','reference-app'), registry: resolve(ROOT,'eval','ecosystems','laravel-php','registry.json') },
+  // eco-F4: Go+Postgres, tier DETECTION. floor=[secret,dependency-vuln,authz]; authz legato a
+  // semgrep Go (best-effort, degrada onesto se docker assente); secret=gitleaks; dep-vuln=osv(go.mod/go.sum).
+  // verified_set=[]; coverage_policy='declared'. PACK_FIXTURES detection: criteri 1/2/3/5/6.
+  'postgres-go': { kind: 'detection', fixtureApp: resolve(ROOT,'eval','ecosystems','postgres-go','reference-app'), registry: resolve(ROOT,'eval','ecosystems','postgres-go','registry.json') },
+  // eco-F4: Dart+Flutter+Supabase, tier DETECTION. floor=[secret,dependency-vuln,authz]; authz legato a
+  // semgrep Dart sperimentale (best-effort, degrada onesto se docker assente); secret=gitleaks (language-agnostic);
+  // dep-vuln=osv(pubspec.lock, ecosistema Pub: archive@3.3.0 GHSA-9v85-q87q-g4vg). verified_set=[];
+  // coverage_policy='declared'. PACK_FIXTURES detection: criteri 1/2/3/5/6.
+  'flutter-dart': { kind: 'detection', fixtureApp: resolve(ROOT,'eval','ecosystems','flutter-dart','reference-app'), registry: resolve(ROOT,'eval','ecosystems','flutter-dart','registry.json') },
+  // eco-F4: Ruby+Rails, tier DETECTION. floor=[secret,dependency-vuln,authz]; authz legato a
+  // semgrep Ruby (ruleset rails-rb-authz.yml: skip_before_action auth callback, best-effort,
+  // degrada onesto se docker assente); secret=gitleaks (language-agnostic); dep-vuln=osv(Gemfile.lock,
+  // nokogiri@1.10.0 advisory OSV). verified_set=[]; coverage_policy='declared'.
+  // PACK_FIXTURES detection: fixtureApp+registry on-disk, corpo runDetectionBody (criteri 1/2/3/5/6).
+  'rails-rb': { kind: 'detection', fixtureApp: resolve(ROOT,'eval','ecosystems','rails-rb','reference-app'), registry: resolve(ROOT,'eval','ecosystems','rails-rb','registry.json') },
+  // eco-F4: Java+Spring Boot, tier DETECTION. floor=[secret,dependency-vuln,authz]; authz legato a
+  // semgrep Java (ruleset spring-java-authz.yml: @PostMapping senza @PreAuthorize, best-effort,
+  // degrada onesto se docker assente); secret=gitleaks(sk_live_... in application.properties);
+  // dep-vuln=osv(pom.xml Maven: log4j-core@2.14.1 Log4Shell GHSA-jfh8-c2jp-5v3q CVSS 10.0).
+  // verified_set=[]; coverage_policy='declared'. PACK_FIXTURES detection: criteri 1/2/3/5/6.
+  'spring-java': { kind: 'detection', fixtureApp: resolve(ROOT,'eval','ecosystems','spring-java','reference-app'), registry: resolve(ROOT,'eval','ecosystems','spring-java','registry.json') },
+  // eco-F4: C#+ASP.NET Core, tier DETECTION. floor=[secret,dependency-vuln,authz]; authz legato a
+  // semgrep C# (ruleset dotnet-cs-authz.yml: [HttpPost/Put/Delete/Patch] senza [Authorize], best-effort,
+  // degrada onesto se docker assente); secret=gitleaks(sk_live_... in ItemsController.cs);
+  // dep-vuln=osv(packages.lock.json NuGet: Newtonsoft.Json@12.0.3 GHSA-5crp-9r3c-p9vr CVE-2024-21907).
+  // verified_set=[]; coverage_policy='declared'. PACK_FIXTURES detection: criteri 1/2/3/5/6.
+  'dotnet-cs': { kind: 'detection', fixtureApp: resolve(ROOT,'eval','ecosystems','dotnet-cs','reference-app'), registry: resolve(ROOT,'eval','ecosystems','dotnet-cs','registry.json') },
+  // eco-F4: Elixir+Phoenix, tier DETECTION. floor=[secret,dependency-vuln,authz]; authz legato a
+  // semgrep Elixir sperimentale (ruleset phoenix-ex-authz.yml: action mutanti senza plug auth,
+  // best-effort, degrada onesto se docker assente); secret=gitleaks(sk_live_... in config.exs);
+  // dep-vuln=osv(mix.lock Hex: plug@1.10.3 EEF-CVE-2026-8468/GHSA-468c-vq7p-gh64 DoS CWE-770).
+  // verified_set=[]; coverage_policy='declared'. PACK_FIXTURES detection: criteri 1/2/3/5/6.
+  'phoenix-ex': { kind: 'detection', fixtureApp: resolve(ROOT,'eval','ecosystems','phoenix-ex','reference-app'), registry: resolve(ROOT,'eval','ecosystems','phoenix-ex','registry.json') },
 };
 
 // ---------------------------------------------------------------------------

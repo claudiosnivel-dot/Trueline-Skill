@@ -1,0 +1,53 @@
+{
+  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack flutter-dart (eco-F4, tier detection). Per ogni difetto seminato FD-S1..FD-S3: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso (tier detection, fase F4: tutti detection-only, verified_set vuoto). Il floor [secret, dependency-vuln, authz] e' obbligatorio. FD-S1 = secret hardcoded (gitleaks, working-tree); FD-S2 = dipendenza vulnerabile reale archive@3.3.0 (osv, lockfile pubspec.lock, advisories GHSA-9v85-q87q-g4vg + GHSA-r285-q736-9v95); FD-S3 = mutazione Supabase senza verifica identita (semgrep, best-effort Dart sperimentale). authz-surface = route-authz Supabase (supabase.from().insert/update/delete senza auth.currentUser check). NON RLS-al-DB. Semgrep Dart e' sperimentale -> authz/injection best-effort, oracolo degrada onesto (L-COL-006). verified_set=[] (fase detection, L-COL-030).",
+  "schema_version": "1.0",
+  "milestone": "eco-F4",
+  "ecosystem": "flutter-dart",
+  "verified_set": [],
+  "reference_app": "eval/ecosystems/flutter-dart/reference-app",
+  "defects": [
+    {
+      "id": "FD-S1",
+      "category": "secret",
+      "source_oracle": "gitleaks",
+      "owasp": "A07:2025",
+      "cwe": "CWE-798",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "lib/config.dart",
+        "marker": "SEED:FD-S1"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Credenziale hardcoded nel sorgente Dart (lib/config.dart): costante _supabaseServiceKey con valore 'sk_live_flutter_trueline_...' ad alta entropia. Rilevata da gitleaks working-tree (regola trueline-stripe-like-key). Il contrasto pulito usa Platform.environment['SUPABASE_SERVICE_KEY'] (env-read, gitleaks-clean). Tier detection (fase F4): trovata, non auto-fixata (verified_set vuoto). La fix sostituirebbe il literal col solo accesso env; gitleaks working-tree tornerebbe pulito su lib/config.dart."
+    },
+    {
+      "id": "FD-S2",
+      "category": "dependency-vuln",
+      "source_oracle": "osv",
+      "owasp": "A06:2025",
+      "cwe": "CWE-22",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "pubspec.lock",
+        "lockfile": "pubspec.lock",
+        "symbol": "archive@3.3.0"
+      },
+      "scan_scope": "lockfile",
+      "notes": "Dipendenza vulnerabile reale pinnata: archive@3.3.0 (pacchetto pub Dart per gestione file ZIP/TAR). osv-scanner --lockfile pubspec.lock:pubspec.lock emette GHSA-9v85-q87q-g4vg (CVSS 7.8, path traversal / zip-slip in archive < 3.3.1) e GHSA-r285-q736-9v95 (CVSS 7.8, vulnerabilita correlata). CWE-22 (Improper Limitation of a Pathname to a Restricted Directory). owasp/cwe come indicazione di confronto SOFT/esterno (fonte osv, mappa provvisoria 04): il criterio 2 verifica la presenza del symbol nel finding, non il CWE esatto. Tier detection: trovata, prioritizzata, non auto-bumpata (bump pub e' operazione human-gated)."
+    },
+    {
+      "id": "FD-S3",
+      "category": "authz",
+      "source_oracle": "semgrep",
+      "owasp": "A01:2025",
+      "cwe": "CWE-862",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "lib/routes/posts.dart",
+        "marker": "SEED:FD-S3"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Funzione createPost (lib/routes/posts.dart) che chiama supabase.from('posts').insert(data) SENZA verificare supabase.auth.currentUser: chiunque puo' inserire record (CWE-862, A01:2025). Analogo deletePost chiama .delete() senza auth check. Semgrep (flutter-dart-supabase-mutate-no-auth-check, Dart sperimentale): rileva il sink insert/delete nel corpo senza pattern-not-inside auth.currentUser. Best-effort: Dart e' linguaggio sperimentale in semgrep -> l'oracolo puo' degradare onesto (assenza finding != assenza difetto, L-COL-006). Contrasto PULITO: createPostSafe/updatePostSafe verificano supabase.auth.currentUser prima di ogni mutazione e NON devono produrre finding (precisione). health.dart usa solo .select() (sola lettura) e NON e' bersaglio. Tier detection: trovato, non auto-fixato."
+    }
+  ]
+}

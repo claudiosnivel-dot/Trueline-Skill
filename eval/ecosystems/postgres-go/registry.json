@@ -1,0 +1,52 @@
+{
+  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack postgres-go (Eco-F4, tier DETECTION). Per ogni difetto seminato GO-S1..GO-S3: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso (detection-only: pack tier DETECTION, verified_set vuoto), ancora ispezionabile (file+marker | lockfile+symbol | file+marker), scope di scansione dell'oracolo. Il floor [secret, dependency-vuln, authz] e' obbligatorio; tutti i seed sono detection-only (nessun auto-promosso a verified). authz (semgrep) e' best-effort (semgrep assente nel sandbox -> deferred a F5/gate F6 su macchina con semgrep, L-COL-006). Pin dependency-vuln: github.com/dgrijalva/jwt-go@v3.2.0+incompatible (CVE-2020-26160 / GHSA-w73w-5m7g-f7qc), verificato con osv-scanner.",
+  "schema_version": "1.0",
+  "milestone": "Eco-F4",
+  "ecosystem": "postgres-go",
+  "verified_set": [],
+  "reference_app": "eval/ecosystems/postgres-go/reference-app",
+  "defects": [
+    {
+      "id": "GO-S1",
+      "category": "secret",
+      "source_oracle": "gitleaks",
+      "owasp": "A07:2025",
+      "cwe": "CWE-798",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "main.go",
+        "marker": "SEED:GO-S1"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Secret hardcoded nel sorgente Go (apiKey const ad alta entropia in stile Stripe sk_live_...). Rilevato da gitleaks working-tree su main.go. Contrasto: envAPIKey letto da os.Getenv('API_KEY') NON flaggato. Tier DETECTION: detection-only (verified_set vuoto)."
+    },
+    {
+      "id": "GO-S2",
+      "category": "dependency-vuln",
+      "source_oracle": "osv",
+      "owasp": "A03:2025",
+      "cwe": "CWE-347",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "lockfile": "go.mod",
+        "symbol": "github.com/dgrijalva/jwt-go@3.2.0+incompatible"
+      },
+      "scan_scope": "lockfile",
+      "notes": "Dipendenza vulnerabile reale pinnata: github.com/dgrijalva/jwt-go@v3.2.0+incompatible (CVE-2020-26160 / GHSA-w73w-5m7g-f7qc): il campo 'aud' non viene validato, consentendo bypass del controllo audience sui token JWT. Rilevata da osv-scanner --lockfile go.mod. CWE: CWE-347 (Improper Verification of Cryptographic Signature). OWASP: A03:2025 (Software Supply Chain Failures). Tier DETECTION: detection-only (dependency-vuln non auto-fixabile)."
+    },
+    {
+      "id": "GO-S3",
+      "category": "authz",
+      "source_oracle": "semgrep",
+      "owasp": "A01:2025",
+      "cwe": "CWE-862",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "main.go",
+        "marker": "SEED:GO-S3"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Handler HTTP mutante (createBookingHandler) che esegue db.Exec('INSERT INTO bookings ...') SENZA alcun controllo di identita/ruolo (route-authz, authz-surface non-Supabase). Il contrasto createBookingSecureHandler verifica r.Header.Get('Authorization') PRIMA dell'INSERT e NON deve produrre finding (precisione). Rilevato dal ruleset semgrep go-authz-mutating-handler-no-identity-check (BEST-EFFORT: semgrep assente nel sandbox, deferred a F5/gate F6). Tier DETECTION: detection-only."
+    }
+  ]
+}

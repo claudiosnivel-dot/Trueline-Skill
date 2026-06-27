@@ -326,6 +326,44 @@ check(
   classify(fbJsAntiReg) === 'firebase-jsts',
 );
 
+// ── eco-F4 — laravel-php: classificazione (composer.json, lang_any-only) ──────
+// detect.lang_any:["composer.json"] senza files_any -> passata 2 (fallback lang_any-only).
+
+// Caso LP-1 (positivo): dir con solo composer.json -> laravel-php.
+const lpPos = mkdtempSync(join(tmpdir(), 'eco-lppos-'));
+writeFileSync(join(lpPos, 'composer.json'), '{"name":"test"}');
+check(
+  'classify(solo composer.json) = laravel-php (lang_any-only passata 2)',
+  classify(lpPos) === 'laravel-php',
+);
+
+// Caso LP-2 (negativo/precisione): dir vuota -> NON laravel-php.
+const lpNeg = mkdtempSync(join(tmpdir(), 'eco-lpneg-'));
+check(
+  'classify(repo vuoto) != laravel-php (precisione)',
+  classify(lpNeg) !== 'laravel-php',
+);
+
+// ── eco-F4 — dotnet-cs: classificazione (app.csproj / global.json, lang_any-only) ─
+// detect.lang_any:["global.json","app.csproj"] senza files_any -> passata 2 (fallback
+// lang_any-only, match per NOME-FILE ESATTO via existsSync, NON glob). Marker .csproj
+// citato come caso NON ovvio: lo blindiamo con un positivo + un negativo di precisione.
+
+// Caso DN-1 (positivo): dir con solo app.csproj -> dotnet-cs.
+const dnPos = mkdtempSync(join(tmpdir(), 'eco-dnpos-'));
+writeFileSync(join(dnPos, 'app.csproj'), '<Project Sdk="Microsoft.NET.Sdk"></Project>');
+check(
+  'classify(solo app.csproj) = dotnet-cs (lang_any-only passata 2)',
+  classify(dnPos) === 'dotnet-cs',
+);
+
+// Caso DN-2 (negativo/precisione): dir vuota -> NON dotnet-cs.
+const dnNeg = mkdtempSync(join(tmpdir(), 'eco-dnneg-'));
+check(
+  'classify(repo vuoto) != dotnet-cs (precisione)',
+  classify(dnNeg) !== 'dotnet-cs',
+);
+
 const failed = results.filter((r) => !r.ok);
 console.log(`\n${failed.length === 0 ? 'OK' : 'FAIL'} — ${results.length - failed.length}/${results.length}`);
 process.exit(failed.length === 0 ? 0 : 1);
