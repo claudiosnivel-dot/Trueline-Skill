@@ -1,0 +1,53 @@
+{
+  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack dynamodb-jsts (eco-F6, tier DETECTION). Stesso schema di eval/ecosystems/rails-rb/registry.json. Per ogni difetto seminato DYNAMO-S1..DYNAMO-S3: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso (tier detection, eco-F6 L-COL-030: tutti detection-only, verified_set vuoto), ancora ispezionabile (file+marker | lockfile+symbol | file+marker), scope di scansione dell'oracolo, e note. Il floor [secret, dependency-vuln, authz] e' obbligatorio. authz-surface = route-authz DynamoDB (semgrep ruleset/dynamodb-jsts-authz.yml, best-effort eco-F6: degrada onesto se docker assente).",
+  "schema_version": "1.0",
+  "milestone": "eco-F6",
+  "ecosystem": "dynamodb-jsts",
+  "verified_set": [],
+  "reference_app": "./reference-app",
+  "defects": [
+    {
+      "id": "DYNAMO-S1",
+      "category": "secret",
+      "source_oracle": "gitleaks",
+      "owasp": "A07:2025",
+      "cwe": "CWE-798",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "src/config.js",
+        "marker": "SEED:DYNAMO-S1"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Credenziali hardcoded nel sorgente (working tree): chiave Stripe-like (sk_live_DYNAMO_S1_...) in src/config.js. gitleaks working-tree DEVE rilevare il literal sk_live_... (alta entropia, pattern Stripe — regola stripe-access-token o trueline-stripe-like-key). Tier detection (eco-F6): trovata, non auto-fixata (verified_set=[]). Il contrasto process.env.STRIPE_SECRET_KEY non deve produrre finding (precisione: nessun literal hardcoded). Nota: in un progetto DynamoDB reale il secret tipico e' AWS_SECRET_ACCESS_KEY; si usa sk_live_... per trigger gitleaks affidabile language-agnostic."
+    },
+    {
+      "id": "DYNAMO-S2",
+      "category": "dependency-vuln",
+      "source_oracle": "osv",
+      "owasp": "A06:2025",
+      "cwe": "CWE-1333",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "package-lock.json",
+        "lockfile": "package-lock.json",
+        "symbol": "semver@5.6.0"
+      },
+      "scan_scope": "lockfile",
+      "notes": "Dipendenza vulnerabile reale pinnata: semver@5.6.0 (GHSA-c2qf-rxjj-qqgw emesso da osv-scanner, Regular Expression Denial of Service in semver < 5.7.2, CWE-1333). osv-scanner --lockfile package-lock.json DEVE emettere almeno un finding con symbol=semver@5.6.0 e rule_id contenente GHSA-c2qf-rxjj-qqgw. owasp/cwe come emessi da osv-scanner (confronto SOFT/esterno: CWE-1333 e' la classificazione NVD-GHSA per questa advisory; A06:2025 = Vulnerable and Outdated Components). Tier detection: trovata, prioritizzata, NON auto-bumpata (human-gated). La vulnerabilita' e' indipendente dall'SDK DynamoDB (semver e' una utility comune nell'ecosistema Node.js)."
+    },
+    {
+      "id": "DYNAMO-S3",
+      "category": "authz",
+      "source_oracle": "semgrep",
+      "owasp": "A01:2025",
+      "cwe": "CWE-862",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "src/routes/items.js",
+        "marker": "SEED:DYNAMO-S3"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Route POST /items che invia PutItemCommand SENZA verifyToken() o altro check d'identita': chiunque raggiunga l'endpoint puo' scrivere qualsiasi item nel DynamoDB per qualunque chiave primaria (route-authz, authz-surface dynamodb-jsts). L'oracolo semgrep + ruleset dynamodb-jsts-authz.yml DEVE flaggare la chiamata client.send(new PutItemCommand(...)) nel router.post('/items') senza auth. Il contrasto POST /items/secure (con verifyToken()) NON deve produrre finding (precisione: 0 FP). Tier detection BEST-EFFORT (eco-F6): semgrep richiede docker; se non disponibile, degrada onesto (conformance gate esce 1 dichiarato, mai falso verde)."
+    }
+  ]
+}

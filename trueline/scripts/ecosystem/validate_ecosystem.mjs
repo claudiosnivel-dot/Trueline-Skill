@@ -42,6 +42,13 @@ export function validateEcosystem(m) {
   for (const c of m.verified_set) if (!oracleKeys.has(c)) errors.push(`verified_set: categoria "${c}" non legata a un oracolo`);
   // (6) coverage_policy nel set chiuso
   if (!COVERAGE_POLICIES.has(m.coverage_policy)) errors.push(`coverage_policy ignota: ${m.coverage_policy}`);
+  // (7) SP-F6 Fase 0 — detect.deps_any OPZIONALE: se presente dev'essere un array non
+  // vuoto di stringhe non vuote (nomi-dipendenza). Additivo: i manifest senza deps_any
+  // non sono toccati (default-invariante).
+  if (m.detect && 'deps_any' in m.detect) {
+    const da = m.detect.deps_any;
+    if (!nonEmptyArr(da) || !da.every(nonEmptyStr)) errors.push('detect.deps_any: atteso array non vuoto di stringhe');
+  }
 
   return { ok: errors.length === 0, errors };
 }

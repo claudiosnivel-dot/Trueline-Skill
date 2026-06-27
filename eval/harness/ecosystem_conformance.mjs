@@ -284,6 +284,31 @@ const PACK_FIXTURES = {
   // dep-vuln=osv(mix.lock Hex: plug@1.10.3 EEF-CVE-2026-8468/GHSA-468c-vq7p-gh64 DoS CWE-770).
   // verified_set=[]; coverage_policy='declared'. PACK_FIXTURES detection: criteri 1/2/3/5/6.
   'phoenix-ex': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','phoenix-ex','reference-app'), registry: resolve(ROOT,'eval','ecosystems','phoenix-ex','registry.json') },
+  // eco-F6: JS/TS+Cloudflare D1 (NoSQL Workers), tier DETECTION. floor=[secret,dependency-vuln,authz]; authz legato a
+  // semgrep JS (ruleset cloudflare-d1-jsts-authz.yml: env.DB.prepare(SQL+concat) senza auth-guard, best-effort,
+  // degrada onesto se docker assente); secret=gitleaks(sk_live_... in src/config.js);
+  // dep-vuln=osv(package-lock.json npm: lodash@4.17.20 GHSA-35jh-r3h4-6jhm CVE-2021-23337).
+  // verified_set=[]; coverage_policy='declared'. PACK_FIXTURES detection: criteri 1/2/3/5/6.
+  'cloudflare-d1-jsts': { kind: 'detection', fixtureApp: resolve(ROOT,'eval','ecosystems','cloudflare-d1-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','cloudflare-d1-jsts','registry.json') },
+  // eco-F6: JS/TS+MongoDB, tier DETECTION. floor=[secret,dependency-vuln,authz]; authz legato a
+  // semgrep JS (ruleset mongodb-jsts-authz.yml: insertOne/updateOne/deleteOne/findOneAndUpdate/save/create
+  // senza auth-guard, best-effort, degrada onesto se docker assente); secret=gitleaks(sk_live_...);
+  // dep-vuln=osv(package-lock.json npm: lodash@4.17.20 GHSA-35jh-r3h4-6jhm Command Injection).
+  // RILEVAMENTO via deps_any (Fase 0 engine additivo): classify() legge package.json e tratta la
+  // presenza di 'mongodb' o 'mongoose' come segnale forte (Pass 1), evitando collisione con
+  // postgres-jsts (lang_any-only, Pass 2). verified_set=[]; coverage_policy='declared'.
+  // PACK_FIXTURES kind:'detection' (corpo runDetectionBody, criteri 1/2/3/5/6; criterio 3 vacuo).
+  'mongodb-jsts': { kind: 'detection', fixtureApp: resolve(ROOT,'eval','ecosystems','mongodb-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','mongodb-jsts','registry.json') },
+  // eco-F6: JS/TS+DynamoDB, tier DETECTION. floor=[secret,dependency-vuln,authz]; authz legato a
+  // semgrep JS (ruleset dynamodb-jsts-authz.yml: client.send(PutItemCommand/UpdateItemCommand/
+  // DeleteItemCommand) in route mutante senza auth-guard, best-effort, degrada onesto se docker
+  // assente); secret=gitleaks(sk_live_... in src/config.js); dep-vuln=osv(package-lock.json npm:
+  // semver@5.6.0 GHSA-c2qj-m37r-6jgf ReDoS CWE-1333).
+  // RILEVAMENTO via deps_any (Fase 0 engine additivo): classify() legge package.json e tratta la
+  // presenza di '@aws-sdk/client-dynamodb' o 'aws-sdk' come segnale forte (Pass 1), evitando
+  // collisione con postgres-jsts (lang_any-only, Pass 2). verified_set=[]; coverage_policy='declared'.
+  // PACK_FIXTURES kind:'detection' (corpo runDetectionBody, criteri 1/2/3/5/6; criterio 3 vacuo).
+  'dynamodb-jsts': { kind: 'detection', fixtureApp: resolve(ROOT,'eval','ecosystems','dynamodb-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','dynamodb-jsts','registry.json') },
 };
 
 // ---------------------------------------------------------------------------
