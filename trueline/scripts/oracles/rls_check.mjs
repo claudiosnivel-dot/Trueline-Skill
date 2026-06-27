@@ -52,6 +52,10 @@ const TENANT_COLUMNS = [
 // Marcatori che indicano un vincolo di isolamento corretto dentro una policy.
 const ISOLATION_TOKENS = ['auth.uid()', 'auth.jwt()', 'current_setting('];
 
+// Marcatori di isolamento per le policy su storage.objects (Supabase Storage).
+// owner-scoped: `owner = auth.uid()` oppure `(storage.foldername(name))[1] = auth.uid()::text`.
+const STORAGE_ISOLATION_TOKENS = ['owner', 'storage.foldername', 'auth.uid()', 'auth.jwt()', 'current_setting('];
+
 // -----------------------------------------------------------------------------
 // MAIN
 // -----------------------------------------------------------------------------
@@ -123,6 +127,13 @@ function analyzeFile(file, text, findings, parseWarnings) {
   for (const t of tables.values()) {
     if (t.schema !== 'public') continue; // scope: solo schema public
     evaluateTable(t, findings);
+  }
+
+  // Passata storage (additiva): policy su storage.objects (tabella built-in,
+  // registrata come ghost-table schema='storage' da handleCreatePolicy). Non
+  // tocca lo scope public: per i pack senza policy storage e' un NO-OP.
+  for (const t of tables.values()) {
+    if (t.schema === 'storage' && t.name === 'objects') evaluateStorageObjects(t, findings);
   }
 }
 
@@ -253,6 +264,44 @@ function evaluateTable(t, findings) {
           })
         );
       }
+    }
+  }
+}
+
+// -----------------------------------------------------------------------------
+// CONTROLLO storage (additivo): policy permissive su storage.objects (Supabase
+// Storage). storage.objects e' una ghost-table (columns:[]) -> niente euristica
+// multi-tenant: il verdetto e' l'ASSENZA, nel predicato, di un token di
+// isolamento owner-scoped. Clone strutturale del pattern RLS003/RLS004.
+// -----------------------------------------------------------------------------
+function evaluateStorageObjects(t, findings) {
+  for (const p of t.policies) {
+    const exprs = [p.using, p.withCheck].filter(Boolean);
+    const exprBlob = exprs.join(' ').toLowerCase();
+    const hasIsolation = STORAGE_ISOLATION_TOKENS.some((tok) => exprBlob.includes(tok));
+    if (!hasIsolation) {
+      findings.push(
+        makeFinding({
+          controlId: 'RLS005_PUBLIC_BUCKET',
+          severity: 'HIGH',
+          table: 'storage.objects',
+          policy: p.name,
+          file: p.file,
+          startLine: p.startLine,
+          endLine: p.endLine,
+          statement: 'CREATE POLICY',
+          snippet: p.snippet,
+          message:
+            `La policy ${p.name} su storage.objects non vincola l'accesso per ` +
+            `owner/auth.uid()/storage.foldername: il bucket e' di fatto pubblico ` +
+            `(ogni oggetto leggibile/scrivibile da chiunque superi RLS).`,
+          coverage: 'static-ddl',
+          heuristic:
+            'EURISTICA (static-first): bucket "pubblico" dedotto dall\'assenza, ' +
+            'nel predicato della policy su storage.objects, di un token di ' +
+            'isolamento (owner, storage.foldername(name), auth.uid(), auth.jwt(), current_setting()).',
+        })
+      );
     }
   }
 }

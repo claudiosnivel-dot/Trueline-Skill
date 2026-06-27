@@ -267,6 +267,65 @@ check('floorOf(firebase-jsts) include secret', floorOf(mFb).includes('secret'));
 check('floorOf(firebase-jsts) include dependency-vuln', floorOf(mFb).includes('dependency-vuln'));
 check('floorOf(firebase-jsts) include authz', floorOf(mFb).includes('authz'));
 
+// ── F1 (eco-expansion) — firebase-py: tie-break per LINGUA su backend Firebase ──
+// firebase-jsts e firebase-py condividono detect.files_any:["firebase.json",
+// "firestore.rules"] (backend Firebase identico): su un repo Firebase pareggiano sul
+// segnale forte (hits=1). Il tie-break conta i match lang_any per disambiguare la
+// LINGUA — esattamente come supabase-jsts↔supabase-py su supabase/config.toml.
+// (Gemelli dei casi Sp-Py / Sp-Ambig / Caso G, con firebase.json al posto di
+// supabase/config.toml. firebase-jsts NON si tocca: lang_any:['package.json'].)
+
+// Caso Fb-Py (positivo): firebase.json + requirements.txt (NO package.json) -> firebase-py.
+// Passata 1: firebase.json -> fj e fp hits=1 (pari merito). Tie-break lang: fp lang=1
+// (requirements.txt ∈ lang_any py), fj lang=0 (package.json assente) -> vince firebase-py.
+const fbPy = mkdtempSync(join(tmpdir(), 'eco-fbpy-'));
+writeFileSync(join(fbPy, 'firebase.json'), '{}');
+writeFileSync(join(fbPy, 'requirements.txt'), 'firebase-admin==6.5.0\n');
+check(
+  'classify(firebase.json + requirements.txt, NO package.json) = firebase-py (tie-break per lingua)',
+  classify(fbPy) === 'firebase-py',
+);
+
+// Caso Fb-Ambig: firebase.json + package.json + requirements.txt -> {ambiguous}.
+// Passata 1: fj e fp hits=1 (firebase.json). Tie-break lang: fj lang=1 (package.json),
+// fp lang=1 (requirements.txt) -> pareggiano ANCHE sulla lingua -> ambiguous (onesto).
+const fbAmbig = mkdtempSync(join(tmpdir(), 'eco-fbambig-'));
+writeFileSync(join(fbAmbig, 'firebase.json'), '{}');
+writeFileSync(join(fbAmbig, 'package.json'), '{}');
+writeFileSync(join(fbAmbig, 'requirements.txt'), 'firebase-admin==6.5.0\n');
+const fbAmbigResult = classify(fbAmbig);
+check(
+  'classify(firebase.json + package.json + requirements.txt) = {ambiguous:true} (JS↔Py pari merito su lingua)',
+  fbAmbigResult && fbAmbigResult.ambiguous === true &&
+  Array.isArray(fbAmbigResult.candidates) &&
+  fbAmbigResult.candidates.includes('firebase-jsts') &&
+  fbAmbigResult.candidates.includes('firebase-py'),
+);
+
+// Caso Fb-NoLang: firebase.json SENZA alcun marker di lingua -> {ambiguous} (JS↔Py indecidibile).
+// Passata 1: fj e fp hits=1 (firebase.json). Tie-break lang: entrambi lang=0 -> ambiguous.
+const fbNoLang = mkdtempSync(join(tmpdir(), 'eco-fbnolang-'));
+writeFileSync(join(fbNoLang, 'firebase.json'), '{}');
+const fbNoLangResult = classify(fbNoLang);
+check(
+  'classify(firebase.json SENZA lingua) = {ambiguous:true} (JS↔Py indecidibile, onesto)',
+  fbNoLangResult && fbNoLangResult.ambiguous === true &&
+  Array.isArray(fbNoLangResult.candidates) &&
+  fbNoLangResult.candidates.includes('firebase-jsts') &&
+  fbNoLangResult.candidates.includes('firebase-py'),
+);
+
+// Caso Fb-JS (anti-regressione): firebase.json + package.json (NO requirements) -> resta firebase-jsts.
+// Passata 1: fj e fp hits=1 (firebase.json). Tie-break lang: fj lang=1 (package.json),
+// fp lang=0 -> vince firebase-jsts (il pack JS non viene dirottato dall'arrivo di firebase-py).
+const fbJsAntiReg = mkdtempSync(join(tmpdir(), 'eco-fbjsanti-'));
+writeFileSync(join(fbJsAntiReg, 'firebase.json'), '{}');
+writeFileSync(join(fbJsAntiReg, 'package.json'), '{}');
+check(
+  'classify(firebase.json + package.json, NO requirements) = firebase-jsts (anti-regressione, con firebase-py caricato)',
+  classify(fbJsAntiReg) === 'firebase-jsts',
+);
+
 const failed = results.filter((r) => !r.ok);
 console.log(`\n${failed.length === 0 ? 'OK' : 'FAIL'} — ${results.length - failed.length}/${results.length}`);
 process.exit(failed.length === 0 ? 0 : 1);

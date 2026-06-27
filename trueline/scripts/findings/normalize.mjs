@@ -257,6 +257,7 @@ function normalizeRlsCheck(native, ctx) {
     RLS002_NO_POLICY: 'CWE-285',
     RLS003_PERMISSIVE_TRUE: 'CWE-285',
     RLS004_MISSING_TENANT_PREDICATE: 'CWE-285',
+    RLS005_PUBLIC_BUCKET: 'CWE-285',
   };
   const out = [];
   for (const f of report.findings) {

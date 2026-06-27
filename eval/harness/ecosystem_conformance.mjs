@@ -199,6 +199,12 @@ const PACK_FIXTURES = {
   // resta SALTATO (vset.includes('rls') === false). fixtureApp/registry invariati
   // (cambia solo il kind + i dati del registry/manifest di T5).
   'firebase-jsts': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','firebase-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','firebase-jsts','registry.json') },
+  // F1 (eco-expansion): Python+Firebase, tier VERIFIED. INCROCIO supabase-py
+  // (lingua/tie-break) x firebase-jsts (backend/authz Firestore): pura DATA + questa
+  // riga, ZERO codice fix nuovo (firestore_rules_check/vulture/osv/gitleaks gia'
+  // dispatchati). kind/fixtureApp/registry come firebase-jsts -> stesso runVerifiedBody,
+  // verified_set=[secret,dead-code,authz]; floor SENZA semgrep -> criterio 2 senza docker.
+  'firebase-py': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','firebase-py','reference-app'), registry: resolve(ROOT,'eval','ecosystems','firebase-py','registry.json') },
 };
 
 // ---------------------------------------------------------------------------

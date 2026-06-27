@@ -135,6 +135,36 @@ function fixRlsS5(dir) {
   );
 }
 
+// RLS005 — policy permissiva su storage.objects (Supabase Storage): riscrive il
+// predicato pubblico (USING (true)) in owner-scoped via storage.foldername(name)
+// /auth.uid(), cosi' rls_check (ramo storage) torna PULITO (0 RLS005) -> verified.
+// Come SPY-S3/PY-S3 il match CATTURA il terminatore ';' ($2) e lo RI-EMETTE PRIMA
+// del commento di fix: senza, il commento '-- FIX:RLS005' commenterebbe il ';',
+// lasciando lo statement aperto e agganciando il successivo -> migration ROTTA.
+// migrationFileFor risolve la migration (BIT-invariante: fallback supabase/migrations).
+// Signature MATERIALMENTE distinta: il commento di fix include il nome-policy.
+function fixRlsStorageS5(dir, finding) {
+  const p = migrationFileFor(dir);
+  if (!existsSync(p)) return { ok: false, detail: `migration assente: ${MIGRATION_REL}` };
+  const sql = readFileSync(p, 'utf8');
+  const policy = (finding && (finding.policy
+    || (finding.location && finding.location.symbol))) || 'storage_objects';
+  // Match della USING (true) della policy su storage.objects (lazy fino al primo
+  // USING dopo storage.objects). $1 = testo fino a 'using (' incluso; $2 = ') ;?'
+  // (il terminatore va RI-EMESSO prima del commento, vedi nota in testata).
+  const re = /(create\s+policy\s+"?[\w$]+"?\s+on\s+storage\.objects\b[\s\S]*?\busing\s*\()\s*true\s*(\)\s*;?)/i;
+  if (!re.test(sql)) {
+    return { ok: false, detail: 'RLS005: policy storage.objects USING (true) non trovata nella migration' };
+  }
+  const after = sql.replace(
+    re,
+    `$1(storage.foldername(name))[1] = auth.uid()::text$2  -- FIX:RLS005 (fix-storage-owner-scope:${policy})`,
+  );
+  if (after === sql) return { ok: false, detail: 'RLS005: nessuna modifica applicata' };
+  writeFileSync(p, after, 'utf8');
+  return { ok: true, detail: `RLS005: storage.objects ${policy} USING(true) -> owner-scoped (storage.foldername(name)/auth.uid())` };
+}
+
 // S8 — dead-code: rimuove l'export morto (gate umano, L-COL-021; in eval
 // auto-approvato deterministicamente). knip segnala src/legacy/unused.ts come
 // FILE morto (nessun entry lo importa): la fix corretta e' RIMUOVERE il file,
@@ -529,6 +559,11 @@ const FIX_TABLE = {
   'RLS001_MISSING_RLS': { kind: 'rls', apply: fixRlsS3, signature: 'fix-s3-enable-rls-audit_logs' },
   'RLS003_PERMISSIVE_TRUE': { kind: 'rls', apply: fixRlsS4, signature: 'fix-s4-real-predicate-documents' },
   'RLS004_MISSING_TENANT_PREDICATE': { kind: 'rls', apply: fixRlsS5, signature: 'fix-s5-tenant-predicate-invoices' },
+  // Supabase Storage (RLS005): policy permissiva su storage.objects -> owner-scoped.
+  // Il ramo `if (cat === 'rls' && FIX_TABLE[ruleId])` la seleziona; il ramo RLS
+  // python per-ecosistema (precedente) richiede policySym==='invoices_select' &&
+  // ruleId==='RLS003_PERMISSIVE_TRUE' -> NON intercetta RLS005 (idioma-agnostico).
+  'RLS005_PUBLIC_BUCKET': { kind: 'rls', apply: fixRlsStorageS5, signature: 'fix-storage-owner-scope-bucket' },
 };
 
 // Seleziona la patch nota per un finding. Per secret/dead-code si seleziona per
