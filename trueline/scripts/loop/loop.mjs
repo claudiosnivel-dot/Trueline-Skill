@@ -47,6 +47,11 @@ const FIRESTORE_RULES_CHECK = resolve(ORACLES, 'firestore_rules_check.mjs');
 // che ha prodotto il finding (source_oracle.oracle) -> ramo firestore BIT-invariante.
 const APPWRITE_PERMS_CHECK = resolve(ORACLES, 'appwrite_perms_check.mjs');
 const POCKETBASE_RULES_CHECK = resolve(ORACLES, 'pocketbase_rules_check.mjs');
+// eco-F3: oracoli authz dichiarativi per Hasura (metadata YAML) e AppSync/Amplify
+// Gen1 (schema.graphql). Stesso dispatch per-oracolo del case 'authz' -> il ramo
+// firestore (default) resta BIT-invariante.
+const HASURA_METADATA_CHECK = resolve(ORACLES, 'hasura_metadata_check.mjs');
+const APPSYNC_AUTH_CHECK = resolve(ORACLES, 'appsync_auth_check.mjs');
 const GO_BIN = process.platform === 'win32' ? 'C:/Users/claud/go/bin' : '/c/Users/claud/go/bin';
 
 // --- Re-run dell'oracolo per-categoria (stesso oracolo, stesso rule_id) ------
@@ -122,6 +127,14 @@ export function rerunOracleFor(finding, dir, runOpts) {
       } else if (authzOracle === 'pocketbase-rules') {
         oracle = 'pocketbase-rules';
         res = run(POCKETBASE_RULES_CHECK, [dir]);
+      } else if (authzOracle === 'hasura-metadata') {
+        // eco-F3: metadata Hasura YAML (filter:{} su ruolo anonimo).
+        oracle = 'hasura-metadata';
+        res = run(HASURA_METADATA_CHECK, [dir]);
+      } else if (authzOracle === 'appsync-auth') {
+        // eco-F3: schema.graphql AppSync/Amplify Gen1 (allow: public su @model).
+        oracle = 'appsync-auth';
+        res = run(APPSYNC_AUTH_CHECK, [dir]);
       } else {
         // SP-8 (default invariato): Firestore Security Rules.
         oracle = 'firestore-rules';

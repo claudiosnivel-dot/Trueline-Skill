@@ -682,6 +682,175 @@ function fixPocketbaseS3(dir, finding) {
   return { ok: true, detail: `PB-S3: ${collName}.${ruleField} "" -> '@request.auth.id != ""' (autenticato)` };
 }
 
+// =============================================================================
+// FIX HASURA / APPSYNC-AMPLIFY (eco-F3) — additive. authz dichiarativa su file di
+// metadata Hasura (*.yaml) e schema AppSync/Amplify Gen1 (schema.graphql). Dispatch
+// in selectKnownFix keyed su cat==='authz' && <estensione del file>: path DISGIUNTI
+// da firestore.rules / appwrite.json / pb_schema.json e dai rami esistenti ->
+// nessuna interferenza (BIT-invariante). La fix riscrive il SOLO costrutto colpito
+// sulla COPIA (mai il fixture canonico); l'oracolo re-parsa, quindi il riformatto
+// e' irrilevante per il verdetto.
+// =============================================================================
+
+// Risolve un file di metadata Hasura nella copia (il file del finding, o un
+// tables.yaml sotto metadata/) — mai fuori dalla copia.
+function resolveHasuraFileInCopy(dir, rel) {
+  const norm = String(rel || 'metadata/tables.yaml').replace(/\\/g, '/');
+  const direct = resolve(dir, norm);
+  if (existsSync(direct)) return direct;
+  const m = /(?:^|\/)([^/]+\.ya?ml)$/.exec(norm);
+  if (m) {
+    const cand = resolve(dir, 'metadata', m[1]);
+    if (existsSync(cand)) return cand;
+  }
+  return null;
+}
+
+// HS-S3 (authz Hasura): la permission concessa a un ruolo pubblico (anonymous/
+// public/*) con `filter: {}` (mappa vuota = nessun vincolo di riga) viene resa
+// OWNER-SCOPED: `filter: {}` -> `filter: { user_id: { _eq: "X-Hasura-User-Id" } }`.
+// Dopo la fix hasura_metadata_check NON flagga piu' la permission (isEmptyFilter
+// false: la mappa ha una chiave) -> verified. Analogo dichiarativo del transfer
+// RLS/Firestore. Il match_path (`<table>.<permType>.<role>`) identifica il RUOLO
+// colpito: la sostituzione e' SCOPED al `filter: {}` della permission di quel ruolo
+// (si traccia il `role:` piu' recente), per riga (la doc-comment in cima al file
+// puo' CITARE `filter: {}`: si scarta la porzione di commento prima del match).
+function fixHasuraS3(dir, finding) {
+  const rel = (finding && finding.location && finding.location.file) || 'metadata/tables.yaml';
+  const p = resolveHasuraFileInCopy(dir, rel);
+  if (!p) return { ok: false, detail: `HS-S3: metadata Hasura non risolto (${rel})` };
+  const matchPath = String((finding.location && finding.location.symbol) || '');
+  const parts = matchPath.split('.');
+  const targetRole = parts.length >= 3 ? parts[parts.length - 1] : '';
+  const src = readFileSync(p, 'utf8');
+  const lines = src.split('\n');
+  // `filter: {}` (flow-map vuota) come unico contenuto di una riga di codice.
+  const emptyFilterRe = /^(\s*filter:\s*)\{\s*\}(\s*)$/;
+  // `role: X` (eventualmente come primo elemento di una sequenza `- role: X`).
+  const roleRe = /(?:^|\s|-\s*)role:\s*(.+?)\s*$/;
+  let currentRole = '';
+  let changed = false;
+  for (let i = 0; i < lines.length; i += 1) {
+    // Porzione di CODICE: scarta il commento `#...` per il tracking del ruolo e
+    // per evitare di matchare un `filter: {}` citato in un commento.
+    const codeOnly = lines[i].replace(/#.*$/, '');
+    const rm = roleRe.exec(codeOnly);
+    if (rm) currentRole = rm[1].replace(/['"]/g, '').trim();
+    if (!emptyFilterRe.test(codeOnly)) continue;
+    // SCOPED: tocca SOLO il `filter: {}` del ruolo colpito (match_path), se noto.
+    if (targetRole && currentRole !== targetRole) continue;
+    const before = lines[i];
+    lines[i] = before.replace(emptyFilterRe, '$1{ user_id: { _eq: "X-Hasura-User-Id" } }$2  # FIX:HS-S3');
+    if (lines[i] !== before) { changed = true; break; }
+  }
+  if (!changed) return { ok: false, detail: `HS-S3: "filter: {}" del ruolo ${targetRole || '?'} non trovato (fuori dai commenti)` };
+  const after = lines.join('\n');
+  if (after === src) return { ok: false, detail: 'HS-S3: nessuna modifica applicata' };
+  writeFileSync(p, after, 'utf8');
+  return { ok: true, detail: `HS-S3: filter: {} -> owner-scoped (user_id == X-Hasura-User-Id) su ${matchPath}` };
+}
+
+// Risolve schema.graphql nella copia (il file del finding) — mai fuori dalla copia.
+function resolveAppsyncFileInCopy(dir, rel) {
+  const norm = String(rel || 'schema.graphql').replace(/\\/g, '/');
+  const direct = resolve(dir, norm);
+  if (existsSync(direct)) return direct;
+  const m = /(?:^|\/)([^/]*\.graphql)$/.exec(norm);
+  if (m) {
+    const cand = resolve(dir, m[1]);
+    if (existsSync(cand)) return cand;
+  }
+  return null;
+}
+
+// Maschera (rimpiazza con spazi, preservando lunghezza/newline e quindi gli OFFSET)
+// i commenti `#` di riga, le stringhe `"..."` e le descrizioni `"""..."""` di un
+// SDL GraphQL. Mirror del masker di appsync_auth_check: serve a NON localizzare il
+// type/`allow: public` dentro una doc-comment (la fixture cita la forma vulnerabile
+// "type PublicPost ... allow: public" in testa al file). I token reali di codice
+// (`type`, `@auth`, `allow: public`) non vivono in stringhe -> nel mascherato
+// restano identici all'originale: gli indici trovati nel mascherato valgono 1:1 sul
+// testo reale, dove poi si applica la sostituzione.
+function maskGraphqlForFix(src) {
+  let out = '';
+  let i = 0;
+  const n = src.length;
+  while (i < n) {
+    const c = src[i];
+    if (c === '#') { // commento di riga
+      while (i < n && src[i] !== '\n') { out += ' '; i++; }
+      continue;
+    }
+    if (c === '"' && src[i + 1] === '"' && src[i + 2] === '"') { // descrizione """..."""
+      out += '   '; i += 3;
+      while (i < n && !(src[i] === '"' && src[i + 1] === '"' && src[i + 2] === '"')) {
+        out += src[i] === '\n' ? '\n' : ' '; i++;
+      }
+      if (i < n) { out += '   '; i += 3; }
+      continue;
+    }
+    if (c === '"') { // stringa "..."
+      out += ' '; i++;
+      while (i < n && src[i] !== '"') {
+        if (src[i] === '\\' && i + 1 < n) { out += '  '; i += 2; continue; }
+        out += src[i] === '\n' ? '\n' : ' '; i++;
+      }
+      if (i < n) { out += ' '; i++; }
+      continue;
+    }
+    out += c; i++;
+  }
+  return out;
+}
+
+// AM-S3 (authz AppSync/Amplify Gen1): la rule `{ allow: public }` dentro
+// `@auth(rules: [...])` sul `@model` colpito viene ristretta a `{ allow: owner }`.
+// Dopo la fix appsync_auth_check NON flagga piu' il type (PUBLIC_AUTH_RE
+// `/allow\s*:\s*public\b/` non matcha "owner") -> verified. Analogo dichiarativo
+// del transfer RLS/Firestore. Il match_path (`<TypeName>@auth`) identifica il TYPE:
+// la sostituzione e' SCOPED alla REGIONE di quel type (da `type <TypeName>` al
+// prossimo `type ` o EOF), robusta a un `@auth` multilinea. La localizzazione del
+// type e del token avviene sul testo MASCHERATO (commenti/stringhe -> spazi), cosi'
+// la doc-comment in testa al file — che CITA "type PublicPost ... allow: public" —
+// non viene scambiata per la definizione reale; la sostituzione si applica poi al
+// testo reale agli STESSI offset (i token di codice coincidono nel mascherato).
+function fixAppsyncS3(dir, finding) {
+  const rel = (finding && finding.location && finding.location.file) || 'schema.graphql';
+  const p = resolveAppsyncFileInCopy(dir, rel);
+  if (!p) return { ok: false, detail: `AM-S3: schema.graphql non risolto (${rel})` };
+  const matchPath = String((finding.location && finding.location.symbol) || '');
+  const typeName = matchPath.includes('@') ? matchPath.slice(0, matchPath.indexOf('@')) : matchPath;
+  const src = readFileSync(p, 'utf8');
+  const mask = maskGraphqlForFix(src);
+  const publicRe = /allow(\s*:\s*)public\b/;
+  // Regione del type colpito: da `type <TypeName>` al prossimo `type ` (o EOF),
+  // localizzata sul MASCHERATO (le citazioni in commento sono spazi -> ignorate).
+  let start = 0; let end = src.length;
+  if (typeName) {
+    const esc = typeName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const typeRe = new RegExp(`\\btype\\s+${esc}\\b`);
+    const mm = typeRe.exec(mask);
+    if (!mm) return { ok: false, detail: `AM-S3: definizione type ${typeName} non trovata` };
+    start = mm.index;
+    const nextRe = /\btype\s+[A-Za-z_]/g;
+    nextRe.lastIndex = mm.index + mm[0].length;
+    const nm = nextRe.exec(mask);
+    end = nm ? nm.index : src.length;
+  }
+  // Cerca `allow: public` nella regione del MASCHERATO (gli offset valgono sul reale).
+  const pm = publicRe.exec(mask.slice(start, end));
+  if (!pm) return { ok: false, detail: `AM-S3: "allow: public" non trovato nel type ${typeName || '?'}` };
+  const absStart = start + pm.index;
+  const matchLen = pm[0].length;
+  // I caratteri reali agli stessi offset coincidono col mascherato (codice, non
+  // stringa): la sostituzione e' sicura sul testo reale.
+  const replaced = src.slice(absStart, absStart + matchLen).replace(publicRe, 'allow$1owner');
+  const after = src.slice(0, absStart) + replaced + src.slice(absStart + matchLen);
+  if (after === src) return { ok: false, detail: 'AM-S3: nessuna modifica applicata' };
+  writeFileSync(p, after, 'utf8');
+  return { ok: true, detail: `AM-S3: allow: public -> allow: owner su ${typeName || 'type colpito'}` };
+}
+
 // Mappa controlId(rule_id) -> costruttore di patch.
 const FIX_TABLE = {
   // gitleaks: il rule_id varia per regola; mappiamo per categoria nel selettore.
@@ -763,6 +932,23 @@ function selectKnownFix(finding) {
   if (cat === 'authz' && /pb_schema\.json$/.test(file)) {
     const mp = (finding.location && finding.location.symbol) || '';
     return { kind: 'authz', apply: fixPocketbaseS3, signature: `fix-pocketbase-owner-scope:${mp}` };
+  }
+  // --- RAMO AUTHZ HASURA metadata YAML (eco-F3, additivo) -------------------
+  // Path DISGIUNTO (metadata Hasura *.yaml/*.yml) dai rami precedenti -> nessuna
+  // interferenza. La signature e' il match_path (`<table>.<permType>.<role>`):
+  // permission distinte = patch MATERIALMENTE distinte.
+  if (cat === 'authz' && /\.ya?ml$/.test(file)) {
+    const mp = (finding.location && finding.location.symbol) || '';
+    return { kind: 'authz', apply: fixHasuraS3, signature: `fix-hasura-owner-scope:${mp}` };
+  }
+  // --- RAMO AUTHZ APPSYNC/AMPLIFY schema.graphql (eco-F3, additivo) ----------
+  // Path DISGIUNTO (*.graphql) -> nessuna interferenza. La signature include il
+  // TypeName (prefisso del match_path `<TypeName>@auth`) cosi' type distinti hanno
+  // patch distinte.
+  if (cat === 'authz' && /\.graphql$/.test(file)) {
+    const mp = (finding.location && finding.location.symbol) || '';
+    const typeName = mp.includes('@') ? mp.slice(0, mp.indexOf('@')) : mp;
+    return { kind: 'authz', apply: fixAppsyncS3, signature: `fix-appsync-owner-scope:${typeName}` };
   }
   // --- RAMO SECRET FIREBASE serviceAccount.json (SP-8, additivo) -------------
   // Precede i rami config.ts: il path serviceAccount.json e' disgiunto -> non interferisce.

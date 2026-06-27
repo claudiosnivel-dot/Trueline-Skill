@@ -125,6 +125,15 @@ const FIRESTORE_RULES_CHECK = resolve(ROOT,'trueline','scripts','oracles','fires
 // dependency-vuln,authz] non richiede docker per il criterio 2 (come firebase-jsts).
 const APPWRITE_PERMS_CHECK = resolve(ROOT,'trueline','scripts','oracles','appwrite_perms_check.mjs');
 const POCKETBASE_RULES_CHECK = resolve(ROOT,'trueline','scripts','oracles','pocketbase_rules_check.mjs');
+// eco-F3 (hasura-jsts/amplify-jsts): oracoli authz custom STATICI sui file
+// dichiarativi del backend (metadata Hasura YAML / schema.graphql AppSync-Amplify
+// Gen1), legati dai pack per la categoria authz (tool=hasura_metadata_check kind:
+// 'hasura-metadata'; tool=appsync_auth_check kind:'appsync-auth'). Gemelli
+// strutturali di firestore_rules_check (CWE-862, A01:2025): analizzano SOLO il testo
+// (niente istanza Hasura/AppSync) -> nessuna dipendenza docker; il floor [secret,
+// dependency-vuln,authz] non richiede docker per il criterio 2 (come firebase-jsts).
+const HASURA_METADATA_CHECK = resolve(ROOT,'trueline','scripts','oracles','hasura_metadata_check.mjs');
+const APPSYNC_AUTH_CHECK = resolve(ROOT,'trueline','scripts','oracles','appsync_auth_check.mjs');
 // dead-code (verified_set, SP-4): wrapper unico (knip JS / vulture Python), il tool
 // effettivo è scelto dal binding manifest (oracles['dead-code'].tool).
 const RUN_DEADCODE = resolve(ROOT, 'trueline', 'scripts', 'oracles', 'run_deadcode.mjs');
@@ -226,6 +235,18 @@ const PACK_FIXTURES = {
   // null=LOCKED/SICURO -> nessun finding). verified_set=[secret,dead-code,authz];
   // floor SENZA semgrep -> criterio 2 senza docker.
   'pocketbase-jsts': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','pocketbase-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','pocketbase-jsts','registry.json') },
+  // eco-F3: JS/TS+Hasura, tier VERIFIED. INCROCIO firebase-jsts (lingua/struttura
+  // pack JS) x oracolo authz dichiarativo NUOVO (hasura_metadata_check sulla metadata
+  // YAML): pura DATA + questa riga + i rami engine additivi (hasura-metadata dispatchato
+  // in detectCategory/collectFindingsForLoop/canonOracle/normalize + fix fixHasuraS3).
+  // kind/fixtureApp/registry come firebase-jsts -> stesso runVerifiedBody,
+  // verified_set=[secret,dead-code,authz]; floor SENZA semgrep -> criterio 2 senza docker.
+  'hasura-jsts': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','hasura-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','hasura-jsts','registry.json') },
+  // eco-F3: JS/TS+AppSync/Amplify (Gen1), tier VERIFIED. Come hasura-jsts ma authz
+  // legato a appsync_auth_check su schema.graphql (SDL @auth Gen1: allow:public=floor;
+  // la sintassi Gen2 in TS resta detection-only). verified_set=[secret,dead-code,authz];
+  // floor SENZA semgrep -> criterio 2 senza docker.
+  'amplify-jsts': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','amplify-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','amplify-jsts','registry.json') },
 };
 
 // ---------------------------------------------------------------------------
@@ -281,6 +302,12 @@ function canonOracle(name) {
   if (n === 'appwrite-perms' || n === 'appwrite_perms' || n === 'appwrite_perms_check') return 'appwrite-perms';
   // authz PocketBase (pocketbase-jsts, eco-F2): idem per pocketbase-rules.
   if (n === 'pocketbase-rules' || n === 'pocketbase_rules' || n === 'pocketbase_rules_check') return 'pocketbase-rules';
+  // authz Hasura (hasura-jsts, eco-F3): registry source_oracle='hasura-metadata',
+  // normalize emette source_oracle.oracle='hasura-metadata'. Mappiamo anche il
+  // nome-tool del binding (hasura_metadata_check) alla stessa forma canonica.
+  if (n === 'hasura-metadata' || n === 'hasura_metadata' || n === 'hasura_metadata_check') return 'hasura-metadata';
+  // authz AppSync/Amplify (amplify-jsts, eco-F3): idem per appsync-auth.
+  if (n === 'appsync-auth' || n === 'appsync_auth' || n === 'appsync_auth_check') return 'appsync-auth';
   return n; // gitleaks | semgrep | knip
 }
 
@@ -909,6 +936,24 @@ function collectFindingsForLoop(dir, manifest) {
     if (j && Array.isArray(j.findings)) out.push(...normForLoop('pocketbase-rules', j, 'working-tree'));
   }
 
+  // authz -> hasura_metadata_check (cammina `dir` per la metadata Hasura YAML). (eco-F3)
+  // Statico: emette { findings:[...] } (category 'authz' via normalize 'hasura-metadata').
+  // cwd=dir come gli altri oracoli -> fingerprint-parity col loop.
+  if (bindings.authz && bindings.authz.tool === 'hasura_metadata_check') {
+    const r = nodeRun(HASURA_METADATA_CHECK, [dir], dir);
+    let j = null; try { j = JSON.parse(r.stdout); } catch { /* */ }
+    if (j && Array.isArray(j.findings)) out.push(...normForLoop('hasura-metadata', j, 'working-tree'));
+  }
+
+  // authz -> appsync_auth_check (cammina `dir` per schema.graphql). (eco-F3)
+  // Statico: emette { findings:[...] } (category 'authz' via normalize 'appsync-auth').
+  // cwd=dir come gli altri oracoli -> fingerprint-parity col loop.
+  if (bindings.authz && bindings.authz.tool === 'appsync_auth_check') {
+    const r = nodeRun(APPSYNC_AUTH_CHECK, [dir], dir);
+    let j = null; try { j = JSON.parse(r.stdout); } catch { /* */ }
+    if (j && Array.isArray(j.findings)) out.push(...normForLoop('appsync-auth', j, 'working-tree'));
+  }
+
   return out;
 }
 
@@ -1068,6 +1113,36 @@ function detectCategory({ cat, tool, binding, copyDir, copyBase, manifest }) {
     try { native = JSON.parse(r.stdout); } catch { /* gestito */ }
     if (!native) return { error: `pocketbase_rules_check: output non parsabile (exit=${r.status})` };
     return { findings: safeNormalize('pocketbase-rules', native, opts) };
+  }
+  if (tool === 'hasura_metadata_check') {
+    // authz (hasura-jsts, eco-F3) -> hasura_metadata_check <copy>/<scanDir>. La dir
+    // di scansione viene dal binding (manifest.oracles.authz.scan), default ["."].
+    // STATICO (analizza la sola metadata YAML, niente istanza Hasura) -> nessuna
+    // dipendenza docker nel floor. safeNormalize con 'hasura-metadata' (nome-oracolo
+    // riconosciuto da normalize -> category='authz', source_oracle.oracle='hasura-metadata';
+    // canonOracle lo riconduce alla stessa forma del registry). Output gia'
+    // eval/-ancorato (cwd=ROOT), quindi opts.base resta copyBase.
+    const scanDirs = (binding.scan && binding.scan.length) ? binding.scan : ['.'];
+    const scanned = scanDirs.find((d) => existsSync(join(copyDir, d)));
+    const target = scanned ? join(copyDir, scanned) : copyDir;
+    const r = nodeRun(HASURA_METADATA_CHECK, [target]);
+    let native = null;
+    try { native = JSON.parse(r.stdout); } catch { /* gestito */ }
+    if (!native) return { error: `hasura_metadata_check: output non parsabile (exit=${r.status})` };
+    return { findings: safeNormalize('hasura-metadata', native, opts) };
+  }
+  if (tool === 'appsync_auth_check') {
+    // authz (amplify-jsts, eco-F3) -> appsync_auth_check <copy>/<scanDir>. Come hasura
+    // ma sul file schema.graphql (SDL @auth Gen1). STATICO (niente istanza AppSync)
+    // -> nessuna dipendenza docker. safeNormalize con 'appsync-auth'.
+    const scanDirs = (binding.scan && binding.scan.length) ? binding.scan : ['.'];
+    const scanned = scanDirs.find((d) => existsSync(join(copyDir, d)));
+    const target = scanned ? join(copyDir, scanned) : copyDir;
+    const r = nodeRun(APPSYNC_AUTH_CHECK, [target]);
+    let native = null;
+    try { native = JSON.parse(r.stdout); } catch { /* gestito */ }
+    if (!native) return { error: `appsync_auth_check: output non parsabile (exit=${r.status})` };
+    return { findings: safeNormalize('appsync-auth', native, opts) };
   }
   return { error: `oracolo non gestito per la categoria ${cat}: ${tool}` };
 }

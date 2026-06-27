@@ -507,6 +507,137 @@ function normalizePocketbaseRules(native, ctx) {
   return out;
 }
 
+// --- hasura-metadata (authz) -------------------------------------------------
+// Nativo (da hasura_metadata_check.mjs): { oracle:'hasura-metadata', tool_version,
+//   coverage, scanned_files, parse_warnings, findings:[{ control_id, severity,
+//   category:'authz', match_path, table, perm_type, role, location{file,start_line,
+//   end_line,statement}, snippet, message, heuristic? }] }. Gemello strutturale di
+//   normalizeFirestoreRules: e' un NOSTRO oracolo (OWASP gia 2025 a regime, L-COL-026)
+//   per il Broken Access Control sui permessi dichiarativi Hasura. category=authz
+//   (NON rls). Il fingerprint e' ANCORATO al match_path (`<table>.<permType>.<role>`,
+//   mai alla riga, che la metadata YAML sposta): stesso difetto sullo stesso path ->
+//   stesso fingerprint prima e dopo, cosi il loop lo riconosce.
+function normalizeHasuraMetadata(native, ctx) {
+  const report = native && Array.isArray(native.findings) ? native : { findings: native };
+  if (!Array.isArray(report.findings)) {
+    throw new Error('hasura-metadata: atteso { findings: [...] } oppure un array');
+  }
+  const toolVersion = report.tool_version || ctx.toolVersions['hasura-metadata'];
+  // OWASP canonico 2025 dei permessi Hasura (nostro oracolo: gia 2025).
+  const HASURA_OWASP_2025 = 'A01:2025'; // Broken Access Control
+  // CWE-862 Missing Authorization (allineato a 07 §4.3): role pubblico + filter:{} =
+  // autorizzazione ASSENTE. Divergenza intenzionale dal CWE-285 della famiglia RLS.
+  const HASURA_CWE = {
+    HASURA001_PUBLIC_PERMISSION: 'CWE-862',
+    HASURA002_PUBLIC_FILTER: 'CWE-862',
+  };
+  const out = [];
+  for (const f of report.findings) {
+    const ruleId = f.control_id || 'HASURA_UNKNOWN';
+    const loc = f.location || {};
+    const normalizedPath = normalizePath(loc.file, { base: ctx.base });
+    // Simbolo = il match_path della permission (l'ancora semantica del difetto).
+    const symbol = f.match_path;
+    // match_signature: controllo + match_path + role + path (semantica, NON la riga).
+    const matchSignature = [ruleId, f.match_path || '', f.role || '', normalizedPath].join('|');
+    const finding = baseFinding(ctx, {
+      category: 'authz',
+      severity: normSeverity(f.severity, 'HIGH'),
+      location: {
+        file: normalizedPath,
+        start_line: intOr(loc.start_line, 0),
+        end_line: intOr(loc.end_line, loc.start_line, 0),
+        ...(symbol ? { symbol } : {}),
+      },
+      // L'oracolo Hasura non emette segreti: messaggio/snippet e' evidenza sicura.
+      evidence: f.message || f.snippet || `Controllo Hasura ${ruleId} su ${f.match_path}`,
+      source_oracle: {
+        oracle: 'hasura-metadata',
+        tool_version: toolVersion,
+        rule_id: ruleId,
+      },
+      owasp: HASURA_OWASP_2025,
+      owasp_source: HASURA_OWASP_2025,
+      ...(HASURA_CWE[ruleId] ? { cwe: HASURA_CWE[ruleId] } : {}),
+      fingerprint: fingerprintOf({
+        oracle: 'hasura-metadata',
+        ruleId,
+        normalizedPath,
+        matchSignature,
+      }),
+      remediation_hint: f.heuristic
+        ? 'Verifica euristica dei permessi Hasura demandata a hasura-metadata.'
+        : undefined,
+    });
+    out.push(finding);
+  }
+  return out;
+}
+
+// --- appsync-auth (authz) ----------------------------------------------------
+// Nativo (da appsync_auth_check.mjs): { oracle:'appsync-auth', tool_version,
+//   coverage, scanned_files, parse_warnings, findings:[{ control_id, severity,
+//   category:'authz', match_path, type_name, allow, location{file,start_line,
+//   end_line,statement}, snippet, message, heuristic? }] }. Gemello strutturale di
+//   normalizeFirestoreRules: NOSTRO oracolo (OWASP gia 2025) per il Broken Access
+//   Control sulle direttive @auth AppSync/Amplify Gen1. category=authz. Il
+//   fingerprint e' ANCORATO al match_path (`<TypeName>@auth`, mai alla riga, che
+//   schema.graphql sposta): stesso difetto sullo stesso path -> stesso fingerprint.
+function normalizeAppsyncAuth(native, ctx) {
+  const report = native && Array.isArray(native.findings) ? native : { findings: native };
+  if (!Array.isArray(report.findings)) {
+    throw new Error('appsync-auth: atteso { findings: [...] } oppure un array');
+  }
+  const toolVersion = report.tool_version || ctx.toolVersions['appsync-auth'];
+  const APPSYNC_OWASP_2025 = 'A01:2025'; // Broken Access Control
+  // CWE-862 Missing Authorization: allow:public = autorizzazione ASSENTE (accesso
+  // pubblico via API). Divergenza intenzionale dal CWE-285 della famiglia RLS.
+  const APPSYNC_CWE = {
+    APPSYNC001_PUBLIC_AUTH: 'CWE-862',
+  };
+  const out = [];
+  for (const f of report.findings) {
+    const ruleId = f.control_id || 'APPSYNC_UNKNOWN';
+    const loc = f.location || {};
+    const normalizedPath = normalizePath(loc.file, { base: ctx.base });
+    // Simbolo = il match_path della direttiva @auth (l'ancora semantica del difetto).
+    const symbol = f.match_path;
+    // match_signature: controllo + match_path + allow + path (semantica, NON la riga).
+    const matchSignature = [ruleId, f.match_path || '', f.allow || '', normalizedPath].join('|');
+    const finding = baseFinding(ctx, {
+      category: 'authz',
+      severity: normSeverity(f.severity, 'HIGH'),
+      location: {
+        file: normalizedPath,
+        start_line: intOr(loc.start_line, 0),
+        end_line: intOr(loc.end_line, loc.start_line, 0),
+        ...(symbol ? { symbol } : {}),
+      },
+      // L'oracolo AppSync non emette segreti: messaggio/snippet e' evidenza sicura.
+      evidence: f.message || f.snippet || `Controllo AppSync ${ruleId} su ${f.match_path}`,
+      source_oracle: {
+        oracle: 'appsync-auth',
+        tool_version: toolVersion,
+        rule_id: ruleId,
+      },
+      owasp: APPSYNC_OWASP_2025,
+      owasp_source: APPSYNC_OWASP_2025,
+      ...(APPSYNC_CWE[ruleId] ? { cwe: APPSYNC_CWE[ruleId] } : {}),
+      fingerprint: fingerprintOf({
+        oracle: 'appsync-auth',
+        ruleId,
+        normalizedPath,
+        matchSignature,
+      }),
+      remediation_hint: f.heuristic
+        ? 'Verifica euristica delle direttive @auth AppSync demandata a appsync-auth.'
+        : undefined,
+    });
+    out.push(finding);
+  }
+  return out;
+}
+
 // --- knip (dead-code) ---------------------------------------------------------
 // Nativo: { issues:[{ file, exports:[{name,line,col}], types:[...], files:[{name}],
 //   dependencies, ... }] }. category=dead-code; severity=LOW (igiene, 04 §4).
@@ -937,6 +1068,14 @@ const ORACLE_ALIASES = {
   pocketbase_rules: 'pocketbase-rules',
   pocketbase_rules_check: 'pocketbase-rules',
   'pocketbase-rules-check': 'pocketbase-rules',
+  'hasura-metadata': 'hasura-metadata',
+  hasura_metadata: 'hasura-metadata',
+  hasura_metadata_check: 'hasura-metadata',
+  'hasura-metadata-check': 'hasura-metadata',
+  'appsync-auth': 'appsync-auth',
+  appsync_auth: 'appsync-auth',
+  appsync_auth_check: 'appsync-auth',
+  'appsync-auth-check': 'appsync-auth',
   knip: 'knip',
   deadcode: 'knip',
   'dead-code': 'knip',
@@ -970,6 +1109,8 @@ export function normalize(oracle, native, opts = {}) {
       'firestore-rules': 'firestore-rules-check',
       'appwrite-perms': 'appwrite-perms-check',
       'pocketbase-rules': 'pocketbase-rules-check',
+      'hasura-metadata': 'hasura-metadata-check',
+      'appsync-auth': 'appsync-auth-check',
       knip: 'knip',
       vulture: 'vulture',
       osv: 'osv-scanner',
@@ -988,6 +1129,10 @@ export function normalize(oracle, native, opts = {}) {
       return normalizeAppwritePerms(native, ctx);
     case 'pocketbase-rules':
       return normalizePocketbaseRules(native, ctx);
+    case 'hasura-metadata':
+      return normalizeHasuraMetadata(native, ctx);
+    case 'appsync-auth':
+      return normalizeAppsyncAuth(native, ctx);
     case 'knip':
       return normalizeKnip(native, ctx);
     case 'vulture':
