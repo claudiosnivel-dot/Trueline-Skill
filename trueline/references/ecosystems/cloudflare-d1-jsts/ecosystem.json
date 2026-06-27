@@ -1,0 +1,25 @@
+{
+  "id": "cloudflare-d1-jsts",
+  "version": "1.1.0",
+  "languages": ["js", "ts"],
+  "backend": "cloudflare-d1",
+  "detect": { "files_any": ["wrangler.toml"], "lang_any": ["package.json"] },
+  "triggers": [
+    "cloudflare", "cloudflare-d1", "d1", "wrangler", "workers", "workers-types",
+    "cloudflare workers", "cloudflare d1", "kv", "durable objects",
+    "secret", "segret", "authz", "authorization", "autorizzazione",
+    "route", "rotta", "endpoint", "blueprint", "audit", "remediat",
+    "bonific", "macrotask", "oracol", "js", "ts", "javascript", "typescript",
+    "sicur", "security"
+  ],
+  "oracles": {
+    "secret":          { "tool": "gitleaks", "shared": true },
+    "dependency-vuln": { "tool": "osv", "lockfiles": ["package-lock.json"] },
+    "authz":           { "tool": "semgrep", "ruleset": "ruleset/", "role": "authz-surface" },
+    "injection":       { "tool": "semgrep", "ruleset": "ruleset/" },
+    "dead-code":       { "tool": "knip" }
+  },
+  "floor":        ["secret", "dependency-vuln", "authz"],
+  "verified_set": [],
+  "coverage_policy": "declared"
+}

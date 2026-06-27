@@ -1,0 +1,53 @@
+{
+  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack cloudflare-d1-jsts (eco-F6, tier DETECTION). Stesso schema di eval/ecosystems/rails-rb/registry.json. Per ogni difetto seminato D1-S1..D1-S3: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso (tier detection, eco-F6 L-COL-030: tutti detection-only, verified_set vuoto), ancora ispezionabile (file+marker | lockfile+symbol | file+marker), scope di scansione dell'oracolo, e note. Il floor [secret, dependency-vuln, authz] e' obbligatorio; nessun difetto bonus non-floor in questa fase. authz-surface qui = route-authz Cloudflare Workers (env.DB.prepare con SQL concat senza auth-guard): l'oracolo legato e' semgrep (ruleset/cloudflare-d1-jsts-authz.yml, best-effort eco-F6: semgrep assente nel sandbox -> degrada onesto, mai falso verde).",
+  "schema_version": "1.0",
+  "milestone": "eco-F6",
+  "ecosystem": "cloudflare-d1-jsts",
+  "verified_set": [],
+  "reference_app": "./reference-app",
+  "defects": [
+    {
+      "id": "D1-S1",
+      "category": "secret",
+      "source_oracle": "gitleaks",
+      "owasp": "A07:2025",
+      "cwe": "CWE-798",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "src/config.js",
+        "marker": "SEED:D1-S1"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Credenziali hardcoded nel sorgente (working tree): chiave in stile Stripe (sk_live_CLOUDFLARED1S1_..., regola trueline-stripe-like-key) hardcodata in src/config.js. gitleaks working-tree DEVE rilevare il literal sk_live_... (alta entropia, pattern Stripe, lunghezza >= 16 char dopo sk_live_). Tier detection (eco-F6): trovata, non auto-fixata (verified_set vuoto). Il contrasto ENV-read (getStripeKey(env)) non deve produrre finding (precisione: nessun literal hardcoded)."
+    },
+    {
+      "id": "D1-S2",
+      "category": "dependency-vuln",
+      "source_oracle": "osv",
+      "owasp": "A06:2025",
+      "cwe": "CWE-20",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "package-lock.json",
+        "lockfile": "package-lock.json",
+        "symbol": "lodash@4.17.20"
+      },
+      "scan_scope": "lockfile",
+      "notes": "Dipendenza vulnerabile reale pinnata: lodash@4.17.20. Il database OSV/GitHub Security Advisory contiene: GHSA-35jh-r3h4-6jhm / CVE-2021-23337 (Command Injection via template, CVSS 7.2). osv-scanner --lockfile package-lock.json DEVE emettere almeno un finding per lodash@4.17.20. Simbolo anchor come emesso da osv-scanner: lodash@4.17.20. owasp/cwe come riportati da osv-scanner = confronto SOFT/esterno (CWE-20 e' il cwe nativo emesso da osv-scanner per questo advisory; A06:2025 = Vulnerable and Outdated Components). Tier detection: trovata, prioritizzata, NON auto-bumpata (verified_set vuoto)."
+    },
+    {
+      "id": "D1-S3",
+      "category": "authz",
+      "source_oracle": "semgrep",
+      "owasp": "A01:2025",
+      "cwe": "CWE-862",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "src/index.js",
+        "marker": "SEED:D1-S3"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Workers fetch handler che costruisce la query SQL di D1 per concatenazione senza auth-guard: env.DB.prepare('SELECT * FROM notes WHERE user_id = ' + userId) in src/index.js senza controllo Authorization header. L'oracolo semgrep + ruleset cloudflare-d1-jsts-authz.yml (regola d1-authz-unguarded-prepare-sql-concat, pattern $ENV.DB.prepare($A + $B)) DEVE flaggare la chiamata con concatenazione. Il contrasto (src/guarded.js con env.DB.prepare('... ?') parametrizzato + auth-guard esplicito) NON deve produrre finding (precisione: 0 FP, nessun + nell'argomento di prepare). Tier detection BEST-EFFORT (eco-F6): semgrep assente nel sandbox -> degrada onesto (conformance gate esce 1 dichiarato se docker non disponibile); quando semgrep e' disponibile, deve cogliere D1-S3 e avere 0 FP sul contrasto."
+    }
+  ]
+}

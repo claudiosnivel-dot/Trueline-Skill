@@ -1,0 +1,53 @@
+{
+  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack mongodb-jsts (eco-F6, tier DETECTION). Per ogni difetto seminato MG-S1..MG-S3: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso (tier detection, eco-F6 L-COL-030: tutti detection-only, verified_set vuoto), ancora ispezionabile (file+marker | lockfile+symbol), scope di scansione dell'oracolo, e note. Floor [secret, dependency-vuln, authz] obbligatorio. authz-surface = route-authz semgrep (insertOne senza auth-guard, best-effort eco-F6: degrada onesto se docker assente).",
+  "schema_version": "1.0",
+  "milestone": "eco-F6",
+  "ecosystem": "mongodb-jsts",
+  "verified_set": [],
+  "reference_app": "./reference-app",
+  "defects": [
+    {
+      "id": "MG-S1",
+      "category": "secret",
+      "source_oracle": "gitleaks",
+      "owasp": "A07:2025",
+      "cwe": "CWE-798",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "src/index.js",
+        "marker": "SEED:MG-S1"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Credenziale Stripe-like hardcoded nel sorgente (working tree): chiave sk_live_MongoDBjstsS1_... in src/index.js. gitleaks working-tree DEVE rilevare il literal sk_live_... (alta entropia, pattern trueline-stripe-like-key / stripe-access-token). Tier detection (eco-F6): trovata, non auto-fixata. Il contrasto process.env.STRIPE_KEY (lettura da env) non deve produrre finding (precisione)."
+    },
+    {
+      "id": "MG-S2",
+      "category": "dependency-vuln",
+      "source_oracle": "osv",
+      "owasp": "A06:2025",
+      "cwe": "CWE-20",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "package-lock.json",
+        "lockfile": "package-lock.json",
+        "symbol": "lodash@4.17.20"
+      },
+      "scan_scope": "lockfile",
+      "notes": "Dipendenza vulnerabile reale pinnata: lodash@4.17.20 (GHSA-35jh-r3h4-6jhm / CVE-2021-23337, Command Injection via template, CVSS 7.2). osv-scanner --lockfile package-lock.json DEVE emettere finding per lodash@4.17.20. owasp/cwe come emessi da osv-scanner (confronto SOFT/esterno: CWE-20 e' il cwe nativo emesso da osv-scanner per questo advisory; A06:2025 = Vulnerable and Outdated Components). Tier detection: trovata, NON auto-bumpata."
+    },
+    {
+      "id": "MG-S3",
+      "category": "authz",
+      "source_oracle": "semgrep",
+      "owasp": "A01:2025",
+      "cwe": "CWE-862",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "src/routes/items.js",
+        "marker": "SEED:MG-S3"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Route POST /items che chiama db.collection('items').insertOne(req.body) senza alcuna verifica identita'/ruolo: chiunque raggiunga l'endpoint puo' inserire documenti MongoDB (CWE-862 Missing Authorization, Broken Access Control). semgrep + ruleset mongodb-jsts-authz.yml DEVE flaggare l'insertOne nel handler POST senza auth-guard. Il contrasto (POST /items/secure con verifyToken prima dell'insertOne) NON deve produrre finding (precisione: 0 FP sul contrasto). Tier detection BEST-EFFORT (eco-F6): semgrep via docker; degrada onesto se docker assente (conformance gate esce 1 dichiarato, mai falso verde)."
+    }
+  ]
+}

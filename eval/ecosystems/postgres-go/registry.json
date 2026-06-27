@@ -1,0 +1,66 @@
+{
+  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack postgres-go (Eco-F5a, secret=verified). Per ogni difetto seminato GO-S1..GO-S3: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso. GO-S1 (secret): verified (gitleaks working-tree pulito sul file main.go dopo fix). GO-S2 (dependency-vuln) e GO-S3 (authz) restano detection-only. Il floor [secret, dependency-vuln, authz] e' obbligatorio; verified_set=[secret]. authz (semgrep) e' best-effort (semgrep assente nel sandbox -> deferred a gate F6 su macchina con semgrep, L-COL-006). Pin dependency-vuln: github.com/dgrijalva/jwt-go@v3.2.0+incompatible (CVE-2020-26160 / GHSA-w73w-5m7g-f7qc), verificato con osv-scanner.",
+  "schema_version": "1.0",
+  "milestone": "Eco-F5a",
+  "ecosystem": "postgres-go",
+  "verified_set": ["secret", "dead-code"],
+  "reference_app": "eval/ecosystems/postgres-go/reference-app",
+  "defects": [
+    {
+      "id": "GO-S1",
+      "category": "secret",
+      "source_oracle": "gitleaks",
+      "owasp": "A07:2025",
+      "cwe": "CWE-798",
+      "expected_fix_state": "verified",
+      "anchor": {
+        "file": "main.go",
+        "marker": "SEED:GO-S1"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Secret hardcoded nel sorgente Go (apiKey const ad alta entropia in stile Stripe sk_live_...). Rilevato da gitleaks working-tree su main.go. Fix: sostituzione const con var letta da os.Getenv(\"API_KEY\") -> gitleaks working-tree pulito (0 finding su main.go) -> verified. Contrasto: envAPIKey letto da os.Getenv('API_KEY') NON flaggato."
+    },
+    {
+      "id": "GO-S2",
+      "category": "dependency-vuln",
+      "source_oracle": "osv",
+      "owasp": "A03:2025",
+      "cwe": "CWE-347",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "lockfile": "go.mod",
+        "symbol": "github.com/dgrijalva/jwt-go@3.2.0+incompatible"
+      },
+      "scan_scope": "lockfile",
+      "notes": "Dipendenza vulnerabile reale pinnata: github.com/dgrijalva/jwt-go@v3.2.0+incompatible (CVE-2020-26160 / GHSA-w73w-5m7g-f7qc): il campo 'aud' non viene validato, consentendo bypass del controllo audience sui token JWT. Rilevata da osv-scanner --lockfile go.mod. CWE: CWE-347 (Improper Verification of Cryptographic Signature). OWASP: A03:2025 (Software Supply Chain Failures). Tier DETECTION: detection-only (dependency-vuln non auto-fixabile)."
+    },
+    {
+      "id": "GO-S4",
+      "category": "dead-code",
+      "source_oracle": "go-deadcode",
+      "owasp": "-",
+      "expected_fix_state": "verified",
+      "anchor": {
+        "file": "dead.go",
+        "symbol": "UnusedHelper",
+        "marker": "SEED:POSTGRESGO-DC"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Funzione esportata UnusedHelper in dead.go MAI chiamata da nessun percorso di esecuzione. L'oracolo go-deadcode ('deadcode -json ./...') la segnala come irraggiungibile. Il contrasto UsedHelper e' chiamata da init() in dead.go -> raggiungibile, NON flaggata (precisione: 0 falsi positivi). Tier VERIFIED (Eco-F5b): dead-code e' nel verified_set; rimuovere UnusedHelper porta deadcode a 0 finding su dead.go -> stato `verified`. owasp/cwe non applicabili (categoria igienica, omessi '-')."
+    },
+    {
+      "id": "GO-S3",
+      "category": "authz",
+      "source_oracle": "semgrep",
+      "owasp": "A01:2025",
+      "cwe": "CWE-862",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "main.go",
+        "marker": "SEED:GO-S3"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Handler HTTP mutante (createBookingHandler) che esegue db.Exec('INSERT INTO bookings ...') SENZA alcun controllo di identita/ruolo (route-authz, authz-surface non-Supabase). Il contrasto createBookingSecureHandler verifica r.Header.Get('Authorization') PRIMA dell'INSERT e NON deve produrre finding (precisione). Rilevato dal ruleset semgrep go-authz-mutating-handler-no-identity-check (BEST-EFFORT: semgrep assente nel sandbox, deferred a F5/gate F6). Tier DETECTION: detection-only."
+    }
+  ]
+}

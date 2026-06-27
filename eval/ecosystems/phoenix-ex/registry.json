@@ -1,0 +1,53 @@
+{
+  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack phoenix-ex (eco-F4, tier DETECTION). Per ogni difetto seminato EX-S1..EX-S3: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso (tier DETECTION, verified_set=[] -> tutti detection-only, L-COL-030), ancora ispezionabile (file+marker | lockfile+symbol | file+marker), scope di scansione dell'oracolo, note. Floor [secret, dependency-vuln] obbligatorio (eco-F4). EX-S1 secret (gitleaks, working-tree, hard); EX-S2 dependency-vuln (osv, lockfile, hard): plug 1.10.3 vulnerabile a EEF-CVE-2026-8468/GHSA-468c-vq7p-gh64 (DoS, CWE-770) — verificato con osv-scanner --lockfile mix.lock. EX-S3 authz/route-authz (semgrep Elixir): action mutante senza plug auth — difetto seminato e documentato ma FUORI dal floor (GAP DICHIARATO L-COL-006). Motivo: l'engine OSS di Semgrep (semgrep/semgrep:latest) NON parsa Elixir (emette 'Missing plugin ... needed for parsing Elixir target. Try adding --pro-languages' e 0 finding); il parsing Elixir richiede l'engine proprietario Pro non disponibile nel sandbox. Il binding authz=semgrep resta come BONUS non-floor (role:authz-surface) per la fixture/seed; oracolo route-authz Elixir deferred F6.",
+  "schema_version": "1.0",
+  "milestone": "eco-F4",
+  "ecosystem": "phoenix-ex",
+  "verified_set": ["secret"],
+  "reference_app": "eval/ecosystems/phoenix-ex/reference-app",
+  "defects": [
+    {
+      "id": "EX-S1",
+      "category": "secret",
+      "source_oracle": "gitleaks",
+      "owasp": "A07:2025",
+      "cwe": "CWE-798",
+      "expected_fix_state": "verified",
+      "anchor": {
+        "file": "config/config.exs",
+        "marker": "SEED:EX-S1"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Credenziali hardcoded nel sorgente (working tree): config/config.exs contiene una DSN Postgres con password live e una chiave API in stile Stripe (sk_live_...) come literal Elixir assegnati a campi di configurazione. Rilevabili da gitleaks lavorando-tree (regole trueline-generic-assigned-secret e trueline-stripe-like-key). Contrasto PULITO: config/runtime.exs legge le credenziali da System.get_env (nessun finding gitleaks). Tier detection-only: trovata, non auto-fixata. La fix sostituisce i literal con System.get_env."
+    },
+    {
+      "id": "EX-S2",
+      "category": "dependency-vuln",
+      "source_oracle": "osv",
+      "owasp": "A06:2025",
+      "cwe": "CWE-770",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "mix.lock",
+        "lockfile": "mix.lock",
+        "symbol": "plug@1.10.3"
+      },
+      "scan_scope": "lockfile",
+      "notes": "Dipendenza vulnerabile reale pinnata: plug 1.10.3 (osv flagga EEF-CVE-2026-8468 / GHSA-468c-vq7p-gh64, DoS via unbounded buffer accumulation in multipart header parsing). CWE-770 (Allocation of Resources Without Limits or Throttling) come emesso da osv-scanner nel campo database_specific.cwe_ids. VERIFICATO con osv-scanner scan --lockfile mix.lock: il finding include pkg=plug@1.10.3. OWASP in registry (A06:2025 Vulnerable & Outdated Components) è un'approssimazione registry; normalize mappa A06:2021->A03:2025 (Software Supply Chain Failures) per le fonti esterne, ma il check è SOFT (non bloccante). Tier detection-only: trovata, prioritizzata, NON auto-bumpata (un bump potrebbe rompere, human-gated)."
+    },
+    {
+      "id": "EX-S3",
+      "category": "authz",
+      "source_oracle": "semgrep",
+      "owasp": "A01:2025",
+      "cwe": "CWE-862",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "lib/my_app_web/controllers/posts_controller.ex",
+        "marker": "SEED:EX-S3"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Action mutanti Phoenix (create/update/delete in PostsController) senza plug di autenticazione nel modulo: chiunque raggiunga gli endpoint può mutare i dati (CWE-862, Broken Access Control, A01:2025). Modellato dalla regola phoenix-authz-mutating-action-no-auth-plug (ruleset/), col SecurePostsController come contrasto pulito (plug :require_authenticated_user, NON deve produrre finding). NON NEL FLOOR — GAP DICHIARATO L-COL-006: l'engine OSS di Semgrep (immagine pinnata semgrep/semgrep:latest) NON può parsare Elixir — restituisce 'Missing plugin ... Missing Semgrep extension needed for parsing Elixir target. Try adding --pro-languages' e 0 finding; il parsing Elixir richiede l'engine proprietario Pro (--pro-languages) non disponibile nel sandbox. La route-authz Elixir via Semgrep è perciò INAFFIDABILE (sperimentale) e degrada onestamente: il binding resta come BONUS non-floor (role:authz-surface) e l'oracolo è deferred F6. Difetto seminato e documentato per il futuro oracolo; tier detection-only (non auto-fixato)."
+    }
+  ]
+}

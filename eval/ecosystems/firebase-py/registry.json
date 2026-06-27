@@ -1,0 +1,68 @@
+{
+  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack firebase-py (eco-F1). Stesso schema di eval/ecosystems/firebase-jsts/registry.json. Per ogni difetto seminato FB-S1..FB-S4: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso (tier verified, eco-F1: verified_set=[secret,dead-code,authz]), ancora ispezionabile (file+marker | lockfile+symbol | file+marker+match_path), scope di scansione dell'oracolo, e note. Il floor [secret, dependency-vuln, authz] e' obbligatorio; FB-S2 (dependency-vuln) e' floor ma non verified. authz-surface qui = Firestore security rules (Firebase): `allow ... if true` = autorizzazione ASSENTE (CWE-862 Missing Authorization, threat model 07 §4.3), divergenza intenzionale dal CWE-285 della famiglia RLS.",
+  "schema_version": "1.0",
+  "milestone": "eco-f1",
+  "ecosystem": "firebase-py",
+  "verified_set": ["secret", "dead-code", "authz"],
+  "reference_app": "./reference-app",
+  "defects": [
+    {
+      "id": "FB-S1",
+      "category": "secret",
+      "source_oracle": "gitleaks",
+      "owasp": "A07:2025",
+      "cwe": "CWE-798",
+      "expected_fix_state": "verified",
+      "anchor": {
+        "file": "serviceAccount.json",
+        "marker": "SEED:FB-S1"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Credenziali hardcoded committate: serviceAccount.json contiene una private_key di service account (type=service_account, private_key BEGIN/END, client_email, private_key_id), PRESENTE nel working tree e rilevata dall'oracolo legato (gitleaks working-tree). La fix neutralizza il campo private_key (sostituisce il PEM con placeholder vuoto '') e legge la chiave reale da FIREBASE_PRIVATE_KEY / secret-manager. Il fix e' keyed-by-path (serviceAccount.json) e riusa fixSecretFbS1 di firebase-jsts senza modifiche (BIT-invariante). Contrasto PULITO: app/config.py legge le credenziali da os.getenv (env-read, gitleaks-clean). Tier verified: trovata e auto-fixata dall'oracolo gitleaks."
+    },
+    {
+      "id": "FB-S2",
+      "category": "dependency-vuln",
+      "source_oracle": "osv",
+      "owasp": "A06:2025",
+      "cwe": "CWE-20",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "requirements.txt",
+        "lockfile": "requirements.txt",
+        "symbol": "pyyaml@5.3.1"
+      },
+      "scan_scope": "lockfile",
+      "notes": "Dipendenza vulnerabile reale pinnata: PyYAML==5.3.1 (osv flagga GHSA-8q59-q68h-6hv4 / CVE-2020-14343, arbitrary code execution via yaml.load di input non fidato; anche PYSEC-2021-142). Rilevata dall'oracolo legato (osv) sul lockfile requirements.txt. Le altre dipendenze (firebase-admin, fastapi, uvicorn) restano pulite. owasp/cwe come riportati da osv = confronto SOFT/esterno (CWE-20 e' il cwe nativo emesso da osv-scanner per questo advisory; A06:2025 = Vulnerable and Outdated Components). Tier detection: trovata, prioritizzata, NON auto-bumpata (fuori dal verified_set; il bump di versione richiede intervento umano). NOTA: requirements.txt e' SIA lang_any (classify) SIA lockfile (osv)."
+    },
+    {
+      "id": "FB-S3",
+      "category": "authz",
+      "source_oracle": "firestore-rules",
+      "owasp": "A01:2025",
+      "cwe": "CWE-862",
+      "expected_fix_state": "verified",
+      "anchor": {
+        "file": "firestore.rules",
+        "marker": "SEED:FB-S3",
+        "match_path": "/databases/{database}/documents/public_notes/{noteId}"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Regola `allow read, write: if true;` sulla collection public_notes: autorizzazione ASSENTE (chiunque legge/scrive). L'oracolo firestore-rules emette FIRESTORE001_PUBLIC_ALLOW; normalize -> CWE-862/A01:2025. CWE-862 (Missing Authorization) e' deliberato: `if true` = authz ASSENTE, allineato al threat model 07 §4.3, divergenza intenzionale dal CWE-285 della famiglia RLS (dove l'authz e' PRESENTE ma permissiva). La collection di contrasto private_docs usa regole owner-scoped (request.auth.uid == resource.data.ownerId per read/update/delete; create vincolata a ownerId == auth.uid): isolamento reale, NON deve produrre finding (precisione). Il fix riusa fixFirestoreRules di firebase-jsts keyed-by-path (firestore.rules) senza modifiche (BIT-invariante). L'oracolo firestore-rules emette ESATTAMENTE 1 finding sull'intero file."
+    },
+    {
+      "id": "FB-S4",
+      "category": "dead-code",
+      "source_oracle": "vulture",
+      "owasp": "-",
+      "expected_fix_state": "verified",
+      "anchor": {
+        "file": "app/dead.py",
+        "symbol": "_unused_helper",
+        "marker": "SEED:FB-S4"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Funzione _unused_helper definita in app/dead.py e MAI referenziata nel progetto: vulture la segnala come unused-function. Il contrasto used_helper e' importato e chiamato da app/main.py allo startup (riferimento reale) e NON viene segnalato da vulture (precisione). Categoria dead-code; owasp/cwe non applicabili (omessi). Il fix riusa fixDeadcodeSymbol di supabase-py (vulture, removePySymbol) senza modifiche (BIT-invariante). La signature del fix include il simbolo rimosso: `fix-spy-s5-remove-symbol:_unused_helper`."
+    }
+  ]
+}

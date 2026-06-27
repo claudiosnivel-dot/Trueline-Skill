@@ -116,6 +116,24 @@ const RLS_CHECK = resolve(ROOT, 'trueline', 'scripts', 'oracles', 'rls_check.mjs
 // Firestore Rules engine): nessuna dipendenza docker -> il floor [secret,
 // dependency-vuln,authz] non richiede docker per il criterio 2.
 const FIRESTORE_RULES_CHECK = resolve(ROOT,'trueline','scripts','oracles','firestore_rules_check.mjs');
+// eco-F2 (appwrite-jsts/pocketbase-jsts): oracoli authz custom STATICI sui file
+// dichiarativi del backend (appwrite.json / pb_schema.json), legati dai pack per la
+// categoria authz (tool=appwrite_perms_check kind:'appwrite-perms'; tool=
+// pocketbase_rules_check kind:'pocketbase-rules'). Gemelli strutturali di
+// firestore_rules_check (CWE-862, A01:2025): analizzano SOLO il testo JSON (niente
+// istanza Appwrite/PocketBase) -> nessuna dipendenza docker; il floor [secret,
+// dependency-vuln,authz] non richiede docker per il criterio 2 (come firebase-jsts).
+const APPWRITE_PERMS_CHECK = resolve(ROOT,'trueline','scripts','oracles','appwrite_perms_check.mjs');
+const POCKETBASE_RULES_CHECK = resolve(ROOT,'trueline','scripts','oracles','pocketbase_rules_check.mjs');
+// eco-F3 (hasura-jsts/amplify-jsts): oracoli authz custom STATICI sui file
+// dichiarativi del backend (metadata Hasura YAML / schema.graphql AppSync-Amplify
+// Gen1), legati dai pack per la categoria authz (tool=hasura_metadata_check kind:
+// 'hasura-metadata'; tool=appsync_auth_check kind:'appsync-auth'). Gemelli
+// strutturali di firestore_rules_check (CWE-862, A01:2025): analizzano SOLO il testo
+// (niente istanza Hasura/AppSync) -> nessuna dipendenza docker; il floor [secret,
+// dependency-vuln,authz] non richiede docker per il criterio 2 (come firebase-jsts).
+const HASURA_METADATA_CHECK = resolve(ROOT,'trueline','scripts','oracles','hasura_metadata_check.mjs');
+const APPSYNC_AUTH_CHECK = resolve(ROOT,'trueline','scripts','oracles','appsync_auth_check.mjs');
 // dead-code (verified_set, SP-4): wrapper unico (knip JS / vulture Python), il tool
 // effettivo è scelto dal binding manifest (oracles['dead-code'].tool).
 const RUN_DEADCODE = resolve(ROOT, 'trueline', 'scripts', 'oracles', 'run_deadcode.mjs');
@@ -199,6 +217,98 @@ const PACK_FIXTURES = {
   // resta SALTATO (vset.includes('rls') === false). fixtureApp/registry invariati
   // (cambia solo il kind + i dati del registry/manifest di T5).
   'firebase-jsts': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','firebase-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','firebase-jsts','registry.json') },
+  // F1 (eco-expansion): Python+Firebase, tier VERIFIED. INCROCIO supabase-py
+  // (lingua/tie-break) x firebase-jsts (backend/authz Firestore): pura DATA + questa
+  // riga, ZERO codice fix nuovo (firestore_rules_check/vulture/osv/gitleaks gia'
+  // dispatchati). kind/fixtureApp/registry come firebase-jsts -> stesso runVerifiedBody,
+  // verified_set=[secret,dead-code,authz]; floor SENZA semgrep -> criterio 2 senza docker.
+  'firebase-py': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','firebase-py','reference-app'), registry: resolve(ROOT,'eval','ecosystems','firebase-py','registry.json') },
+  // eco-F2: JS/TS+Appwrite, tier VERIFIED. INCROCIO firebase-jsts (lingua/struttura
+  // pack JS) x oracolo authz dichiarativo NUOVO (appwrite_perms_check su appwrite.json):
+  // pura DATA + questa riga + i rami engine additivi (appwrite-perms dispatchato in
+  // detectCategory/collectFindingsForLoop/canonOracle/normalize + fix fixAppwriteS3).
+  // kind/fixtureApp/registry come firebase-jsts -> stesso runVerifiedBody,
+  // verified_set=[secret,dead-code,authz]; floor SENZA semgrep -> criterio 2 senza docker.
+  'appwrite-jsts': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','appwrite-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','appwrite-jsts','registry.json') },
+  // eco-F2: JS/TS+PocketBase, tier VERIFIED. Come appwrite-jsts ma authz legato a
+  // pocketbase_rules_check su pb_schema.json (trappola load-bearing: ""=PUBLIC floor,
+  // null=LOCKED/SICURO -> nessun finding). verified_set=[secret,dead-code,authz];
+  // floor SENZA semgrep -> criterio 2 senza docker.
+  'pocketbase-jsts': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','pocketbase-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','pocketbase-jsts','registry.json') },
+  // eco-F3: JS/TS+Hasura, tier VERIFIED. INCROCIO firebase-jsts (lingua/struttura
+  // pack JS) x oracolo authz dichiarativo NUOVO (hasura_metadata_check sulla metadata
+  // YAML): pura DATA + questa riga + i rami engine additivi (hasura-metadata dispatchato
+  // in detectCategory/collectFindingsForLoop/canonOracle/normalize + fix fixHasuraS3).
+  // kind/fixtureApp/registry come firebase-jsts -> stesso runVerifiedBody,
+  // verified_set=[secret,dead-code,authz]; floor SENZA semgrep -> criterio 2 senza docker.
+  'hasura-jsts': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','hasura-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','hasura-jsts','registry.json') },
+  // eco-F3: JS/TS+AppSync/Amplify (Gen1), tier VERIFIED. Come hasura-jsts ma authz
+  // legato a appsync_auth_check su schema.graphql (SDL @auth Gen1: allow:public=floor;
+  // la sintassi Gen2 in TS resta detection-only). verified_set=[secret,dead-code,authz];
+  // floor SENZA semgrep -> criterio 2 senza docker.
+  'amplify-jsts': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','amplify-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','amplify-jsts','registry.json') },
+  // eco-F4: PHP+Laravel, tier DETECTION. floor=[secret,dependency-vuln,authz]; authz legato a
+  // semgrep PHP (best-effort, degrada onesto se docker assente). verified_set=[]; coverage_policy='declared'.
+  // PACK_FIXTURES detection: fixtureApp+registry on-disk, corpo runDetectionBody (criteri 1/2/3/5/6).
+  'laravel-php': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','laravel-php','reference-app'), registry: resolve(ROOT,'eval','ecosystems','laravel-php','registry.json') },
+  // eco-F4: Go+Postgres, tier DETECTION. floor=[secret,dependency-vuln,authz]; authz legato a
+  // semgrep Go (best-effort, degrada onesto se docker assente); secret=gitleaks; dep-vuln=osv(go.mod/go.sum).
+  // verified_set=[]; coverage_policy='declared'. PACK_FIXTURES detection: criteri 1/2/3/5/6.
+  'postgres-go': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','postgres-go','reference-app'), registry: resolve(ROOT,'eval','ecosystems','postgres-go','registry.json') },
+  // eco-F4: Dart+Flutter+Supabase, tier DETECTION. floor=[secret,dependency-vuln,authz]; authz legato a
+  // semgrep Dart sperimentale (best-effort, degrada onesto se docker assente); secret=gitleaks (language-agnostic);
+  // dep-vuln=osv(pubspec.lock, ecosistema Pub: archive@3.3.0 GHSA-9v85-q87q-g4vg). verified_set=[];
+  // coverage_policy='declared'. PACK_FIXTURES detection: criteri 1/2/3/5/6.
+  'flutter-dart': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','flutter-dart','reference-app'), registry: resolve(ROOT,'eval','ecosystems','flutter-dart','registry.json') },
+  // eco-F4: Ruby+Rails, tier DETECTION. floor=[secret,dependency-vuln,authz]; authz legato a
+  // semgrep Ruby (ruleset rails-rb-authz.yml: skip_before_action auth callback, best-effort,
+  // degrada onesto se docker assente); secret=gitleaks (language-agnostic); dep-vuln=osv(Gemfile.lock,
+  // nokogiri@1.10.0 advisory OSV). verified_set=[]; coverage_policy='declared'.
+  // PACK_FIXTURES detection: fixtureApp+registry on-disk, corpo runDetectionBody (criteri 1/2/3/5/6).
+  'rails-rb': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','rails-rb','reference-app'), registry: resolve(ROOT,'eval','ecosystems','rails-rb','registry.json') },
+  // eco-F4: Java+Spring Boot, tier DETECTION. floor=[secret,dependency-vuln,authz]; authz legato a
+  // semgrep Java (ruleset spring-java-authz.yml: @PostMapping senza @PreAuthorize, best-effort,
+  // degrada onesto se docker assente); secret=gitleaks(sk_live_... in application.properties);
+  // dep-vuln=osv(pom.xml Maven: log4j-core@2.14.1 Log4Shell GHSA-jfh8-c2jp-5v3q CVSS 10.0).
+  // verified_set=[]; coverage_policy='declared'. PACK_FIXTURES detection: criteri 1/2/3/5/6.
+  'spring-java': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','spring-java','reference-app'), registry: resolve(ROOT,'eval','ecosystems','spring-java','registry.json') },
+  // eco-F4: C#+ASP.NET Core, tier DETECTION. floor=[secret,dependency-vuln,authz]; authz legato a
+  // semgrep C# (ruleset dotnet-cs-authz.yml: [HttpPost/Put/Delete/Patch] senza [Authorize], best-effort,
+  // degrada onesto se docker assente); secret=gitleaks(sk_live_... in ItemsController.cs);
+  // dep-vuln=osv(packages.lock.json NuGet: Newtonsoft.Json@12.0.3 GHSA-5crp-9r3c-p9vr CVE-2024-21907).
+  // verified_set=[]; coverage_policy='declared'. PACK_FIXTURES detection: criteri 1/2/3/5/6.
+  'dotnet-cs': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','dotnet-cs','reference-app'), registry: resolve(ROOT,'eval','ecosystems','dotnet-cs','registry.json') },
+  // eco-F4: Elixir+Phoenix, tier DETECTION. floor=[secret,dependency-vuln,authz]; authz legato a
+  // semgrep Elixir sperimentale (ruleset phoenix-ex-authz.yml: action mutanti senza plug auth,
+  // best-effort, degrada onesto se docker assente); secret=gitleaks(sk_live_... in config.exs);
+  // dep-vuln=osv(mix.lock Hex: plug@1.10.3 EEF-CVE-2026-8468/GHSA-468c-vq7p-gh64 DoS CWE-770).
+  // verified_set=[]; coverage_policy='declared'. PACK_FIXTURES detection: criteri 1/2/3/5/6.
+  'phoenix-ex': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','phoenix-ex','reference-app'), registry: resolve(ROOT,'eval','ecosystems','phoenix-ex','registry.json') },
+  // eco-F6: JS/TS+Cloudflare D1 (NoSQL Workers), tier DETECTION. floor=[secret,dependency-vuln,authz]; authz legato a
+  // semgrep JS (ruleset cloudflare-d1-jsts-authz.yml: env.DB.prepare(SQL+concat) senza auth-guard, best-effort,
+  // degrada onesto se docker assente); secret=gitleaks(sk_live_... in src/config.js);
+  // dep-vuln=osv(package-lock.json npm: lodash@4.17.20 GHSA-35jh-r3h4-6jhm CVE-2021-23337).
+  // verified_set=[]; coverage_policy='declared'. PACK_FIXTURES detection: criteri 1/2/3/5/6.
+  'cloudflare-d1-jsts': { kind: 'detection', fixtureApp: resolve(ROOT,'eval','ecosystems','cloudflare-d1-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','cloudflare-d1-jsts','registry.json') },
+  // eco-F6: JS/TS+MongoDB, tier DETECTION. floor=[secret,dependency-vuln,authz]; authz legato a
+  // semgrep JS (ruleset mongodb-jsts-authz.yml: insertOne/updateOne/deleteOne/findOneAndUpdate/save/create
+  // senza auth-guard, best-effort, degrada onesto se docker assente); secret=gitleaks(sk_live_...);
+  // dep-vuln=osv(package-lock.json npm: lodash@4.17.20 GHSA-35jh-r3h4-6jhm Command Injection).
+  // RILEVAMENTO via deps_any (Fase 0 engine additivo): classify() legge package.json e tratta la
+  // presenza di 'mongodb' o 'mongoose' come segnale forte (Pass 1), evitando collisione con
+  // postgres-jsts (lang_any-only, Pass 2). verified_set=[]; coverage_policy='declared'.
+  // PACK_FIXTURES kind:'detection' (corpo runDetectionBody, criteri 1/2/3/5/6; criterio 3 vacuo).
+  'mongodb-jsts': { kind: 'detection', fixtureApp: resolve(ROOT,'eval','ecosystems','mongodb-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','mongodb-jsts','registry.json') },
+  // eco-F6: JS/TS+DynamoDB, tier DETECTION. floor=[secret,dependency-vuln,authz]; authz legato a
+  // semgrep JS (ruleset dynamodb-jsts-authz.yml: client.send(PutItemCommand/UpdateItemCommand/
+  // DeleteItemCommand) in route mutante senza auth-guard, best-effort, degrada onesto se docker
+  // assente); secret=gitleaks(sk_live_... in src/config.js); dep-vuln=osv(package-lock.json npm:
+  // semver@5.6.0 GHSA-c2qj-m37r-6jgf ReDoS CWE-1333).
+  // RILEVAMENTO via deps_any (Fase 0 engine additivo): classify() legge package.json e tratta la
+  // presenza di '@aws-sdk/client-dynamodb' o 'aws-sdk' come segnale forte (Pass 1), evitando
+  // collisione con postgres-jsts (lang_any-only, Pass 2). verified_set=[]; coverage_policy='declared'.
+  // PACK_FIXTURES kind:'detection' (corpo runDetectionBody, criteri 1/2/3/5/6; criterio 3 vacuo).
+  'dynamodb-jsts': { kind: 'detection', fixtureApp: resolve(ROOT,'eval','ecosystems','dynamodb-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','dynamodb-jsts','registry.json') },
 };
 
 // ---------------------------------------------------------------------------
@@ -248,6 +358,18 @@ function canonOracle(name) {
   // alla stessa forma canonica, così il match del criterio 2 è robusto a entrambe
   // le forme (coerente con gli arm osv/rls qui sopra).
   if (n === 'firestore-rules' || n === 'firestore_rules' || n === 'firestore_rules_check') return 'firestore-rules';
+  // authz Appwrite (appwrite-jsts, eco-F2): registry source_oracle='appwrite-perms',
+  // normalize emette source_oracle.oracle='appwrite-perms'. Mappiamo anche il
+  // nome-tool del binding (appwrite_perms_check) alla stessa forma canonica.
+  if (n === 'appwrite-perms' || n === 'appwrite_perms' || n === 'appwrite_perms_check') return 'appwrite-perms';
+  // authz PocketBase (pocketbase-jsts, eco-F2): idem per pocketbase-rules.
+  if (n === 'pocketbase-rules' || n === 'pocketbase_rules' || n === 'pocketbase_rules_check') return 'pocketbase-rules';
+  // authz Hasura (hasura-jsts, eco-F3): registry source_oracle='hasura-metadata',
+  // normalize emette source_oracle.oracle='hasura-metadata'. Mappiamo anche il
+  // nome-tool del binding (hasura_metadata_check) alla stessa forma canonica.
+  if (n === 'hasura-metadata' || n === 'hasura_metadata' || n === 'hasura_metadata_check') return 'hasura-metadata';
+  // authz AppSync/Amplify (amplify-jsts, eco-F3): idem per appsync-auth.
+  if (n === 'appsync-auth' || n === 'appsync_auth' || n === 'appsync_auth_check') return 'appsync-auth';
   return n; // gitleaks | semgrep | knip
 }
 
@@ -839,14 +961,16 @@ function collectFindingsForLoop(dir, manifest) {
     if (j) out.push(...normForLoop('rls-check', j, 'static-ddl'));
   }
 
-  // dead-code -> wrapper run_deadcode col tool del binding (vulture per Python).
+  // dead-code -> wrapper run_deadcode col tool del binding. knip (JS, default) /
+  // vulture (Python) / go-deadcode (Go) / dart (Dart, eco-F5b): dispatch keyed sul
+  // tool del manifest, additivo (knip/vulture invariati: knip=default, gli altri --tool=).
   if (bindings['dead-code']) {
     const tool = bindings['dead-code'].tool || 'knip';
-    const r = (tool === 'vulture')
-      ? nodeRun(RUN_DEADCODE, [dir, '--tool=vulture'], dir)
-      : nodeRun(RUN_DEADCODE, [dir], dir);
+    const r = (tool === 'knip')
+      ? nodeRun(RUN_DEADCODE, [dir], dir)
+      : nodeRun(RUN_DEADCODE, [dir, `--tool=${tool}`], dir);
     let j = null; try { j = JSON.parse(r.stdout); } catch { /* */ }
-    if (j) out.push(...normForLoop(tool === 'vulture' ? 'vulture' : 'knip', j, 'working-tree'));
+    if (j) out.push(...normForLoop(tool === 'knip' ? 'knip' : tool, j, 'working-tree'));
   }
 
   // authz -> firestore_rules_check (cammina `dir` per firestore.rules). (SP-8)
@@ -856,6 +980,42 @@ function collectFindingsForLoop(dir, manifest) {
     const r = nodeRun(FIRESTORE_RULES_CHECK, [dir], dir);
     let j = null; try { j = JSON.parse(r.stdout); } catch { /* */ }
     if (j && Array.isArray(j.findings)) out.push(...normForLoop('firestore-rules', j, 'working-tree'));
+  }
+
+  // authz -> appwrite_perms_check (cammina `dir` per appwrite.json). (eco-F2)
+  // Statico: emette { findings:[...] } (category 'authz' via normalize 'appwrite-perms').
+  // cwd=dir come gli altri oracoli -> fingerprint-parity col loop.
+  if (bindings.authz && bindings.authz.tool === 'appwrite_perms_check') {
+    const r = nodeRun(APPWRITE_PERMS_CHECK, [dir], dir);
+    let j = null; try { j = JSON.parse(r.stdout); } catch { /* */ }
+    if (j && Array.isArray(j.findings)) out.push(...normForLoop('appwrite-perms', j, 'working-tree'));
+  }
+
+  // authz -> pocketbase_rules_check (cammina `dir` per pb_schema.json). (eco-F2)
+  // Statico: emette { findings:[...] } (category 'authz' via normalize 'pocketbase-rules').
+  // cwd=dir come gli altri oracoli -> fingerprint-parity col loop.
+  if (bindings.authz && bindings.authz.tool === 'pocketbase_rules_check') {
+    const r = nodeRun(POCKETBASE_RULES_CHECK, [dir], dir);
+    let j = null; try { j = JSON.parse(r.stdout); } catch { /* */ }
+    if (j && Array.isArray(j.findings)) out.push(...normForLoop('pocketbase-rules', j, 'working-tree'));
+  }
+
+  // authz -> hasura_metadata_check (cammina `dir` per la metadata Hasura YAML). (eco-F3)
+  // Statico: emette { findings:[...] } (category 'authz' via normalize 'hasura-metadata').
+  // cwd=dir come gli altri oracoli -> fingerprint-parity col loop.
+  if (bindings.authz && bindings.authz.tool === 'hasura_metadata_check') {
+    const r = nodeRun(HASURA_METADATA_CHECK, [dir], dir);
+    let j = null; try { j = JSON.parse(r.stdout); } catch { /* */ }
+    if (j && Array.isArray(j.findings)) out.push(...normForLoop('hasura-metadata', j, 'working-tree'));
+  }
+
+  // authz -> appsync_auth_check (cammina `dir` per schema.graphql). (eco-F3)
+  // Statico: emette { findings:[...] } (category 'authz' via normalize 'appsync-auth').
+  // cwd=dir come gli altri oracoli -> fingerprint-parity col loop.
+  if (bindings.authz && bindings.authz.tool === 'appsync_auth_check') {
+    const r = nodeRun(APPSYNC_AUTH_CHECK, [dir], dir);
+    let j = null; try { j = JSON.parse(r.stdout); } catch { /* */ }
+    if (j && Array.isArray(j.findings)) out.push(...normForLoop('appsync-auth', j, 'working-tree'));
   }
 
   return out;
@@ -987,6 +1147,66 @@ function detectCategory({ cat, tool, binding, copyDir, copyBase, manifest }) {
     try { native = JSON.parse(r.stdout); } catch { /* gestito */ }
     if (!native) return { error: `firestore_rules_check: output non parsabile (exit=${r.status})` };
     return { findings: safeNormalize('firestore-rules', native, opts) };
+  }
+  if (tool === 'appwrite_perms_check') {
+    // authz (appwrite-jsts, eco-F2) -> appwrite_perms_check <copy>/<scanDir>. La dir
+    // di scansione viene dal binding (manifest.oracles.authz.scan), default ["."].
+    // STATICO (analizza il solo appwrite.json, niente istanza Appwrite) -> nessuna
+    // dipendenza docker nel floor. safeNormalize con 'appwrite-perms' (nome-oracolo
+    // riconosciuto da normalize -> category='authz', source_oracle.oracle='appwrite-perms';
+    // canonOracle lo riconduce alla stessa forma del registry). Output gia'
+    // eval/-ancorato (cwd=ROOT), quindi opts.base resta copyBase.
+    const scanDirs = (binding.scan && binding.scan.length) ? binding.scan : ['.'];
+    const scanned = scanDirs.find((d) => existsSync(join(copyDir, d)));
+    const target = scanned ? join(copyDir, scanned) : copyDir;
+    const r = nodeRun(APPWRITE_PERMS_CHECK, [target]);
+    let native = null;
+    try { native = JSON.parse(r.stdout); } catch { /* gestito */ }
+    if (!native) return { error: `appwrite_perms_check: output non parsabile (exit=${r.status})` };
+    return { findings: safeNormalize('appwrite-perms', native, opts) };
+  }
+  if (tool === 'pocketbase_rules_check') {
+    // authz (pocketbase-jsts, eco-F2) -> pocketbase_rules_check <copy>/<scanDir>.
+    // Come appwrite ma sul file pb_schema.json. STATICO (niente istanza PocketBase)
+    // -> nessuna dipendenza docker. safeNormalize con 'pocketbase-rules'.
+    const scanDirs = (binding.scan && binding.scan.length) ? binding.scan : ['.'];
+    const scanned = scanDirs.find((d) => existsSync(join(copyDir, d)));
+    const target = scanned ? join(copyDir, scanned) : copyDir;
+    const r = nodeRun(POCKETBASE_RULES_CHECK, [target]);
+    let native = null;
+    try { native = JSON.parse(r.stdout); } catch { /* gestito */ }
+    if (!native) return { error: `pocketbase_rules_check: output non parsabile (exit=${r.status})` };
+    return { findings: safeNormalize('pocketbase-rules', native, opts) };
+  }
+  if (tool === 'hasura_metadata_check') {
+    // authz (hasura-jsts, eco-F3) -> hasura_metadata_check <copy>/<scanDir>. La dir
+    // di scansione viene dal binding (manifest.oracles.authz.scan), default ["."].
+    // STATICO (analizza la sola metadata YAML, niente istanza Hasura) -> nessuna
+    // dipendenza docker nel floor. safeNormalize con 'hasura-metadata' (nome-oracolo
+    // riconosciuto da normalize -> category='authz', source_oracle.oracle='hasura-metadata';
+    // canonOracle lo riconduce alla stessa forma del registry). Output gia'
+    // eval/-ancorato (cwd=ROOT), quindi opts.base resta copyBase.
+    const scanDirs = (binding.scan && binding.scan.length) ? binding.scan : ['.'];
+    const scanned = scanDirs.find((d) => existsSync(join(copyDir, d)));
+    const target = scanned ? join(copyDir, scanned) : copyDir;
+    const r = nodeRun(HASURA_METADATA_CHECK, [target]);
+    let native = null;
+    try { native = JSON.parse(r.stdout); } catch { /* gestito */ }
+    if (!native) return { error: `hasura_metadata_check: output non parsabile (exit=${r.status})` };
+    return { findings: safeNormalize('hasura-metadata', native, opts) };
+  }
+  if (tool === 'appsync_auth_check') {
+    // authz (amplify-jsts, eco-F3) -> appsync_auth_check <copy>/<scanDir>. Come hasura
+    // ma sul file schema.graphql (SDL @auth Gen1). STATICO (niente istanza AppSync)
+    // -> nessuna dipendenza docker. safeNormalize con 'appsync-auth'.
+    const scanDirs = (binding.scan && binding.scan.length) ? binding.scan : ['.'];
+    const scanned = scanDirs.find((d) => existsSync(join(copyDir, d)));
+    const target = scanned ? join(copyDir, scanned) : copyDir;
+    const r = nodeRun(APPSYNC_AUTH_CHECK, [target]);
+    let native = null;
+    try { native = JSON.parse(r.stdout); } catch { /* gestito */ }
+    if (!native) return { error: `appsync_auth_check: output non parsabile (exit=${r.status})` };
+    return { findings: safeNormalize('appsync-auth', native, opts) };
   }
   return { error: `oracolo non gestito per la categoria ${cat}: ${tool}` };
 }

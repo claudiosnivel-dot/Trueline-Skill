@@ -28,6 +28,8 @@ import { resolve, join } from 'node:path';
 
 import { removePySymbol } from './py_deadcode_edit.mjs';
 import { removeTsSymbol } from './ts_deadcode_edit.mjs';
+import { removeGoSymbol } from './go_deadcode_edit.mjs';
+import { removeDartSymbol } from './dart_deadcode_edit.mjs';
 import { resolveRlsMigrationsDir, resolveRlsMigrationFile } from './rls_scan.mjs';
 
 // Path RELATIVO STORICO della migration primaria (layout Supabase). Conservato
@@ -133,6 +135,36 @@ function fixRlsS5(dir) {
     "USING (status <> 'draft' AND tenant_id = (auth.jwt() ->> 'tenant_id')::uuid);  -- FIX:S5",
     'S5 rls', MIGRATION_REL,
   );
+}
+
+// RLS005 — policy permissiva su storage.objects (Supabase Storage): riscrive il
+// predicato pubblico (USING (true)) in owner-scoped via storage.foldername(name)
+// /auth.uid(), cosi' rls_check (ramo storage) torna PULITO (0 RLS005) -> verified.
+// Come SPY-S3/PY-S3 il match CATTURA il terminatore ';' ($2) e lo RI-EMETTE PRIMA
+// del commento di fix: senza, il commento '-- FIX:RLS005' commenterebbe il ';',
+// lasciando lo statement aperto e agganciando il successivo -> migration ROTTA.
+// migrationFileFor risolve la migration (BIT-invariante: fallback supabase/migrations).
+// Signature MATERIALMENTE distinta: il commento di fix include il nome-policy.
+function fixRlsStorageS5(dir, finding) {
+  const p = migrationFileFor(dir);
+  if (!existsSync(p)) return { ok: false, detail: `migration assente: ${MIGRATION_REL}` };
+  const sql = readFileSync(p, 'utf8');
+  const policy = (finding && (finding.policy
+    || (finding.location && finding.location.symbol))) || 'storage_objects';
+  // Match della USING (true) della policy su storage.objects (lazy fino al primo
+  // USING dopo storage.objects). $1 = testo fino a 'using (' incluso; $2 = ') ;?'
+  // (il terminatore va RI-EMESSO prima del commento, vedi nota in testata).
+  const re = /(create\s+policy\s+"?[\w$]+"?\s+on\s+storage\.objects\b[\s\S]*?\busing\s*\()\s*true\s*(\)\s*;?)/i;
+  if (!re.test(sql)) {
+    return { ok: false, detail: 'RLS005: policy storage.objects USING (true) non trovata nella migration' };
+  }
+  const after = sql.replace(
+    re,
+    `$1(storage.foldername(name))[1] = auth.uid()::text$2  -- FIX:RLS005 (fix-storage-owner-scope:${policy})`,
+  );
+  if (after === sql) return { ok: false, detail: 'RLS005: nessuna modifica applicata' };
+  writeFileSync(p, after, 'utf8');
+  return { ok: true, detail: `RLS005: storage.objects ${policy} USING(true) -> owner-scoped (storage.foldername(name)/auth.uid())` };
 }
 
 // S8 — dead-code: rimuove l'export morto (gate umano, L-COL-021; in eval
@@ -523,12 +555,500 @@ function fixSecretFbS1(dir, finding) {
   return { ok: true, detail: 'FB-S1: private_key neutralizzata (placeholder; leggere da env)' };
 }
 
+// =============================================================================
+// FIX APPWRITE / POCKETBASE (eco-F2) — additive. authz dichiarativa su file JSON
+// del backend (appwrite.json / pb_schema.json). Dispatch in selectKnownFix keyed
+// su cat==='authz' && <basename del file>: path DISGIUNTI da firestore.rules e dai
+// rami esistenti -> nessuna interferenza (BIT-invariante). I file sono JSON puro:
+// la fix fa JSON.parse -> modifica SCOPED (per match_path) -> JSON.stringify sulla
+// COPIA (mai il fixture canonico); l'oracolo re-parsa il JSON, quindi il
+// riformatto e' irrilevante per il verdetto.
+// =============================================================================
+
+// Risolve appwrite.json nella copia (di solito alla radice) — mai fuori dalla copia.
+function resolveAppwriteFileInCopy(dir, rel) {
+  const norm = String(rel || 'appwrite.json').replace(/\\/g, '/');
+  const m = /(?:^|\/)([^/]*appwrite\.json)$/.exec(norm);
+  const cand = resolve(dir, m ? m[1] : 'appwrite.json');
+  if (existsSync(cand)) return cand;
+  const direct = resolve(dir, norm);
+  return existsSync(direct) ? direct : null;
+}
+
+// AW-S3 (authz Appwrite): la permission concessa al ruolo speciale `any` (accesso
+// pubblico incondizionato) viene RISTRETTA a "users" (utenti autenticati) sulla
+// collection colpita, e documentSecurity:false -> true (isolamento per-documento).
+// Dopo la fix appwrite_perms_check NON flagga piu' la permission (PUBLIC_ANY_RE non
+// matcha "users") -> verified. Analogo dichiarativo del transfer RLS/Firestore. Il
+// match_path del finding (`<collectionId>#<permission>`) identifica COLLECTION e
+// PERMISSION: modifica SCOPED, non globale. Gestisce le due forme dell'oracolo
+// (config.collections[] e config.databases[].collections[]).
+function fixAppwriteS3(dir, finding) {
+  const rel = (finding && finding.location && finding.location.file) || 'appwrite.json';
+  const p = resolveAppwriteFileInCopy(dir, rel);
+  if (!p) return { ok: false, detail: `AW-S3: appwrite.json non risolto (${rel})` };
+  const matchPath = String((finding.location && finding.location.symbol) || '');
+  const hashIdx = matchPath.indexOf('#');
+  const collectionId = hashIdx >= 0 ? matchPath.slice(0, hashIdx) : matchPath;
+  let config;
+  try { config = JSON.parse(readFileSync(p, 'utf8')); }
+  catch (e) { return { ok: false, detail: `AW-S3: appwrite.json non parsabile (${e.message})` }; }
+
+  // Raccoglie le collection nelle due forme (top-level + databases[].collections[]).
+  const buckets = [];
+  if (Array.isArray(config.collections)) buckets.push(...config.collections);
+  if (Array.isArray(config.databases)) {
+    for (const db of config.databases) {
+      if (db && Array.isArray(db.collections)) buckets.push(...db.collections);
+    }
+  }
+  const anyRe = /\b(?:read|create|update|delete|write)\s*\(\s*["']any["']\s*\)/;
+  let changed = false;
+  for (const coll of buckets) {
+    if (!coll || typeof coll !== 'object') continue;
+    const id = (typeof coll.$id === 'string' && coll.$id)
+      || (typeof coll.name === 'string' && coll.name) || '';
+    // Se il finding identifica una collection, restringe SOLO quella.
+    if (collectionId && id !== collectionId) continue;
+    const perms = Array.isArray(coll.$permissions) ? coll.$permissions
+      : (Array.isArray(coll.permissions) ? coll.permissions : null);
+    if (!perms) continue;
+    for (let i = 0; i < perms.length; i += 1) {
+      if (typeof perms[i] === 'string' && anyRe.test(perms[i])) {
+        // `any` -> `users` (autenticati): l'unico ruolo cambia, il verbo resta.
+        perms[i] = perms[i].replace(/(["'])\s*any\s*(["'])/, '$1users$2');
+        changed = true;
+      }
+    }
+    // Isolamento per-documento sulla collection colpita: documentSecurity false->true.
+    if (coll.documentSecurity === false) { coll.documentSecurity = true; changed = true; }
+  }
+  if (!changed) {
+    return { ok: false, detail: `AW-S3: nessuna permission "any" da restringere (collection=${collectionId || '?'})` };
+  }
+  writeFileSync(p, JSON.stringify(config, null, 2) + '\n', 'utf8');
+  return { ok: true, detail: `AW-S3: permission "any" -> "users" + documentSecurity:true su ${collectionId || 'collection colpita'}` };
+}
+
+// Risolve pb_schema.json nella copia — mai fuori dalla copia.
+function resolvePbSchemaFileInCopy(dir, rel) {
+  const norm = String(rel || 'pb_schema.json').replace(/\\/g, '/');
+  const m = /(?:^|\/)([^/]*pb_schema\.json)$/.exec(norm);
+  const cand = resolve(dir, m ? m[1] : 'pb_schema.json');
+  if (existsSync(cand)) return cand;
+  const direct = resolve(dir, norm);
+  return existsSync(direct) ? direct : null;
+}
+
+// PB-S3 (authz PocketBase): il rule field PUBBLICO (stringa vuota "") viene
+// sostituito con una regola AUTENTICATA (`@request.auth.id != ""`) sul rule field
+// colpito. Dopo la fix pocketbase_rules_check NON flagga piu' la rule (val !== "")
+// -> verified. ⚠ TRAPPOLA LOAD-BEARING: si tocca SOLO il valore "" (pubblico). I
+// field null (LOCKED/admin-only = SICURI) e le regole non-vuote restano INVARIATI:
+// la fix non puo' trasformare un null in una regola (cambierebbe la semantica da
+// "bloccato" a "aperto agli autenticati"). Il match_path (`<collection>.<ruleField>`)
+// identifica COLLECTION e RULE FIELD: modifica SCOPED. Gestisce le due forme
+// (array nudo e { collections:[...] }).
+function fixPocketbaseS3(dir, finding) {
+  const rel = (finding && finding.location && finding.location.file) || 'pb_schema.json';
+  const p = resolvePbSchemaFileInCopy(dir, rel);
+  if (!p) return { ok: false, detail: `PB-S3: pb_schema.json non risolto (${rel})` };
+  const matchPath = String((finding.location && finding.location.symbol) || '');
+  const mm = /^(.*)\.(listRule|viewRule|createRule|updateRule|deleteRule)$/.exec(matchPath);
+  const collName = mm ? mm[1] : '';
+  const ruleField = mm ? mm[2] : '';
+  if (!ruleField) return { ok: false, detail: `PB-S3: match_path non riconosciuto (${matchPath})` };
+  let data;
+  try { data = JSON.parse(readFileSync(p, 'utf8')); }
+  catch (e) { return { ok: false, detail: `PB-S3: pb_schema.json non parsabile (${e.message})` }; }
+  const collections = Array.isArray(data) ? data
+    : (data && Array.isArray(data.collections) ? data.collections : null);
+  if (!collections) return { ok: false, detail: 'PB-S3: schema PocketBase non riconosciuto' };
+  let changed = false;
+  for (const coll of collections) {
+    if (!coll || typeof coll !== 'object' || Array.isArray(coll)) continue;
+    const name = (typeof coll.name === 'string' && coll.name)
+      || (typeof coll.id === 'string' && coll.id) || '';
+    if (collName && name !== collName) continue;
+    // SOLO la stringa vuota "" (pubblico) -> regola autenticata. null (LOCKED) e le
+    // regole non-vuote restano INVARIATE (trappola load-bearing PocketBase).
+    if (Object.prototype.hasOwnProperty.call(coll, ruleField) && coll[ruleField] === '') {
+      coll[ruleField] = '@request.auth.id != ""';
+      changed = true;
+    }
+  }
+  if (!changed) {
+    return { ok: false, detail: `PB-S3: rule field "${ruleField}" vuoto non trovato su ${collName || '?'}` };
+  }
+  writeFileSync(p, JSON.stringify(data, null, 2) + '\n', 'utf8');
+  return { ok: true, detail: `PB-S3: ${collName}.${ruleField} "" -> '@request.auth.id != ""' (autenticato)` };
+}
+
+// =============================================================================
+// FIX HASURA / APPSYNC-AMPLIFY (eco-F3) — additive. authz dichiarativa su file di
+// metadata Hasura (*.yaml) e schema AppSync/Amplify Gen1 (schema.graphql). Dispatch
+// in selectKnownFix keyed su cat==='authz' && <estensione del file>: path DISGIUNTI
+// da firestore.rules / appwrite.json / pb_schema.json e dai rami esistenti ->
+// nessuna interferenza (BIT-invariante). La fix riscrive il SOLO costrutto colpito
+// sulla COPIA (mai il fixture canonico); l'oracolo re-parsa, quindi il riformatto
+// e' irrilevante per il verdetto.
+// =============================================================================
+
+// Risolve un file di metadata Hasura nella copia (il file del finding, o un
+// tables.yaml sotto metadata/) — mai fuori dalla copia.
+function resolveHasuraFileInCopy(dir, rel) {
+  const norm = String(rel || 'metadata/tables.yaml').replace(/\\/g, '/');
+  const direct = resolve(dir, norm);
+  if (existsSync(direct)) return direct;
+  const m = /(?:^|\/)([^/]+\.ya?ml)$/.exec(norm);
+  if (m) {
+    const cand = resolve(dir, 'metadata', m[1]);
+    if (existsSync(cand)) return cand;
+  }
+  return null;
+}
+
+// HS-S3 (authz Hasura): la permission concessa a un ruolo pubblico (anonymous/
+// public/*) con `filter: {}` (mappa vuota = nessun vincolo di riga) viene resa
+// OWNER-SCOPED: `filter: {}` -> `filter: { user_id: { _eq: "X-Hasura-User-Id" } }`.
+// Dopo la fix hasura_metadata_check NON flagga piu' la permission (isEmptyFilter
+// false: la mappa ha una chiave) -> verified. Analogo dichiarativo del transfer
+// RLS/Firestore. Il match_path (`<table>.<permType>.<role>`) identifica il RUOLO
+// colpito: la sostituzione e' SCOPED al `filter: {}` della permission di quel ruolo
+// (si traccia il `role:` piu' recente), per riga (la doc-comment in cima al file
+// puo' CITARE `filter: {}`: si scarta la porzione di commento prima del match).
+function fixHasuraS3(dir, finding) {
+  const rel = (finding && finding.location && finding.location.file) || 'metadata/tables.yaml';
+  const p = resolveHasuraFileInCopy(dir, rel);
+  if (!p) return { ok: false, detail: `HS-S3: metadata Hasura non risolto (${rel})` };
+  const matchPath = String((finding.location && finding.location.symbol) || '');
+  const parts = matchPath.split('.');
+  const targetRole = parts.length >= 3 ? parts[parts.length - 1] : '';
+  const src = readFileSync(p, 'utf8');
+  const lines = src.split('\n');
+  // `filter: {}` (flow-map vuota) come unico contenuto di una riga di codice.
+  const emptyFilterRe = /^(\s*filter:\s*)\{\s*\}(\s*)$/;
+  // `role: X` (eventualmente come primo elemento di una sequenza `- role: X`).
+  const roleRe = /(?:^|\s|-\s*)role:\s*(.+?)\s*$/;
+  let currentRole = '';
+  let changed = false;
+  for (let i = 0; i < lines.length; i += 1) {
+    // Porzione di CODICE: scarta il commento `#...` per il tracking del ruolo e
+    // per evitare di matchare un `filter: {}` citato in un commento.
+    const codeOnly = lines[i].replace(/#.*$/, '');
+    const rm = roleRe.exec(codeOnly);
+    if (rm) currentRole = rm[1].replace(/['"]/g, '').trim();
+    if (!emptyFilterRe.test(codeOnly)) continue;
+    // SCOPED: tocca SOLO il `filter: {}` del ruolo colpito (match_path), se noto.
+    if (targetRole && currentRole !== targetRole) continue;
+    const before = lines[i];
+    lines[i] = before.replace(emptyFilterRe, '$1{ user_id: { _eq: "X-Hasura-User-Id" } }$2  # FIX:HS-S3');
+    if (lines[i] !== before) { changed = true; break; }
+  }
+  if (!changed) return { ok: false, detail: `HS-S3: "filter: {}" del ruolo ${targetRole || '?'} non trovato (fuori dai commenti)` };
+  const after = lines.join('\n');
+  if (after === src) return { ok: false, detail: 'HS-S3: nessuna modifica applicata' };
+  writeFileSync(p, after, 'utf8');
+  return { ok: true, detail: `HS-S3: filter: {} -> owner-scoped (user_id == X-Hasura-User-Id) su ${matchPath}` };
+}
+
+// Risolve schema.graphql nella copia (il file del finding) — mai fuori dalla copia.
+function resolveAppsyncFileInCopy(dir, rel) {
+  const norm = String(rel || 'schema.graphql').replace(/\\/g, '/');
+  const direct = resolve(dir, norm);
+  if (existsSync(direct)) return direct;
+  const m = /(?:^|\/)([^/]*\.graphql)$/.exec(norm);
+  if (m) {
+    const cand = resolve(dir, m[1]);
+    if (existsSync(cand)) return cand;
+  }
+  return null;
+}
+
+// Maschera (rimpiazza con spazi, preservando lunghezza/newline e quindi gli OFFSET)
+// i commenti `#` di riga, le stringhe `"..."` e le descrizioni `"""..."""` di un
+// SDL GraphQL. Mirror del masker di appsync_auth_check: serve a NON localizzare il
+// type/`allow: public` dentro una doc-comment (la fixture cita la forma vulnerabile
+// "type PublicPost ... allow: public" in testa al file). I token reali di codice
+// (`type`, `@auth`, `allow: public`) non vivono in stringhe -> nel mascherato
+// restano identici all'originale: gli indici trovati nel mascherato valgono 1:1 sul
+// testo reale, dove poi si applica la sostituzione.
+function maskGraphqlForFix(src) {
+  let out = '';
+  let i = 0;
+  const n = src.length;
+  while (i < n) {
+    const c = src[i];
+    if (c === '#') { // commento di riga
+      while (i < n && src[i] !== '\n') { out += ' '; i++; }
+      continue;
+    }
+    if (c === '"' && src[i + 1] === '"' && src[i + 2] === '"') { // descrizione """..."""
+      out += '   '; i += 3;
+      while (i < n && !(src[i] === '"' && src[i + 1] === '"' && src[i + 2] === '"')) {
+        out += src[i] === '\n' ? '\n' : ' '; i++;
+      }
+      if (i < n) { out += '   '; i += 3; }
+      continue;
+    }
+    if (c === '"') { // stringa "..."
+      out += ' '; i++;
+      while (i < n && src[i] !== '"') {
+        if (src[i] === '\\' && i + 1 < n) { out += '  '; i += 2; continue; }
+        out += src[i] === '\n' ? '\n' : ' '; i++;
+      }
+      if (i < n) { out += ' '; i++; }
+      continue;
+    }
+    out += c; i++;
+  }
+  return out;
+}
+
+// AM-S3 (authz AppSync/Amplify Gen1): la rule `{ allow: public }` dentro
+// `@auth(rules: [...])` sul `@model` colpito viene ristretta a `{ allow: owner }`.
+// Dopo la fix appsync_auth_check NON flagga piu' il type (PUBLIC_AUTH_RE
+// `/allow\s*:\s*public\b/` non matcha "owner") -> verified. Analogo dichiarativo
+// del transfer RLS/Firestore. Il match_path (`<TypeName>@auth`) identifica il TYPE:
+// la sostituzione e' SCOPED alla REGIONE di quel type (da `type <TypeName>` al
+// prossimo `type ` o EOF), robusta a un `@auth` multilinea. La localizzazione del
+// type e del token avviene sul testo MASCHERATO (commenti/stringhe -> spazi), cosi'
+// la doc-comment in testa al file — che CITA "type PublicPost ... allow: public" —
+// non viene scambiata per la definizione reale; la sostituzione si applica poi al
+// testo reale agli STESSI offset (i token di codice coincidono nel mascherato).
+function fixAppsyncS3(dir, finding) {
+  const rel = (finding && finding.location && finding.location.file) || 'schema.graphql';
+  const p = resolveAppsyncFileInCopy(dir, rel);
+  if (!p) return { ok: false, detail: `AM-S3: schema.graphql non risolto (${rel})` };
+  const matchPath = String((finding.location && finding.location.symbol) || '');
+  const typeName = matchPath.includes('@') ? matchPath.slice(0, matchPath.indexOf('@')) : matchPath;
+  const src = readFileSync(p, 'utf8');
+  const mask = maskGraphqlForFix(src);
+  const publicRe = /allow(\s*:\s*)public\b/;
+  // Regione del type colpito: da `type <TypeName>` al prossimo `type ` (o EOF),
+  // localizzata sul MASCHERATO (le citazioni in commento sono spazi -> ignorate).
+  let start = 0; let end = src.length;
+  if (typeName) {
+    const esc = typeName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const typeRe = new RegExp(`\\btype\\s+${esc}\\b`);
+    const mm = typeRe.exec(mask);
+    if (!mm) return { ok: false, detail: `AM-S3: definizione type ${typeName} non trovata` };
+    start = mm.index;
+    const nextRe = /\btype\s+[A-Za-z_]/g;
+    nextRe.lastIndex = mm.index + mm[0].length;
+    const nm = nextRe.exec(mask);
+    end = nm ? nm.index : src.length;
+  }
+  // Cerca `allow: public` nella regione del MASCHERATO (gli offset valgono sul reale).
+  const pm = publicRe.exec(mask.slice(start, end));
+  if (!pm) return { ok: false, detail: `AM-S3: "allow: public" non trovato nel type ${typeName || '?'}` };
+  const absStart = start + pm.index;
+  const matchLen = pm[0].length;
+  // I caratteri reali agli stessi offset coincidono col mascherato (codice, non
+  // stringa): la sostituzione e' sicura sul testo reale.
+  const replaced = src.slice(absStart, absStart + matchLen).replace(publicRe, 'allow$1owner');
+  const after = src.slice(0, absStart) + replaced + src.slice(absStart + matchLen);
+  if (after === src) return { ok: false, detail: 'AM-S3: nessuna modifica applicata' };
+  writeFileSync(p, after, 'utf8');
+  return { ok: true, detail: `AM-S3: allow: public -> allow: owner su ${typeName || 'type colpito'}` };
+}
+
+// =============================================================================
+// FIX SECRET PER-LINGUA (eco-F5a) — additivo. Promuove i 7 pack detection F4
+// (Go/Ruby/PHP/Java/C#/Dart/Elixir) al tier `verified` sulla categoria `secret`.
+// gitleaks e' language-agnostic: coglie il letterale hardcoded (sk_live_.../stringa
+// ad alta entropia assegnata). Ogni fix NEUTRALIZZA il SOLO letterale flaggato
+// sostituendolo con una lettura da env nell'idioma della lingua, PRESERVANDO la
+// sintassi del file. Dopo il fix, gitleaks ri-eseguito sul working-tree -> 0 finding
+// sul file -> verified. Un eventuale DB-URL/password nel seed NON e' flaggato da
+// gitleaks (fuori dal verdetto): la fix mira esattamente al letterale che l'oracolo
+// coglie, lasciando intatto il resto del file (BIT-invariante sul contrasto pulito).
+//
+// DISPATCH (selectKnownFix): keyed su cat==='secret' + ESTENSIONE del seed
+// (.go/.rb/.php/.properties/.cs/.dart/.exs). Estensioni DISGIUNTE dai rami secret
+// esistenti (.ts m5/postgres-jsts, .py supabase-py/postgres-py, serviceAccount.json
+// firebase) e fra loro -> nessun dirottamento dei secret di altri pack. Signature
+// distinta per ramo: fix-secret-<lang>-s1:<file>.
+// =============================================================================
+
+// Tabella per-lingua dei fix secret. Ogni voce: lingua, estensione del seed, path
+// noto del seed nella fixture e una replace che neutralizza il letterale hardcoded
+// con la lettura da env (idioma). La replace e' un NO-OP (ritorna identico) se il
+// pattern non c'e' -> applyPerLangSecretFix fallisce ONESTAMENTE (mai approssimata).
+const PERLANG_SECRET_FIXES = [
+  // postgres-go: const apiKey = "sk_live_..." -> var apiKey = os.Getenv("API_KEY").
+  // import "os" e' gia' presente; una const Go non puo' contenere una call -> `var`.
+  {
+    lang: 'go', ext: /\.go$/, rel: 'main.go',
+    fix: (s) => s.replace(/const\s+apiKey\s*=\s*"sk_live_[^"]*"/,
+      'var apiKey = os.Getenv("API_KEY")'),
+  },
+  // rails-rb: STRIPE_SECRET_KEY = "sk_live_..." -> ENV.fetch("STRIPE_SECRET_KEY").
+  {
+    lang: 'rb', ext: /\.rb$/, rel: 'config/initializers/api_keys.rb',
+    fix: (s) => s.replace(/(STRIPE_SECRET_KEY\s*=\s*)"sk_live_[^"]*"/,
+      '$1ENV.fetch("STRIPE_SECRET_KEY")'),
+  },
+  // laravel-php: 'key' => 'sk_live_...' -> 'key' => env('API_KEY').
+  {
+    lang: 'php', ext: /\.php$/, rel: 'config/services.php',
+    fix: (s) => s.replace(/('key'\s*=>\s*)'sk_live_[^']*'/, "$1env('API_KEY')"),
+  },
+  // spring-java: app.api.key=sk_live_... -> app.api.key=${API_KEY} (placeholder env).
+  {
+    lang: 'java', ext: /\.properties$/, rel: 'src/main/resources/application.properties',
+    fix: (s) => s.replace(/(app\.api\.key\s*=\s*)sk_live_\S*/, '$1${API_KEY}'),
+  },
+  // dotnet-cs: private const string AdminApiKey = "sk_live_..."; -> static readonly
+  // letta da Environment.GetEnvironmentVariable (const C# non puo' contenere una call).
+  {
+    lang: 'cs', ext: /\.cs$/, rel: 'Controllers/ItemsController.cs',
+    fix: (s) => s.replace(/private\s+const\s+string\s+AdminApiKey\s*=\s*"sk_live_[^"]*";/,
+      'private static readonly string AdminApiKey = Environment.GetEnvironmentVariable("API_KEY") ?? "";'),
+  },
+  // flutter-dart: const String _supabaseServiceKey = 'sk_live_...'; -> final letta da
+  // Platform.environment (import 'dart:io' show Platform gia' presente). Top-level
+  // `final` ammette init a runtime; `const` no.
+  {
+    lang: 'dart', ext: /\.dart$/, rel: 'lib/config.dart',
+    fix: (s) => s.replace(/const\s+String\s+_supabaseServiceKey\s*=\s*'sk_live_[^']*';/,
+      "final String _supabaseServiceKey = Platform.environment['API_KEY'] ?? '';"),
+  },
+  // phoenix-ex: secret_key: "sk_live_..." -> secret_key: System.get_env("API_KEY").
+  {
+    lang: 'ex', ext: /\.exs$/, rel: 'config/config.exs',
+    fix: (s) => s.replace(/(secret_key:\s*)"sk_live_[^"]*"/, '$1System.get_env("API_KEY")'),
+  },
+];
+
+// Risolve il path ASSOLUTO del seed nella COPIA `dir`. Preferisce il path noto del
+// seed (rel) sotto la copia; fallback al path del finding ancorato alla copia. NON
+// esce mai dalla copia (nessun ../ verso l'esterno).
+function resolveSecretSeedInCopy(dir, finding, rel) {
+  const direct = resolve(dir, rel);
+  if (existsSync(direct)) return direct;
+  const f = String((finding && finding.location && finding.location.file) || '').replace(/\\/g, '/');
+  if (f) {
+    const asIs = resolve(dir, f);
+    if (existsSync(asIs)) return asIs;
+  }
+  return null;
+}
+
+// Applica il fix secret per-lingua: legge il seed, neutralizza il letterale (replace
+// idiomatica), scrive sulla COPIA (mai il fixture canonico). Fallisce ONESTAMENTE se
+// il pattern non c'e' (replace NO-OP -> after === before).
+function applyPerLangSecretFix(dir, finding, spec) {
+  const p = resolveSecretSeedInCopy(dir, finding, spec.rel);
+  if (!p) return { ok: false, detail: `secret-${spec.lang}: seed ${spec.rel} non risolto nella copia` };
+  const before = readFileSync(p, 'utf8');
+  const after = spec.fix(before);
+  if (after === before) {
+    return { ok: false, detail: `secret-${spec.lang}: letterale hardcoded non trovato in ${spec.rel} (pattern cambiato?)` };
+  }
+  writeFileSync(p, after, 'utf8');
+  return { ok: true, detail: `secret-${spec.lang}: letterale in ${spec.rel} -> lettura da env (idioma ${spec.lang})` };
+}
+
+// Seleziona il fix per-lingua per `file` (per ESTENSIONE del seed). null se nessuno.
+function selectPerLangSecretFix(file) {
+  return PERLANG_SECRET_FIXES.find((spec) => spec.ext.test(file)) || null;
+}
+
+// =============================================================================
+// FIX DEAD-CODE GO / DART (Eco-F5b) — additivo. Promuove i pack postgres-go e
+// flutter-dart al tier `verified` sulla categoria `dead-code`. Dispatch in
+// selectKnownFix keyed su cat==='dead-code' + ESTENSIONE del file (.go / .dart):
+// estensioni DISGIUNTE dai rami dead-code esistenti (.ts knip, .py vulture) ->
+// knip/vulture/ts/py INTATTI (BIT-invariante). Ogni fix rimuove la SOLA funzione
+// morta segnalata (go-deadcode / dart analyze) delegando all'helper riusabile, che
+// rimuove SOLO la definizione top-level e FALLISCE ONESTAMENTE se il simbolo non e'
+// una funzione top-level (mai una rimozione approssimata). Gate umano: L-COL-021
+// (in eval auto-approvato dal loop). Dopo la fix l'oracolo NON segnala piu' il
+// simbolo -> verified; il contrasto pulito (UsedHelper / usedHelper) resta intatto.
+// =============================================================================
+
+// Risolve il path ASSOLUTO del file .go nella COPIA `dir` dal path (eventualmente
+// repo-relativo) del finding. Modulo Go flat: il seed (dead.go) vive alla radice
+// della copia. NON esce mai dalla copia (nessun ../ verso l'esterno).
+function resolveGoFileInCopy(dir, rel) {
+  const norm = String(rel || '').replace(/\\/g, '/');
+  // Path cosi' com'e' relativo alla copia (caso piu' comune dopo normalize).
+  const direct = resolve(dir, norm);
+  if (existsSync(direct)) return direct;
+  // Basename alla radice della copia (modulo Go flat: dead.go).
+  const base = norm.split('/').pop();
+  if (base) {
+    const cand = resolve(dir, base);
+    if (existsSync(cand)) return cand;
+  }
+  return null;
+}
+
+// Risolve il path ASSOLUTO del file .dart nella COPIA `dir`. Layout flutter-dart:
+// i sorgenti vivono sotto 'lib/'. Prende il segmento da "lib/" se presente; altrimenti
+// il path diretto. NON esce mai dalla copia.
+function resolveDartFileInCopy(dir, rel) {
+  const norm = String(rel || '').replace(/\\/g, '/');
+  const m = /(?:^|\/)(lib\/.+\.dart)$/.exec(norm);
+  if (m) {
+    const cand = resolve(dir, m[1]);
+    if (existsSync(cand)) return cand;
+  }
+  const direct = resolve(dir, norm);
+  if (existsSync(direct)) return direct;
+  return null;
+}
+
+// GO-S4 — dead-code Go (postgres-go): rimuove in modo SICURO la funzione top-level
+// morta segnalata da go-deadcode (finding {file, symbol}, ruleId unused-function).
+// Delega a removeGoSymbol (go_deadcode_edit.mjs). Dopo, 'deadcode -json ./...' NON
+// segnala piu' la funzione -> verified; UsedHelper (chiamata da init()) resta intatta.
+function fixDeadcodeGoSymbol(dir, finding) {
+  const rel = String((finding && finding.location && finding.location.file) || '').replace(/\\/g, '/');
+  const symbol = (finding && finding.location && finding.location.symbol) || '';
+  if (!rel || !symbol) {
+    return { ok: false, detail: `GO-S4: finding senza file/symbol (file=${rel || '?'} symbol=${symbol || '?'})` };
+  }
+  const absFile = resolveGoFileInCopy(dir, rel);
+  if (!absFile) {
+    return { ok: false, detail: `GO-S4: file Go non risolto nella copia (${rel})` };
+  }
+  const r = removeGoSymbol(absFile, symbol);
+  if (!r.ok) return { ok: false, detail: `GO-S4: ${r.detail}` };
+  return { ok: true, detail: `GO-S4: ${r.detail}` };
+}
+
+// FD-S4 — dead-code Dart (flutter-dart): rimuove in modo SICURO la funzione top-level
+// morta segnalata da dart analyze (finding {file, symbol}, ruleId unused-element).
+// Delega a removeDartSymbol (dart_deadcode_edit.mjs). Dopo, 'dart analyze' NON segnala
+// piu' UNUSED_ELEMENT per il simbolo -> verified; usedHelper (pubblica) resta intatta.
+function fixDeadcodeDartSymbol(dir, finding) {
+  const rel = String((finding && finding.location && finding.location.file) || '').replace(/\\/g, '/');
+  const symbol = (finding && finding.location && finding.location.symbol) || '';
+  if (!rel || !symbol) {
+    return { ok: false, detail: `FD-S4: finding senza file/symbol (file=${rel || '?'} symbol=${symbol || '?'})` };
+  }
+  const absFile = resolveDartFileInCopy(dir, rel);
+  if (!absFile) {
+    return { ok: false, detail: `FD-S4: file Dart non risolto nella copia (${rel})` };
+  }
+  const r = removeDartSymbol(absFile, symbol);
+  if (!r.ok) return { ok: false, detail: `FD-S4: ${r.detail}` };
+  return { ok: true, detail: `FD-S4: ${r.detail}` };
+}
+
 // Mappa controlId(rule_id) -> costruttore di patch.
 const FIX_TABLE = {
   // gitleaks: il rule_id varia per regola; mappiamo per categoria nel selettore.
   'RLS001_MISSING_RLS': { kind: 'rls', apply: fixRlsS3, signature: 'fix-s3-enable-rls-audit_logs' },
   'RLS003_PERMISSIVE_TRUE': { kind: 'rls', apply: fixRlsS4, signature: 'fix-s4-real-predicate-documents' },
   'RLS004_MISSING_TENANT_PREDICATE': { kind: 'rls', apply: fixRlsS5, signature: 'fix-s5-tenant-predicate-invoices' },
+  // Supabase Storage (RLS005): policy permissiva su storage.objects -> owner-scoped.
+  // Il ramo `if (cat === 'rls' && FIX_TABLE[ruleId])` la seleziona; il ramo RLS
+  // python per-ecosistema (precedente) richiede policySym==='invoices_select' &&
+  // ruleId==='RLS003_PERMISSIVE_TRUE' -> NON intercetta RLS005 (idioma-agnostico).
+  'RLS005_PUBLIC_BUCKET': { kind: 'rls', apply: fixRlsStorageS5, signature: 'fix-storage-owner-scope-bucket' },
 };
 
 // Seleziona la patch nota per un finding. Per secret/dead-code si seleziona per
@@ -584,10 +1104,60 @@ function selectKnownFix(finding) {
     const mp = (finding.location && finding.location.symbol) || '';
     return { kind: 'authz', apply: fixFirestoreRules, signature: `fix-fb-s3-owner-scope:${mp}` };
   }
+  // --- RAMO AUTHZ APPWRITE appwrite.json (eco-F2, additivo) -----------------
+  // Path DISGIUNTO da firestore.rules/pb_schema.json -> nessuna interferenza. La
+  // signature include il collectionId (prefisso del match_path `<id>#<permission>`)
+  // cosi' collection distinte hanno patch MATERIALMENTE distinte.
+  if (cat === 'authz' && /appwrite\.json$/.test(file)) {
+    const mp = (finding.location && finding.location.symbol) || '';
+    const collectionId = mp.includes('#') ? mp.slice(0, mp.indexOf('#')) : mp;
+    return { kind: 'authz', apply: fixAppwriteS3, signature: `fix-appwrite-owner-scope:${collectionId}` };
+  }
+  // --- RAMO AUTHZ POCKETBASE pb_schema.json (eco-F2, additivo) --------------
+  // Path DISGIUNTO -> nessuna interferenza. La signature e' il match_path
+  // (`<collection>.<ruleField>`): rule field distinti = patch distinte.
+  if (cat === 'authz' && /pb_schema\.json$/.test(file)) {
+    const mp = (finding.location && finding.location.symbol) || '';
+    return { kind: 'authz', apply: fixPocketbaseS3, signature: `fix-pocketbase-owner-scope:${mp}` };
+  }
+  // --- RAMO AUTHZ HASURA metadata YAML (eco-F3, additivo) -------------------
+  // Path DISGIUNTO (metadata Hasura *.yaml/*.yml) dai rami precedenti -> nessuna
+  // interferenza. La signature e' il match_path (`<table>.<permType>.<role>`):
+  // permission distinte = patch MATERIALMENTE distinte.
+  if (cat === 'authz' && /\.ya?ml$/.test(file)) {
+    const mp = (finding.location && finding.location.symbol) || '';
+    return { kind: 'authz', apply: fixHasuraS3, signature: `fix-hasura-owner-scope:${mp}` };
+  }
+  // --- RAMO AUTHZ APPSYNC/AMPLIFY schema.graphql (eco-F3, additivo) ----------
+  // Path DISGIUNTO (*.graphql) -> nessuna interferenza. La signature include il
+  // TypeName (prefisso del match_path `<TypeName>@auth`) cosi' type distinti hanno
+  // patch distinte.
+  if (cat === 'authz' && /\.graphql$/.test(file)) {
+    const mp = (finding.location && finding.location.symbol) || '';
+    const typeName = mp.includes('@') ? mp.slice(0, mp.indexOf('@')) : mp;
+    return { kind: 'authz', apply: fixAppsyncS3, signature: `fix-appsync-owner-scope:${typeName}` };
+  }
   // --- RAMO SECRET FIREBASE serviceAccount.json (SP-8, additivo) -------------
   // Precede i rami config.ts: il path serviceAccount.json e' disgiunto -> non interferisce.
   if (cat === 'secret' && /serviceAccount\.json$/.test(file)) {
     return { kind: 'secret', apply: fixSecretFbS1, signature: 'fix-fb-s1-neutralize-service-account' };
+  }
+
+  // --- RAMI SECRET PER-LINGUA (eco-F5a, additivi) ---------------------------
+  // 7 pack detection F4 (Go/Ruby/PHP/Java/C#/Dart/Elixir) -> verified su `secret`.
+  // Keyed su cat==='secret' + ESTENSIONE del seed (.go/.rb/.php/.properties/.cs/
+  // .dart/.exs): DISGIUNTE dai rami secret esistenti (.ts/.py/serviceAccount.json,
+  // valutati prima/dopo) e fra loro -> NON dirottano i secret di altri pack.
+  // Signature distinta per ramo: fix-secret-<lang>-s1:<file>.
+  if (cat === 'secret') {
+    const spec = selectPerLangSecretFix(file);
+    if (spec) {
+      return {
+        kind: 'secret',
+        apply: (d, f) => applyPerLangSecretFix(d, f, spec),
+        signature: `fix-secret-${spec.lang}-s1:${spec.rel}`,
+      };
+    }
   }
 
   if (cat === 'secret' && isPy) {
@@ -607,6 +1177,20 @@ function selectKnownFix(finding) {
     // ogni simbolo morto distinto ha una patch MATERIALMENTE distinta.
     const sym = (finding.location && finding.location.symbol) || '?';
     return { kind: 'dead-code', apply: fixDeadcodeSymbol, signature: `fix-spy-s5-remove-symbol:${sym}` };
+  }
+
+  // --- RAMI DEAD-CODE GO / DART (Eco-F5b, additivi) -------------------------
+  // Keyed su cat==='dead-code' + ESTENSIONE del file (.go / .dart): DISGIUNTE dai
+  // rami dead-code esistenti (.py vulture sopra, .ts knip sotto) -> knip/vulture/
+  // ts/py INTATTI (BIT-invariante). La signature include il simbolo: ogni funzione
+  // morta distinta ha una patch MATERIALMENTE distinta.
+  if (cat === 'dead-code' && /\.go$/.test(file)) {
+    const sym = (finding.location && finding.location.symbol) || '?';
+    return { kind: 'dead-code', apply: fixDeadcodeGoSymbol, signature: `fix-go-s4-remove-func:${sym}` };
+  }
+  if (cat === 'dead-code' && /\.dart$/.test(file)) {
+    const sym = (finding.location && finding.location.symbol) || '?';
+    return { kind: 'dead-code', apply: fixDeadcodeDartSymbol, signature: `fix-fd-s4-remove-func:${sym}` };
   }
 
   // --- RAMO JS/TS (invariato per m5/supabase-jsts; additivo per postgres-jsts) --

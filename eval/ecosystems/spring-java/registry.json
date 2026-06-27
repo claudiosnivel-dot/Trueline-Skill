@@ -1,0 +1,53 @@
+{
+  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack spring-java (F4, tier detection). Stesso schema di eval/ecosystems/postgres-jsts/registry.json. Per ogni difetto seminato SJ-S1..SJ-S3: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso (tier detection, fase 1 L-COL-030: tutti detection-only, verified_set vuoto). Floor [secret, dependency-vuln, authz] obbligatorio. authz-surface = route-authz Spring MVC (@PreAuthorize mancante su endpoint mutante). dependency-vuln = log4j-core 2.14.1 (CVE-2021-44228 Log4Shell, GHSA-jfh8-c2jp-5v3q, CVSS 10.0) — VERIFICATO con osv-scanner --lockfile pom.xml. secret = chiave sk_live_... ad alta entropia in application.properties — VERIFICATA con gitleaks (regola stripe-access-token). authz (semgrep) = best-effort, assente nel sandbox (degrada onesto come postgres-jsts, L-COL-006).",
+  "schema_version": "1.0",
+  "milestone": "F4",
+  "ecosystem": "spring-java",
+  "verified_set": ["secret"],
+  "reference_app": "./reference-app",
+  "defects": [
+    {
+      "id": "SJ-S1",
+      "category": "secret",
+      "source_oracle": "gitleaks",
+      "owasp": "A07:2025",
+      "cwe": "CWE-798",
+      "expected_fix_state": "verified",
+      "anchor": {
+        "file": "src/main/resources/application.properties",
+        "marker": "SEED:SJ-S1"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Chiave API ad alta entropia hardcoded in application.properties (app.api.key=sk_live_Trueline...). Rilevata da gitleaks working-tree (regola stripe-access-token, language-agnostic). Il contrasto (credenziali in variabili d'ambiente, commentato) NON deve produrre finding. Tier detection (fase 1): trovata, prioritizzata, NON auto-fixata (verified_set vuoto, L-COL-030). VERIFICATO con gitleaks detect --no-git (working-tree, 1 finding su application.properties)."
+    },
+    {
+      "id": "SJ-S2",
+      "category": "dependency-vuln",
+      "source_oracle": "osv",
+      "owasp": "A06:2025",
+      "cwe": "CWE-502",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "pom.xml",
+        "lockfile": "pom.xml",
+        "symbol": "org.apache.logging.log4j:log4j-core@2.14.1"
+      },
+      "scan_scope": "lockfile",
+      "notes": "Dipendenza vulnerabile reale pinnata: log4j-core 2.14.1 (osv flagga GHSA-jfh8-c2jp-5v3q CVE-2021-44228 Log4Shell, CVSS 10.0 CRITICAL). Rilevata da osv-scanner su pom.xml (ecosystem Maven). Il symbol dell'ancora e' org.apache.logging.log4j:log4j-core@2.14.1 (come emesso da normalizeOsv: pkgName@pkgVersion). owasp/cwe come confronto SOFT (fonte esterna: A06:2025 Vulnerable and Outdated Components -> A03:2025 Software Supply Chain Failures nella mappa normalize; CWE-502 dal database_specific GHSA). VERIFICATO con osv-scanner scan --lockfile pom.xml --format json -> 7 finding su org.apache.logging.log4j:log4j-core@2.14.1. Tier detection: trovata, prioritizzata, NON auto-bumpata (human-gated)."
+    },
+    {
+      "id": "SJ-S3",
+      "category": "authz",
+      "source_oracle": "semgrep",
+      "owasp": "A01:2025",
+      "cwe": "CWE-862",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "src/main/java/com/example/demo/BookingController.java",
+        "marker": "SEED:SJ-S3"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Endpoint mutante (@PostMapping /api/bookings) che esegue una scrittura SENZA @PreAuthorize o @Secured (route-authz, authz-surface Spring MVC). Il contrasto createBookingSecure ha @PreAuthorize(isAuthenticated()) e il deleteBooking ha @Secured(ROLE_ADMIN): entrambi NON devono produrre finding (precisione). owasp A01:2025/CWE-862 gia 2025 (nostro oracolo curato). Semgrep = best-effort (assente nel sandbox -> degrada onesto, mai falso-verde, L-COL-006). Tier detection: trovata quando semgrep disponibile, non auto-fixata (verified_set vuoto)."
+    }
+  ]
+}

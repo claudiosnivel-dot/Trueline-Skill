@@ -1,0 +1,53 @@
+{
+  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack rails-rb (eco-F4, tier DETECTION). Stesso schema di eval/ecosystems/postgres-jsts/registry.json. Per ogni difetto seminato RB-S1..RB-S3: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso (tier detection, eco-F4 L-COL-030: tutti detection-only, verified_set vuoto), ancora ispezionabile (file+marker | lockfile+symbol | file+marker), scope di scansione dell'oracolo, e note. Il floor [secret, dependency-vuln, authz] e' obbligatorio; nessun difetto bonus non-floor in questa fase. authz-surface qui = route-authz Rails (skip_before_action su callback di autenticazione): l'oracolo legato e' semgrep (ruleset/rails-rb-authz.yml, best-effort eco-F4: semgrep assente nel sandbox -> degrada onesto, mai falso verde).",
+  "schema_version": "1.0",
+  "milestone": "eco-F4",
+  "ecosystem": "rails-rb",
+  "verified_set": ["secret"],
+  "reference_app": "./reference-app",
+  "defects": [
+    {
+      "id": "RB-S1",
+      "category": "secret",
+      "source_oracle": "gitleaks",
+      "owasp": "A07:2025",
+      "cwe": "CWE-798",
+      "expected_fix_state": "verified",
+      "anchor": {
+        "file": "config/initializers/api_keys.rb",
+        "marker": "SEED:RB-S1"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Credenziali hardcoded nel sorgente (working tree): chiave Stripe-like (sk_live_RAILS4RbS1_..., regola trueline-stripe-like-key) e database URL con password in chiaro (regola trueline-generic-assigned-secret) in config/initializers/api_keys.rb. gitleaks working-tree DEVE rilevare almeno il literal sk_live_... (alta entropia, pattern Stripe). Tier detection (eco-F4): trovata, non auto-fixata nel set verificato. Il contrasto ENV.fetch('STRIPE_PUBLISHABLE_KEY') non deve produrre finding (precisione: nessun literal hardcoded)."
+    },
+    {
+      "id": "RB-S2",
+      "category": "dependency-vuln",
+      "source_oracle": "osv",
+      "owasp": "A06:2025",
+      "cwe": "CWE-20",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "Gemfile.lock",
+        "lockfile": "Gemfile.lock",
+        "symbol": "nokogiri@1.10.0"
+      },
+      "scan_scope": "lockfile",
+      "notes": "Dipendenza vulnerabile reale pinnata: nokogiri 1.10.0 (versione del 2019, ante 1.11.0.rc4). Il database OSV/GitHub Security Advisory contiene advisory per nokogiri < 1.11.0.rc4 (es. GHSA-xc9x-jj77-9p9j — libxml2 vulnerabilities in nokogiri; GHSA-cr5j-953j-xw5p CVSS 9.8; e decine di altri GHSA per libxslt e libxml2 integrati). osv-scanner --lockfile Gemfile.lock DEVE emettere almeno un finding per nokogiri@1.10.0. owasp/cwe come emessi da osv-scanner (confronto SOFT/esterno: CWE e OWASP arrivano dalla mappa provvisoria 04, non dalle nostre regole). Tier detection: trovata, prioritizzata, NON auto-bumpata nel set verificato (un bump puo' rompere; resta human-gated). Il lockfile include solo nokogiri (+ la sua dep mini_portile2 non vulnerabile)."
+    },
+    {
+      "id": "RB-S3",
+      "category": "authz",
+      "source_oracle": "semgrep",
+      "owasp": "A01:2025",
+      "cwe": "CWE-862",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "app/controllers/articles_controller.rb",
+        "marker": "SEED:RB-S3"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Controller Rails con skip_before_action :authenticate_user! sulle azioni mutanti (create, update, destroy): azioni accessibili senza verifica d'identita (route-authz, authz-surface rails-rb). L'oracolo semgrep + ruleset rails-rb-authz.yml DEVE flaggare la chiamata skip_before_action :authenticate_user!. Il contrasto (admin_controller.rb con before_action :authenticate_user!) NON deve produrre finding (precisione). Tier detection BEST-EFFORT (eco-F4): semgrep assente nel sandbox -> degrada onesto (conformance gate esce 1 dichiarato se docker non disponibile); quando semgrep e' disponibile, deve cogliere RB-S3 e avere 0 FP sul contrasto."
+    }
+  ]
+}

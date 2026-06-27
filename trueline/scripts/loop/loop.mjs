@@ -42,6 +42,16 @@ const RUN_GITLEAKS = resolve(ORACLES, 'run_gitleaks.mjs');
 const RLS_CHECK = resolve(ORACLES, 'rls_check.mjs');
 const RUN_DEADCODE = resolve(ORACLES, 'run_deadcode.mjs');
 const FIRESTORE_RULES_CHECK = resolve(ORACLES, 'firestore_rules_check.mjs');
+// eco-F2: oracoli authz dichiarativi per backend non-Firestore (appwrite.json /
+// pb_schema.json). Il re-run del loop nella categoria 'authz' dispatcha sul tool
+// che ha prodotto il finding (source_oracle.oracle) -> ramo firestore BIT-invariante.
+const APPWRITE_PERMS_CHECK = resolve(ORACLES, 'appwrite_perms_check.mjs');
+const POCKETBASE_RULES_CHECK = resolve(ORACLES, 'pocketbase_rules_check.mjs');
+// eco-F3: oracoli authz dichiarativi per Hasura (metadata YAML) e AppSync/Amplify
+// Gen1 (schema.graphql). Stesso dispatch per-oracolo del case 'authz' -> il ramo
+// firestore (default) resta BIT-invariante.
+const HASURA_METADATA_CHECK = resolve(ORACLES, 'hasura_metadata_check.mjs');
+const APPSYNC_AUTH_CHECK = resolve(ORACLES, 'appsync_auth_check.mjs');
 const GO_BIN = process.platform === 'win32' ? 'C:/Users/claud/go/bin' : '/c/Users/claud/go/bin';
 
 // --- Re-run dell'oracolo per-categoria (stesso oracolo, stesso rule_id) ------
@@ -65,6 +75,8 @@ export function rerunOracleFor(finding, dir, runOpts) {
   // Path del finding in POSIX (per discriminare JS vs Python in modo additivo).
   const fpath = String((finding.location && finding.location.file) || '').replace(/\\/g, '/');
   const isPy = /\.py$/.test(fpath);
+  const isGo = /\.go$/.test(fpath);
+  const isDart = /\.dart$/.test(fpath);
 
   let oracle; let res; let scope;
   switch (finding.category) {
@@ -89,23 +101,56 @@ export function rerunOracleFor(finding, dir, runOpts) {
       res = run(RLS_CHECK, [resolveRlsMigrationsDir(dir, { manifest: runOpts && runOpts.manifest })]);
       break;
     case 'dead-code':
-      // ECOSYSTEM-AWARE (additivo): dead-code Python -> vulture; JS/TS -> knip
-      // (invariato). Il dispatch e' keyed sull'estensione del file del finding,
-      // cosi' i due ecosistemi coesistono senza rompere il ramo knip esistente.
+      // ECOSYSTEM-AWARE (additivo): dead-code Python -> vulture; Go -> go-deadcode;
+      // Dart -> dart; JS/TS -> knip (invariato). Il dispatch e' keyed sull'estensione
+      // del file del finding (eco-F5b aggiunge go/dart), cosi' gli ecosistemi coesistono
+      // senza rompere il ramo knip/vulture esistente.
       if (isPy) {
         oracle = 'vulture'; scope = 'working-tree';
         res = run(RUN_DEADCODE, [dir, '--tool=vulture']);
+      } else if (isGo) {
+        oracle = 'go-deadcode'; scope = 'working-tree';
+        res = run(RUN_DEADCODE, [dir, '--tool=go-deadcode']);
+      } else if (isDart) {
+        oracle = 'dart'; scope = 'working-tree';
+        res = run(RUN_DEADCODE, [dir, '--tool=dart']);
       } else {
         oracle = 'knip'; scope = 'working-tree';
         res = run(RUN_DEADCODE, [dir]);
       }
       break;
-    case 'authz':
-      // SP-8: authz dichiarativa Firestore. L'oracolo cammina `dir` per firestore.rules
-      // ed emette {findings:[...]} (category 'authz'). Prova STATICA (no runtime).
-      oracle = 'firestore-rules'; scope = 'working-tree';
-      res = run(FIRESTORE_RULES_CHECK, [dir]);
+    case 'authz': {
+      // authz dichiarativa. DISPATCH ADDITIVO keyed sull'ORACOLO che ha prodotto il
+      // finding (source_oracle.oracle): il ramo Firestore (SP-8) resta BIT-invariante;
+      // eco-F2 aggiunge Appwrite (appwrite.json) e PocketBase (pb_schema.json). Tutti
+      // STATICI (no runtime): l'oracolo cammina `dir` ed emette {findings:[...]}
+      // (category 'authz'). Senza questo dispatch, il re-run girerebbe SEMPRE Firestore
+      // -> su un pack Appwrite/PocketBase (niente firestore.rules) tornerebbe 0 finding
+      // e il loop crederebbe il difetto "gia' azzerato" SENZA applicare la fix (falso
+      // verde, L-COL-002). Prova STATICA (no runtime).
+      scope = 'working-tree';
+      const authzOracle = String((finding.source_oracle && finding.source_oracle.oracle) || '');
+      if (authzOracle === 'appwrite-perms') {
+        oracle = 'appwrite-perms';
+        res = run(APPWRITE_PERMS_CHECK, [dir]);
+      } else if (authzOracle === 'pocketbase-rules') {
+        oracle = 'pocketbase-rules';
+        res = run(POCKETBASE_RULES_CHECK, [dir]);
+      } else if (authzOracle === 'hasura-metadata') {
+        // eco-F3: metadata Hasura YAML (filter:{} su ruolo anonimo).
+        oracle = 'hasura-metadata';
+        res = run(HASURA_METADATA_CHECK, [dir]);
+      } else if (authzOracle === 'appsync-auth') {
+        // eco-F3: schema.graphql AppSync/Amplify Gen1 (allow: public su @model).
+        oracle = 'appsync-auth';
+        res = run(APPSYNC_AUTH_CHECK, [dir]);
+      } else {
+        // SP-8 (default invariato): Firestore Security Rules.
+        oracle = 'firestore-rules';
+        res = run(FIRESTORE_RULES_CHECK, [dir]);
+      }
       break;
+    }
     default:
       return { ok: false, findings: [], detail: `categoria non rieseguibile: ${finding.category}` };
   }

@@ -34,7 +34,8 @@ import { fileURLToPath } from 'node:url';
 //   node run_deadcode.mjs <project-dir> [--tool=<nome>]
 //
 // --tool=<nome>  Seleziona il dead-code tool. Default: knip.
-//                Valori supportati: knip, vulture (Python — SP-2)
+//                Valori supportati: knip (JS/TS, primario), vulture (Python — SP-2),
+//                go-deadcode (Go — Eco-F5b), dart (Dart/Flutter — Eco-F5b).
 //                Tool sconosciuto: esce con JSON vuoto + nota (mai falso verde).
 
 const args = process.argv.slice(2);
@@ -61,7 +62,7 @@ const projectDir = resolve(positionalArgs[0]);
 // Un tool non supportato non deve mai sembrare "nessun dead code trovato" —
 // per questo si emette una nota esplicita accanto all'array vuoto.
 
-const SUPPORTED_TOOLS = new Set(['knip', 'vulture']);
+const SUPPORTED_TOOLS = new Set(['knip', 'vulture', 'go-deadcode', 'dart']);
 
 if (!SUPPORTED_TOOLS.has(toolName)) {
   const safeNote = `tool ${toolName} non supportato`;
@@ -150,6 +151,187 @@ if (toolName === 'vulture') {
   // EXIT 0: vulture e stato eseguito e lo stdout e parsabile. Le issue sono
   // informazione, non errore — il chiamante decide se escalare.
   process.exit(0);
+}
+
+// ── Ramo go-deadcode (Go — Eco-F5b) ───────────────────────────────────────────
+// 'deadcode' (golang.org/x/tools/cmd/deadcode) esegue l'analisi di
+// raggiungibilita sul modulo Go; con -json emette un ARRAY di pacchetti, ognuno
+// con i Funcs irraggiungibili:
+//   [ { "Name": "<pkg>", "Path": "<importpath>",
+//       "Funcs": [ { "Name": "<func>", "Position": {File,Line,Col}, ... } ] } ]
+// Come vulture/knip, le funzioni morte sono INFORMAZIONE: deadcode esce 0 a
+// prescindere. EXIT 1 SOLO se il processo non parte (binario assente / spawn
+// error) o se lo stdout non e JSON parsabile (mai un falso vuoto). Emettiamo
+// { tool:'go-deadcode', issues:[{ symbol, file, line, kind:'unused-function' }] }.
+if (toolName === 'go-deadcode') {
+  const res = spawnSync('deadcode', ['-json', './...'], {
+    cwd: projectDir,
+    encoding: 'utf8',
+    timeout: 120_000,
+    env: process.env,
+    maxBuffer: 32 * 1024 * 1024,
+  });
+
+  // Spawn error reale (binario deadcode assente, ecc.) → EXIT 1 onesto.
+  if (res.error) {
+    process.stderr.write(
+      `ERRORE: impossibile avviare deadcode: ${res.error.message}\n` +
+      'Verificare che il binario "deadcode" (golang.org/x/tools/cmd/deadcode) sia sul PATH.\n'
+    );
+    process.exit(1);
+  }
+  // Propaga lo stderr di deadcode (diagnostica di build, ecc.) al padre.
+  if (res.stderr) process.stderr.write(res.stderr);
+
+  const raw = (res.stdout || '').trim();
+  // Output vuoto con status != 0 = errore reale (es. modulo non compilabile),
+  // NON "nessun dead code". Distinguiamo come per vulture (mai falso vuoto).
+  if (!raw && res.status !== 0) {
+    process.stderr.write(
+      `ERRORE: deadcode non ha prodotto output (exit ${res.status}).\n` +
+      'Verificare che la directory sia un modulo Go valido e compilabile.\n'
+    );
+    process.exit(1);
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw || '[]');
+  } catch (err) {
+    process.stderr.write(
+      `ERRORE: l'output di deadcode non e JSON valido: ${err.message}\n` +
+      `Output ricevuto (prime 500 car.): ${raw.slice(0, 500)}\n`
+    );
+    process.exit(1);
+  }
+
+  const issues = [];
+  if (Array.isArray(parsed)) {
+    for (const pkg of parsed) {
+      const funcs = pkg && Array.isArray(pkg.Funcs) ? pkg.Funcs : [];
+      for (const fn of funcs) {
+        const pos = (fn && fn.Position) || {};
+        const lineNo = Number(pos.Line);
+        issues.push({
+          symbol: fn && fn.Name,
+          file: pos.File || '',
+          line: Number.isInteger(lineNo) ? lineNo : 0,
+          kind: 'unused-function',
+        });
+      }
+    }
+  }
+
+  const out = { tool: 'go-deadcode', issues };
+  if (issues.length === 0) {
+    out.note = 'go-deadcode non ha trovato funzioni irraggiungibili';
+  }
+  process.stdout.write(JSON.stringify(out, null, 2) + '\n');
+  process.exit(0);
+}
+
+// ── Ramo dart (Dart/Flutter — Eco-F5b) ────────────────────────────────────────
+// 'dart analyze --format=machine' emette una riga per diagnostica nel formato
+// pipe-delimitato a 8 campi:
+//   SEVERITY|TYPE|CODE|FILE|LINE|COL|LENGTH|MESSAGE
+// I '|' e i '\' DENTRO i campi sono ESCAPATI con '\' (es. path Windows
+// "C:\\Users\\.."). Filtriamo le diagnostiche dead-code (code 'unused_element' /
+// 'dead_code', case-insensitive) e ricaviamo il simbolo dal messaggio
+// ("The declaration '<name>' isn't referenced."). Come vulture, le diagnostiche
+// sono INFORMAZIONE: dart esce 1/2/3 quando trova problemi (NON un errore
+// d'esecuzione), 0 quando pulito → usiamo lo stdout, mai l'exit code. EXIT 1 SOLO
+// se il processo non parte (spawn error). Emettiamo { tool:'dart', issues:[...] }.
+if (toolName === 'dart') {
+  // Nessun path-arg: dart analizza la cwd. Cosi evitiamo problemi di quoting con
+  // path che contengono spazi quando serve il fallback con shell (Windows .bat).
+  const dartArgs = ['analyze', '--format=machine'];
+  const dartOpts = {
+    cwd: projectDir,
+    encoding: 'utf8',
+    timeout: 180_000,
+    env: process.env,
+    maxBuffer: 32 * 1024 * 1024,
+  };
+  let res = spawnSync('dart', dartArgs, dartOpts);
+  // Su Windows 'dart' e spesso un .bat che Node rifiuta di eseguire senza shell
+  // (ENOENT). Riproviamo via shell: se dart e davvero assente, anche il retry
+  // fallisce (res.error) → EXIT 1 onesto. Mai un falso vuoto.
+  if (res.error && res.error.code === 'ENOENT') {
+    res = spawnSync('dart', dartArgs, { ...dartOpts, shell: true });
+  }
+
+  if (res.error) {
+    process.stderr.write(
+      `ERRORE: impossibile avviare dart: ${res.error.message}\n` +
+      'Verificare che il Dart SDK sia installato e che "dart" sia sul PATH.\n'
+    );
+    process.exit(1);
+  }
+  if (res.stderr) process.stderr.write(res.stderr);
+
+  const rawDart = res.stdout || '';
+  // Processo terminato senza output e senza status (kill/timeout) = errore onesto.
+  if (!rawDart.trim() && res.status === null) {
+    process.stderr.write('ERRORE: dart analyze non ha prodotto output (processo terminato).\n');
+    process.exit(1);
+  }
+
+  const issues = [];
+  for (const rawLine of rawDart.split(/\r?\n/)) {
+    if (!rawLine.trim()) continue;
+    const fields = splitMachineLine(rawLine);
+    if (fields.length < 8) continue; // righe non conformi: ignorate (robustezza)
+    const code = String(fields[2] || '').toLowerCase();
+    if (code !== 'unused_element' && code !== 'dead_code') continue;
+    const lineNo = Number(fields[4]);
+    const message = fields.slice(7).join('|');
+    issues.push({
+      symbol: extractDartSymbol(message),
+      file: fields[3],
+      line: Number.isInteger(lineNo) ? lineNo : 0,
+      kind: code === 'dead_code' ? 'dead-code' : 'unused-element',
+      code,
+      message,
+    });
+  }
+
+  const out = { tool: 'dart', issues };
+  if (issues.length === 0) {
+    out.note = 'dart analyze non ha trovato diagnostiche dead-code (unused_element/dead_code)';
+  }
+  process.stdout.write(JSON.stringify(out, null, 2) + '\n');
+  process.exit(0);
+}
+
+// Divide una riga del formato machine di dart sui '|' NON escapati, eseguendo
+// l'unescape inline ('\\'->'\', '\|'->'|', '\n'/'\r'/'\t' -> whitespace): cosi i
+// path Windows ("C:\\Users\\..") tornano con un solo backslash e i campi col '|'
+// interno restano integri.
+function splitMachineLine(line) {
+  const fields = [];
+  let cur = '';
+  for (let i = 0; i < line.length; i += 1) {
+    const c = line[i];
+    if (c === '\\' && i + 1 < line.length) {
+      const n = line[i + 1];
+      cur += n === 'n' ? '\n' : n === 'r' ? '\r' : n === 't' ? '\t' : n;
+      i += 1;
+      continue;
+    }
+    if (c === '|') { fields.push(cur); cur = ''; continue; }
+    cur += c;
+  }
+  fields.push(cur);
+  return fields;
+}
+
+// Estrae il nome del simbolo dal messaggio dart, es.
+//   "The declaration '_unusedHelper' isn't referenced." -> "_unusedHelper"
+// Prende il primo identificatore fra apici (singoli/doppi/backtick). undefined se
+// assente (es. messaggi 'dead_code' senza nome di simbolo).
+function extractDartSymbol(message) {
+  const m = /[`'"]([A-Za-z_$][\w$]*)[`'"]/.exec(String(message || ''));
+  return m ? m[1] : undefined;
 }
 
 // ── Individua il binario knip ────────────────────────────────────────────────

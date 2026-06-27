@@ -1,0 +1,53 @@
+{
+  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack laravel-php (eco-F5a, tier VERIFIED secret). verified_set=[secret] (LP-S1 -> verified via gitleaks; LP-S2/LP-S3 detection-only). LP-S1 secret hardcoded (gitleaks), LP-S2 dependency-vuln (osv-scanner su composer.lock, guzzlehttp/guzzle@7.3.0 vulnerabile), LP-S3 route-authz (semgrep PHP, best-effort).",
+  "schema_version": "1.0",
+  "milestone": "eco-F5a",
+  "ecosystem": "laravel-php",
+  "verified_set": ["secret"],
+  "reference_app": "eval/ecosystems/laravel-php/reference-app",
+  "defects": [
+    {
+      "id": "LP-S1",
+      "category": "secret",
+      "source_oracle": "gitleaks",
+      "owasp": "A07:2025",
+      "cwe": "CWE-798",
+      "expected_fix_state": "verified",
+      "anchor": {
+        "file": "config/services.php",
+        "marker": "SEED:LP-S1"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Chiave Stripe-like `sk_live_...` hardcoded in config/services.php (SEED:LP-S1). gitleaks la rileva con la regola stripe-access-token (language-agnostic). Il contrasto usa env('STRIPE_SECRET') e NON deve produrre finding (precisione). Detection tier: detection-only (verified_set vuoto, L-COL-030)."
+    },
+    {
+      "id": "LP-S2",
+      "category": "dependency-vuln",
+      "source_oracle": "osv",
+      "owasp": "A03:2025",
+      "cwe": "CWE-200",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "composer.lock",
+        "lockfile": "composer.lock",
+        "symbol": "guzzlehttp/guzzle@7.3.0"
+      },
+      "scan_scope": "lockfile",
+      "notes": "Dipendenza vulnerabile reale pinnata: guzzlehttp/guzzle@7.3.0 (osv-scanner emette più advisory sul lockfile Packagist: tra gli altri GHSA-cwmx-hcrq-mhc3 CVSS 8.0, GHSA-25mq-v84q-4j7r CVSS 7.7, GHSA-q559-8m2m-g699 CVSS 7.7; tutte le vulnerabilità coprono 7.x < versione corretta). Verificata con 'osv-scanner scan --lockfile composer.lock'. Rilevata dall'oracolo osv-scanner sul composer.lock. Detection tier: detection-only (mai auto-bumpata, human-gated, L-COL-006)."
+    },
+    {
+      "id": "LP-S3",
+      "category": "authz",
+      "source_oracle": "semgrep",
+      "owasp": "A01:2025",
+      "cwe": "CWE-862",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "routes/api.php",
+        "marker": "SEED:LP-S3"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Rotta mutante Route::post('/api/bookings') che esegue DB::table()->insert() SENZA auth()->check() o middleware auth. Semgrep PHP best-effort (semgrep assente nel sandbox -> degrada onesto, L-COL-006). La rotta di contrasto POST /api/bookings/secure chiama auth()->check() PRIMA dell'INSERT e NON deve produrre finding (precisione). Detection tier: detection-only."
+    }
+  ]
+}

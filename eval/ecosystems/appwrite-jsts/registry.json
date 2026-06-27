@@ -1,0 +1,68 @@
+{
+  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack appwrite-jsts (eco-F2). Stesso schema di eval/ecosystems/firebase-jsts/registry.json. Per ogni difetto seminato AW-S1..AW-S4: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso (eco-F2 verified: verified_set=[secret,dead-code,authz]), ancora ispezionabile (file+marker | lockfile+symbol | file+marker+match_path), scope di scansione dell'oracolo, e note. Il floor [secret, dependency-vuln, authz] è obbligatorio; AW-S2 (dependency-vuln) è floor ma detection-only. authz-surface qui = permessi collection Appwrite: permission read(\"any\") = autorizzazione ASSENTE (CWE-862 Missing Authorization, threat model 07 §4.3), divergenza intenzionale dal CWE-285 della famiglia RLS.",
+  "schema_version": "1.0",
+  "milestone": "eco-f2",
+  "ecosystem": "appwrite-jsts",
+  "verified_set": ["secret", "dead-code", "authz"],
+  "reference_app": "./reference-app",
+  "defects": [
+    {
+      "id": "AW-S1",
+      "category": "secret",
+      "source_oracle": "gitleaks",
+      "owasp": "A07:2025",
+      "cwe": "CWE-798",
+      "expected_fix_state": "verified",
+      "anchor": {
+        "file": "serviceAccount.json",
+        "marker": "SEED:AW-S1"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Credenziali hardcoded committate: serviceAccount.json contiene una private_key di service account (type=service_account, private_key BEGIN/END lunga, client_email, private_key_id), PRESENTE nel working tree e rilevata dall'oracolo legato (gitleaks working-tree come google-service-account). Il marker SEED:AW-S1 vive nel file src/appwrite.ts che LEGGE il service account (un JSON puro non può ospitare commenti). Contrasto PULITO: src/appwrite.ts initFromEnv() legge le credenziali da process.env (env-read, gitleaks-clean). La fix neutralizza il campo private_key (sostituisce il PEM con placeholder vuoto). Tier verified: trovata e auto-fixata."
+    },
+    {
+      "id": "AW-S2",
+      "category": "dependency-vuln",
+      "source_oracle": "osv",
+      "owasp": "A06:2025",
+      "cwe": "CWE-20",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "package-lock.json",
+        "lockfile": "package-lock.json",
+        "symbol": "lodash@4.17.20"
+      },
+      "scan_scope": "lockfile",
+      "notes": "Dipendenza vulnerabile reale pinnata: lodash@4.17.20 (osv flagga GHSA-35jh-r3h4-6jhm / CVE-2021-23337, Command Injection via template). Rilevata dall'oracolo legato (osv) sul lockfile package-lock.json (lockfileVersion 3, osv-scanner-parsabile). Le altre dipendenze (node-appwrite) restano pulite. owasp/cwe come riportati da osv = confronto SOFT/esterno (CWE-20 è il cwe nativo emesso da osv-scanner per questo advisory; A06:2025 = Vulnerable and Outdated Components). Tier detection: trovata, prioritizzata, non auto-bumpata nel set verificato (fuori dal verified_set; il bump di versione richiede intervento umano)."
+    },
+    {
+      "id": "AW-S3",
+      "category": "authz",
+      "source_oracle": "appwrite-perms",
+      "owasp": "A01:2025",
+      "cwe": "CWE-862",
+      "expected_fix_state": "verified",
+      "anchor": {
+        "file": "appwrite.json",
+        "marker": "SEED:AW-S3",
+        "match_path": "public_posts#read(\"any\")"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Permission read(\"any\") sulla collection public_posts: autorizzazione ASSENTE (chiunque legge). L'oracolo appwrite-perms emette APPWRITE001_PUBLIC_PERMISSION con match_path=public_posts#read(\"any\"); normalize -> CWE-862/A01:2025. CWE-862 (Missing Authorization) è deliberato: read(\"any\") = authz ASSENTE, allineato al threat model 07 §4.3, divergenza intenzionale dal CWE-285 della famiglia RLS (dove l'authz è PRESENTE ma permissiva). La collection di contrasto private_data usa scope \"users\" + documentSecurity:true (isolamento per utente autenticato) e NON deve produrre finding (precisione). L'oracolo emette ESATTAMENTE 1 finding sull'intero file appwrite.json."
+    },
+    {
+      "id": "AW-S4",
+      "category": "dead-code",
+      "source_oracle": "knip",
+      "owasp": "-",
+      "expected_fix_state": "verified",
+      "anchor": {
+        "file": "src/dead.ts",
+        "symbol": "unusedHelper",
+        "marker": "SEED:AW-S4"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Funzione unusedHelper esportata da src/dead.ts e MAI referenziata nel progetto: knip la segnala come unused export. Il contrasto usedHelper è importato e chiamato da src/index.ts allo startup (riferimento reale) e NON viene segnalato da knip (precisione). Categoria dead-code; owasp/cwe non applicabili (omessi/'-'). La fix rimuove la funzione unusedHelper dal file src/dead.ts senza toccare usedHelper."
+    }
+  ]
+}

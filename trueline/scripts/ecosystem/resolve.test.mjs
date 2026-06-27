@@ -267,6 +267,225 @@ check('floorOf(firebase-jsts) include secret', floorOf(mFb).includes('secret'));
 check('floorOf(firebase-jsts) include dependency-vuln', floorOf(mFb).includes('dependency-vuln'));
 check('floorOf(firebase-jsts) include authz', floorOf(mFb).includes('authz'));
 
+// ── F1 (eco-expansion) — firebase-py: tie-break per LINGUA su backend Firebase ──
+// firebase-jsts e firebase-py condividono detect.files_any:["firebase.json",
+// "firestore.rules"] (backend Firebase identico): su un repo Firebase pareggiano sul
+// segnale forte (hits=1). Il tie-break conta i match lang_any per disambiguare la
+// LINGUA — esattamente come supabase-jsts↔supabase-py su supabase/config.toml.
+// (Gemelli dei casi Sp-Py / Sp-Ambig / Caso G, con firebase.json al posto di
+// supabase/config.toml. firebase-jsts NON si tocca: lang_any:['package.json'].)
+
+// Caso Fb-Py (positivo): firebase.json + requirements.txt (NO package.json) -> firebase-py.
+// Passata 1: firebase.json -> fj e fp hits=1 (pari merito). Tie-break lang: fp lang=1
+// (requirements.txt ∈ lang_any py), fj lang=0 (package.json assente) -> vince firebase-py.
+const fbPy = mkdtempSync(join(tmpdir(), 'eco-fbpy-'));
+writeFileSync(join(fbPy, 'firebase.json'), '{}');
+writeFileSync(join(fbPy, 'requirements.txt'), 'firebase-admin==6.5.0\n');
+check(
+  'classify(firebase.json + requirements.txt, NO package.json) = firebase-py (tie-break per lingua)',
+  classify(fbPy) === 'firebase-py',
+);
+
+// Caso Fb-Ambig: firebase.json + package.json + requirements.txt -> {ambiguous}.
+// Passata 1: fj e fp hits=1 (firebase.json). Tie-break lang: fj lang=1 (package.json),
+// fp lang=1 (requirements.txt) -> pareggiano ANCHE sulla lingua -> ambiguous (onesto).
+const fbAmbig = mkdtempSync(join(tmpdir(), 'eco-fbambig-'));
+writeFileSync(join(fbAmbig, 'firebase.json'), '{}');
+writeFileSync(join(fbAmbig, 'package.json'), '{}');
+writeFileSync(join(fbAmbig, 'requirements.txt'), 'firebase-admin==6.5.0\n');
+const fbAmbigResult = classify(fbAmbig);
+check(
+  'classify(firebase.json + package.json + requirements.txt) = {ambiguous:true} (JS↔Py pari merito su lingua)',
+  fbAmbigResult && fbAmbigResult.ambiguous === true &&
+  Array.isArray(fbAmbigResult.candidates) &&
+  fbAmbigResult.candidates.includes('firebase-jsts') &&
+  fbAmbigResult.candidates.includes('firebase-py'),
+);
+
+// Caso Fb-NoLang: firebase.json SENZA alcun marker di lingua -> {ambiguous} (JS↔Py indecidibile).
+// Passata 1: fj e fp hits=1 (firebase.json). Tie-break lang: entrambi lang=0 -> ambiguous.
+const fbNoLang = mkdtempSync(join(tmpdir(), 'eco-fbnolang-'));
+writeFileSync(join(fbNoLang, 'firebase.json'), '{}');
+const fbNoLangResult = classify(fbNoLang);
+check(
+  'classify(firebase.json SENZA lingua) = {ambiguous:true} (JS↔Py indecidibile, onesto)',
+  fbNoLangResult && fbNoLangResult.ambiguous === true &&
+  Array.isArray(fbNoLangResult.candidates) &&
+  fbNoLangResult.candidates.includes('firebase-jsts') &&
+  fbNoLangResult.candidates.includes('firebase-py'),
+);
+
+// Caso Fb-JS (anti-regressione): firebase.json + package.json (NO requirements) -> resta firebase-jsts.
+// Passata 1: fj e fp hits=1 (firebase.json). Tie-break lang: fj lang=1 (package.json),
+// fp lang=0 -> vince firebase-jsts (il pack JS non viene dirottato dall'arrivo di firebase-py).
+const fbJsAntiReg = mkdtempSync(join(tmpdir(), 'eco-fbjsanti-'));
+writeFileSync(join(fbJsAntiReg, 'firebase.json'), '{}');
+writeFileSync(join(fbJsAntiReg, 'package.json'), '{}');
+check(
+  'classify(firebase.json + package.json, NO requirements) = firebase-jsts (anti-regressione, con firebase-py caricato)',
+  classify(fbJsAntiReg) === 'firebase-jsts',
+);
+
+// ── eco-F4 — laravel-php: classificazione (composer.json, lang_any-only) ──────
+// detect.lang_any:["composer.json"] senza files_any -> passata 2 (fallback lang_any-only).
+
+// Caso LP-1 (positivo): dir con solo composer.json -> laravel-php.
+const lpPos = mkdtempSync(join(tmpdir(), 'eco-lppos-'));
+writeFileSync(join(lpPos, 'composer.json'), '{"name":"test"}');
+check(
+  'classify(solo composer.json) = laravel-php (lang_any-only passata 2)',
+  classify(lpPos) === 'laravel-php',
+);
+
+// Caso LP-2 (negativo/precisione): dir vuota -> NON laravel-php.
+const lpNeg = mkdtempSync(join(tmpdir(), 'eco-lpneg-'));
+check(
+  'classify(repo vuoto) != laravel-php (precisione)',
+  classify(lpNeg) !== 'laravel-php',
+);
+
+// ── eco-F4 — dotnet-cs: classificazione (app.csproj / global.json, lang_any-only) ─
+// detect.lang_any:["global.json","app.csproj"] senza files_any -> passata 2 (fallback
+// lang_any-only, match per NOME-FILE ESATTO via existsSync, NON glob). Marker .csproj
+// citato come caso NON ovvio: lo blindiamo con un positivo + un negativo di precisione.
+
+// Caso DN-1 (positivo): dir con solo app.csproj -> dotnet-cs.
+const dnPos = mkdtempSync(join(tmpdir(), 'eco-dnpos-'));
+writeFileSync(join(dnPos, 'app.csproj'), '<Project Sdk="Microsoft.NET.Sdk"></Project>');
+check(
+  'classify(solo app.csproj) = dotnet-cs (lang_any-only passata 2)',
+  classify(dnPos) === 'dotnet-cs',
+);
+
+// Caso DN-2 (negativo/precisione): dir vuota -> NON dotnet-cs.
+const dnNeg = mkdtempSync(join(tmpdir(), 'eco-dnneg-'));
+check(
+  'classify(repo vuoto) != dotnet-cs (precisione)',
+  classify(dnNeg) !== 'dotnet-cs',
+);
+
+// ── SP-F6 Fase 0 — content-detection via detect.deps_any (ENGINE, additivo) ───────
+// classify(projectDir, ecosystems) accetta un set di manifest iniettato: provo il
+// RAMO ENGINE deps_any in modo DETERMINISTICO e indipendente dallo stato del disco
+// (i manifest reali mongodb-jsts/dynamodb-jsts arrivano dai pack-data; vedi sotto i
+// casi su disco, guardati). Manifest sintetici minimi: classify legge solo `id` e
+// `detect`. Provano: dep-match come segnale forte, anti-regressione postgres senza
+// deps_any, ambiguità Mongo+Dynamo, lettura devDependencies e requirements.txt.
+const synthEco = [
+  { id: 'postgres-jsts', detect: { lang_any: ['package.json'] } },
+  { id: 'mongodb-jsts',  detect: { deps_any: ['mongodb', 'mongoose'], lang_any: ['package.json'] } },
+  { id: 'dynamodb-jsts', detect: { deps_any: ['@aws-sdk/client-dynamodb', 'aws-sdk'], lang_any: ['package.json'] } },
+];
+
+// ENG-1: package.json con 'mongodb' in dependencies -> mongodb-jsts (dep = segnale forte).
+const engMongo = mkdtempSync(join(tmpdir(), 'eco-engmongo-'));
+writeFileSync(join(engMongo, 'package.json'), JSON.stringify({ dependencies: { mongodb: '^6.3.0', express: '^4' } }));
+check(
+  'ENGINE deps_any: package.json con mongodb in deps = mongodb-jsts (segnale forte sintetico)',
+  classify(engMongo, synthEco) === 'mongodb-jsts',
+);
+
+// ENG-2: package.json con '@aws-sdk/client-dynamodb' in dependencies -> dynamodb-jsts.
+const engDynamo = mkdtempSync(join(tmpdir(), 'eco-engdynamo-'));
+writeFileSync(join(engDynamo, 'package.json'), JSON.stringify({ dependencies: { '@aws-sdk/client-dynamodb': '^3.500.0' } }));
+check(
+  'ENGINE deps_any: package.json con @aws-sdk/client-dynamodb in deps = dynamodb-jsts (segnale forte sintetico)',
+  classify(engDynamo, synthEco) === 'dynamodb-jsts',
+);
+
+// ENG-3 (ANTI-REGRESSIONE): package.json SENZA alcun dep deps_any -> postgres-jsts.
+// I manifest deps_any-only (mongo/dynamo) NON catturano un generico package.json:
+// dep-miss -> esclusi anche dalla passata 2; postgres-jsts (lang_any-only) vince.
+const engPg = mkdtempSync(join(tmpdir(), 'eco-engpg-'));
+writeFileSync(join(engPg, 'package.json'), JSON.stringify({ dependencies: { express: '^4', pg: '^8' } }));
+check(
+  'ENGINE deps_any: package.json generico (no deps_any) = postgres-jsts (anti-regressione, deps_any-only non catturano)',
+  classify(engPg, synthEco) === 'postgres-jsts',
+);
+
+// ENG-4 (ambiguità): mongodb + @aws-sdk/client-dynamodb insieme -> {ambiguous}.
+// Entrambi segnale forte (hits=1) e stessa lingua (package.json) -> pari merito.
+const engBoth = mkdtempSync(join(tmpdir(), 'eco-engboth-'));
+writeFileSync(join(engBoth, 'package.json'), JSON.stringify({ dependencies: { mongodb: '^6', '@aws-sdk/client-dynamodb': '^3' } }));
+const engBothResult = classify(engBoth, synthEco);
+check(
+  'ENGINE deps_any: mongodb + dynamodb insieme = {ambiguous:true} (pari merito, proponi+conferma)',
+  engBothResult && engBothResult.ambiguous === true &&
+  Array.isArray(engBothResult.candidates) &&
+  engBothResult.candidates.includes('mongodb-jsts') &&
+  engBothResult.candidates.includes('dynamodb-jsts'),
+);
+
+// ENG-5 (devDependencies): 'mongoose' in devDependencies -> mongodb-jsts (legge anche devDeps).
+const engDev = mkdtempSync(join(tmpdir(), 'eco-engdev-'));
+writeFileSync(join(engDev, 'package.json'), JSON.stringify({ devDependencies: { mongoose: '^8.0.0' } }));
+check(
+  'ENGINE deps_any: mongoose in devDependencies = mongodb-jsts (legge dependencies + devDependencies)',
+  classify(engDev, synthEco) === 'mongodb-jsts',
+);
+
+// ENG-6 (default-invarianza esplicita): lo STESSO projectDir generico classifica
+// IDENTICO con e senza i manifest deps_any nel set -> la feature è additiva.
+check(
+  'ENGINE deps_any: default-invarianza — package.json generico = postgres-jsts con o senza manifest deps_any caricati',
+  classify(engPg, synthEco) === classify(engPg, [{ id: 'postgres-jsts', detect: { lang_any: ['package.json'] } }]),
+);
+
+// ENG-7 (Python/requirements.txt): deps_any combacia anche via requirements.txt.
+const synthEcoPy = [
+  { id: 'postgres-py', detect: { lang_any: ['requirements.txt', 'pyproject.toml'] } },
+  { id: 'mongodb-py',  detect: { deps_any: ['pymongo'], lang_any: ['requirements.txt', 'pyproject.toml'] } },
+];
+const engPyMongo = mkdtempSync(join(tmpdir(), 'eco-engpymongo-'));
+writeFileSync(join(engPyMongo, 'requirements.txt'), '# deps\npymongo==4.6.1\nflask>=3.0\n');
+check(
+  'ENGINE deps_any: requirements.txt con pymongo = mongodb-py (parsing requirements.txt, nome prima del version-specifier)',
+  classify(engPyMongo, synthEcoPy) === 'mongodb-py',
+);
+const engPyPg = mkdtempSync(join(tmpdir(), 'eco-engpypg-'));
+writeFileSync(join(engPyPg, 'requirements.txt'), 'psycopg2==2.9.9\n');
+check(
+  'ENGINE deps_any: requirements.txt senza pymongo = postgres-py (anti-regressione Python)',
+  classify(engPyPg, synthEcoPy) === 'postgres-py',
+);
+
+// ── Casi su MANIFEST REALI mongodb-jsts/dynamodb-jsts (guardati) ──────────────────
+// Presuppongono i manifest dei pack-data su disco (Fase 0 engine è già provato sopra
+// in modo sintetico). Se non ancora presenti durante questo run, vengono SALTATI con
+// nota (non contano come fallimento): l'orchestratore ri-esegue dopo i pack-data.
+const hasMongo = all.some((x) => x.id === 'mongodb-jsts');
+const hasDynamo = all.some((x) => x.id === 'dynamodb-jsts');
+if (hasMongo && hasDynamo) {
+  // Caso reale 1: 'mongodb' in deps -> mongodb-jsts (set reale loadEcosystems()).
+  const rMongo = mkdtempSync(join(tmpdir(), 'eco-rmongo-'));
+  writeFileSync(join(rMongo, 'package.json'), JSON.stringify({ dependencies: { mongodb: '^6.3.0' } }));
+  check('classify(REALE: package.json+mongodb) = mongodb-jsts', classify(rMongo) === 'mongodb-jsts');
+
+  // Caso reale 2: '@aws-sdk/client-dynamodb' in deps -> dynamodb-jsts.
+  const rDynamo = mkdtempSync(join(tmpdir(), 'eco-rdynamo-'));
+  writeFileSync(join(rDynamo, 'package.json'), JSON.stringify({ dependencies: { '@aws-sdk/client-dynamodb': '^3.500.0' } }));
+  check('classify(REALE: package.json+@aws-sdk/client-dynamodb) = dynamodb-jsts', classify(rDynamo) === 'dynamodb-jsts');
+
+  // Caso reale 3 (ANTI-REGRESSIONE): package.json generico (no deps_any) -> postgres-jsts.
+  const rPg = mkdtempSync(join(tmpdir(), 'eco-rpg-'));
+  writeFileSync(join(rPg, 'package.json'), JSON.stringify({ dependencies: { express: '^4' } }));
+  check('classify(REALE: package.json generico) = postgres-jsts (anti-regressione con mongo/dynamo caricati)', classify(rPg) === 'postgres-jsts');
+
+  // Caso reale 4 (ambiguità): mongodb + dynamodb insieme -> {ambiguous}.
+  const rBoth = mkdtempSync(join(tmpdir(), 'eco-rboth-'));
+  writeFileSync(join(rBoth, 'package.json'), JSON.stringify({ dependencies: { mongodb: '^6', '@aws-sdk/client-dynamodb': '^3' } }));
+  const rBothResult = classify(rBoth);
+  check(
+    'classify(REALE: mongodb + dynamodb) = {ambiguous:true} (mongodb-jsts, dynamodb-jsts)',
+    rBothResult && rBothResult.ambiguous === true &&
+    Array.isArray(rBothResult.candidates) &&
+    rBothResult.candidates.includes('mongodb-jsts') &&
+    rBothResult.candidates.includes('dynamodb-jsts'),
+  );
+} else {
+  console.log('  [SKIP] casi deps_any su manifest reali mongodb-jsts/dynamodb-jsts: manifest non ancora su disco — Fase 0 engine validato via ecosistemi sintetici (ENG-1..ENG-7); l\'orchestratore ri-esegue dopo i pack-data.');
+}
+
 const failed = results.filter((r) => !r.ok);
 console.log(`\n${failed.length === 0 ? 'OK' : 'FAIL'} — ${results.length - failed.length}/${results.length}`);
 process.exit(failed.length === 0 ? 0 : 1);

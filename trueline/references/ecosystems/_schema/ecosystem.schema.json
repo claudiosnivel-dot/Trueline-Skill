@@ -15,7 +15,8 @@
       "type": "object", "additionalProperties": false,
       "properties": {
         "files_any": { "type": "array", "items": { "type": "string" } },
-        "lang_any": { "type": "array", "items": { "type": "string" } }
+        "lang_any":  { "type": "array", "items": { "type": "string" } },
+        "deps_any":  { "type": "array", "items": { "type": "string" }, "description": "Fase 0 (eco-F6): nomi-dipendenza (package.json/requirements.txt); presenza di uno = segnale forte come files_any. Opzionale; default-invariante (pack senza deps_any non cambiano comportamento)." }
       }
     },
     "triggers": { "type": "array", "items": { "type": "string" }, "minItems": 1 },

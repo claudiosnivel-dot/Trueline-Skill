@@ -1,0 +1,68 @@
+{
+  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack pocketbase-jsts (eco-F2). Stesso schema di eval/ecosystems/firebase-jsts/registry.json. Per ogni difetto seminato PB-S1..PB-S4: id, categoria, oracolo-fonte atteso, OWASP 2025, CWE, stato-fix atteso, ancora ispezionabile, scope di scansione, note. Il floor [secret, dependency-vuln, authz] e' obbligatorio; PB-S2 (dependency-vuln) e' floor ma non verified. authz-surface = PocketBase collection rules (pb_schema.json): listRule:\"\" = autorizzazione ASSENTE (CWE-862, A01:2025). TRAPPOLA CRITICA: null=LOCKED(SAFE), \"\"=PUBLIC(POCKETBASE001). Il test null=SAFE e' OBBLIGATORIO e NON deve produrre finding.",
+  "schema_version": "1.0",
+  "milestone": "eco-f2",
+  "ecosystem": "pocketbase-jsts",
+  "verified_set": ["secret", "dead-code", "authz"],
+  "reference_app": "./reference-app",
+  "defects": [
+    {
+      "id": "PB-S1",
+      "category": "secret",
+      "source_oracle": "gitleaks",
+      "owasp": "A07:2025",
+      "cwe": "CWE-798",
+      "expected_fix_state": "verified",
+      "anchor": {
+        "file": "serviceAccount.json",
+        "marker": "SEED:PB-S1"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Credenziali hardcoded committate: serviceAccount.json contiene una private_key di admin PocketBase (type=pocketbase_admin, private_key BEGIN/END, client_email, private_key_id), PRESENTE nel working tree e rilevata dall'oracolo legato (gitleaks working-tree). Il marker SEED:PB-S1 vive nel file che LEGGE le credenziali (src/pocketbase.ts) perche' un file JSON non puo' ospitare commenti. Tier verified: il fix neutralizza il campo private_key (sostituisce il PEM con placeholder vuoto) e legge la chiave reale da PB_ADMIN_EMAIL / env. Contrasto PULITO: src/pocketbase.ts initFromEnv legge le credenziali da process.env (env-read, gitleaks-clean). Nessun token API pubblico presente: tutti i secret sono nel serviceAccount.json."
+    },
+    {
+      "id": "PB-S2",
+      "category": "dependency-vuln",
+      "source_oracle": "osv",
+      "owasp": "A06:2025",
+      "cwe": "CWE-20",
+      "expected_fix_state": "detection-only",
+      "anchor": {
+        "file": "package-lock.json",
+        "lockfile": "package-lock.json",
+        "symbol": "lodash@4.17.20"
+      },
+      "scan_scope": "lockfile",
+      "notes": "Dipendenza vulnerabile reale pinnata: lodash@4.17.20 (osv flagga GHSA-35jh-r3h4-6jhm / CVE-2021-23337, Command Injection via template). Rilevata dall'oracolo legato (osv) sul lockfile package-lock.json (lockfileVersion 3, osv-scanner-parsabile). Le altre dipendenze (pocketbase) restano pulite. owasp/cwe come riportati da osv (CWE-20 = cwe nativo emesso da osv-scanner per questo advisory; A06:2025 = Vulnerable and Outdated Components). Tier detection: trovata, prioritizzata, non auto-bumpata nel set verificato (fuori dal verified_set; il bump di versione richiede intervento umano)."
+    },
+    {
+      "id": "PB-S3",
+      "category": "authz",
+      "source_oracle": "pocketbase-rules",
+      "owasp": "A01:2025",
+      "cwe": "CWE-862",
+      "expected_fix_state": "verified",
+      "anchor": {
+        "file": "pb_schema.json",
+        "marker": "SEED:PB-S3",
+        "match_path": "posts.listRule"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Collection `posts` con listRule:\"\" (stringa vuota): autorizzazione ASSENTE (chiunque legge). L'oracolo pocketbase-rules emette POCKETBASE001_PUBLIC_RULE; normalize -> CWE-862/A01:2025. CWE-862 (Missing Authorization) e' deliberato: listRule=\"\" = authz ASSENTE. TRAPPOLA CRITICA: la collection `private_data` ha viewRule:null (LOCKED, admin-only) -> NESSUN finding atteso (test null=SAFE obbligatorio). La collection `user_items` ha tutte le rule owner-scoped (@request.auth.id != \"\") -> NESSUN finding. L'oracolo pocketbase-rules emette ESATTAMENTE 1 finding sull'intero file (posts.listRule). Il fix cambia listRule:\"\" -> \"@request.auth.id != \\\"\\\"\" (autenticato) nella collection posts."
+    },
+    {
+      "id": "PB-S4",
+      "category": "dead-code",
+      "source_oracle": "knip",
+      "owasp": "-",
+      "expected_fix_state": "verified",
+      "anchor": {
+        "file": "src/dead.ts",
+        "symbol": "unusedHelper",
+        "marker": "SEED:PB-S4"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Funzione unusedHelper esportata da src/dead.ts e MAI referenziata nel progetto: knip la segnala come unused export. Il contrasto usedHelper e' importato e chiamato da src/index.ts allo startup (riferimento reale) e NON viene segnalato da knip (precisione). Categoria dead-code; owasp/cwe non applicabili (omessi/'-')."
+    }
+  ]
+}

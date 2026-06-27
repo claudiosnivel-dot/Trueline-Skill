@@ -257,6 +257,7 @@ function normalizeRlsCheck(native, ctx) {
     RLS002_NO_POLICY: 'CWE-285',
     RLS003_PERMISSIVE_TRUE: 'CWE-285',
     RLS004_MISSING_TENANT_PREDICATE: 'CWE-285',
+    RLS005_PUBLIC_BUCKET: 'CWE-285',
   };
   const out = [];
   for (const f of report.findings) {
@@ -372,6 +373,271 @@ function normalizeFirestoreRules(native, ctx) {
   return out;
 }
 
+// --- appwrite-perms (authz) --------------------------------------------------
+// Nativo (da appwrite_perms_check.mjs): { oracle:'appwrite-perms', tool_version,
+//   coverage, scanned_files, parse_warnings, findings:[{ control_id, severity,
+//   category:'authz', match_path, collection, permission, location{file,start_line,
+//   end_line,statement}, snippet, message, heuristic? }] }. Gemello strutturale di
+//   normalizeFirestoreRules: e' un NOSTRO oracolo (OWASP gia 2025 a regime, L-COL-026)
+//   per il Broken Access Control sulle permission dichiarative Appwrite. category=
+//   authz (NON rls). Il fingerprint e' ANCORATO al match_path (`<collectionId>#
+//   <permission>`, mai alla riga, che appwrite.json sposta): stesso difetto sullo
+//   stesso path -> stesso fingerprint prima e dopo, cosi il loop lo riconosce.
+function normalizeAppwritePerms(native, ctx) {
+  const report = native && Array.isArray(native.findings) ? native : { findings: native };
+  if (!Array.isArray(report.findings)) {
+    throw new Error('appwrite-perms: atteso { findings: [...] } oppure un array');
+  }
+  const toolVersion = report.tool_version || ctx.toolVersions['appwrite-perms'];
+  // OWASP canonico 2025 delle permission Appwrite (nostro oracolo: gia 2025).
+  const APPWRITE_OWASP_2025 = 'A01:2025'; // Broken Access Control
+  // CWE-862 Missing Authorization (allineato a 07 §4.3): permission read("any") =
+  // autorizzazione ASSENTE. Divergenza intenzionale dal CWE-285 della famiglia RLS.
+  const APPWRITE_CWE = {
+    APPWRITE001_PUBLIC_PERMISSION: 'CWE-862',
+    APPWRITE002_BROAD_COLLECTION_PERMISSION: 'CWE-862',
+  };
+  const out = [];
+  for (const f of report.findings) {
+    const ruleId = f.control_id || 'APPWRITE_UNKNOWN';
+    const loc = f.location || {};
+    const normalizedPath = normalizePath(loc.file, { base: ctx.base });
+    // Simbolo = il match_path della permission (l'ancora semantica del difetto).
+    const symbol = f.match_path;
+    // match_signature: controllo + match_path + permission + path (semantica, NON la
+    // riga): due run sulla stessa permission danno lo stesso fingerprint.
+    const matchSignature = [ruleId, f.match_path || '', f.permission || '', normalizedPath].join('|');
+    const finding = baseFinding(ctx, {
+      category: 'authz',
+      severity: normSeverity(f.severity, 'HIGH'),
+      location: {
+        file: normalizedPath,
+        start_line: intOr(loc.start_line, 0),
+        end_line: intOr(loc.end_line, loc.start_line, 0),
+        ...(symbol ? { symbol } : {}),
+      },
+      // L'oracolo Appwrite non emette segreti: messaggio/snippet e' evidenza sicura.
+      evidence: f.message || f.snippet || `Controllo Appwrite ${ruleId} su ${f.match_path}`,
+      source_oracle: {
+        oracle: 'appwrite-perms',
+        tool_version: toolVersion,
+        rule_id: ruleId,
+      },
+      // Nostro oracolo: OWASP gia 2025 (owasp_source uguale = nessuna conversione).
+      owasp: APPWRITE_OWASP_2025,
+      owasp_source: APPWRITE_OWASP_2025,
+      ...(APPWRITE_CWE[ruleId] ? { cwe: APPWRITE_CWE[ruleId] } : {}),
+      fingerprint: fingerprintOf({
+        oracle: 'appwrite-perms',
+        ruleId,
+        normalizedPath,
+        matchSignature,
+      }),
+      remediation_hint: f.heuristic
+        ? 'Verifica euristica delle permission Appwrite demandata ad appwrite-perms.'
+        : undefined,
+    });
+    out.push(finding);
+  }
+  return out;
+}
+
+// --- pocketbase-rules (authz) ------------------------------------------------
+// Nativo (da pocketbase_rules_check.mjs): { oracle:'pocketbase-rules', tool_version,
+//   coverage, scanned_files, parse_warnings, findings:[{ control_id, severity,
+//   category:'authz', match_path, rule_field, location{file,collection,rule_field,
+//   start_line,end_line,statement}, snippet, message, heuristic? }] }. Gemello
+//   strutturale di normalizeFirestoreRules: NOSTRO oracolo (OWASP gia 2025) per il
+//   Broken Access Control sulle API rules dichiarative PocketBase. category=authz.
+//   Il fingerprint e' ANCORATO al match_path (`<collection>.<ruleField>`, mai alla
+//   riga). Trappola load-bearing: l'oracolo NON emette finding per null (LOCKED) ne
+//   per i field assenti — qui normalizziamo solo cio' che l'oracolo segnala ("").
+function normalizePocketbaseRules(native, ctx) {
+  const report = native && Array.isArray(native.findings) ? native : { findings: native };
+  if (!Array.isArray(report.findings)) {
+    throw new Error('pocketbase-rules: atteso { findings: [...] } oppure un array');
+  }
+  const toolVersion = report.tool_version || ctx.toolVersions['pocketbase-rules'];
+  const POCKETBASE_OWASP_2025 = 'A01:2025'; // Broken Access Control
+  // CWE-862 Missing Authorization: rule field "" = autorizzazione ASSENTE (pubblico).
+  const POCKETBASE_CWE = {
+    POCKETBASE001_PUBLIC_RULE: 'CWE-862',
+    POCKETBASE002_MISSING_AUTH_TOKEN: 'CWE-862',
+  };
+  const out = [];
+  for (const f of report.findings) {
+    const ruleId = f.control_id || 'POCKETBASE_UNKNOWN';
+    const loc = f.location || {};
+    const normalizedPath = normalizePath(loc.file, { base: ctx.base });
+    // Simbolo = il match_path del rule field (l'ancora semantica del difetto).
+    const symbol = f.match_path;
+    // match_signature: controllo + match_path + rule_field + path (semantica, NON la riga).
+    const matchSignature = [ruleId, f.match_path || '', f.rule_field || '', normalizedPath].join('|');
+    const finding = baseFinding(ctx, {
+      category: 'authz',
+      severity: normSeverity(f.severity, 'HIGH'),
+      location: {
+        file: normalizedPath,
+        start_line: intOr(loc.start_line, 0),
+        end_line: intOr(loc.end_line, loc.start_line, 0),
+        ...(symbol ? { symbol } : {}),
+      },
+      // L'oracolo PocketBase non emette segreti: messaggio/snippet e' evidenza sicura.
+      evidence: f.message || f.snippet || `Controllo PocketBase ${ruleId} su ${f.match_path}`,
+      source_oracle: {
+        oracle: 'pocketbase-rules',
+        tool_version: toolVersion,
+        rule_id: ruleId,
+      },
+      owasp: POCKETBASE_OWASP_2025,
+      owasp_source: POCKETBASE_OWASP_2025,
+      ...(POCKETBASE_CWE[ruleId] ? { cwe: POCKETBASE_CWE[ruleId] } : {}),
+      fingerprint: fingerprintOf({
+        oracle: 'pocketbase-rules',
+        ruleId,
+        normalizedPath,
+        matchSignature,
+      }),
+      remediation_hint: f.heuristic
+        ? 'Verifica euristica delle API rules PocketBase demandata a pocketbase-rules.'
+        : undefined,
+    });
+    out.push(finding);
+  }
+  return out;
+}
+
+// --- hasura-metadata (authz) -------------------------------------------------
+// Nativo (da hasura_metadata_check.mjs): { oracle:'hasura-metadata', tool_version,
+//   coverage, scanned_files, parse_warnings, findings:[{ control_id, severity,
+//   category:'authz', match_path, table, perm_type, role, location{file,start_line,
+//   end_line,statement}, snippet, message, heuristic? }] }. Gemello strutturale di
+//   normalizeFirestoreRules: e' un NOSTRO oracolo (OWASP gia 2025 a regime, L-COL-026)
+//   per il Broken Access Control sui permessi dichiarativi Hasura. category=authz
+//   (NON rls). Il fingerprint e' ANCORATO al match_path (`<table>.<permType>.<role>`,
+//   mai alla riga, che la metadata YAML sposta): stesso difetto sullo stesso path ->
+//   stesso fingerprint prima e dopo, cosi il loop lo riconosce.
+function normalizeHasuraMetadata(native, ctx) {
+  const report = native && Array.isArray(native.findings) ? native : { findings: native };
+  if (!Array.isArray(report.findings)) {
+    throw new Error('hasura-metadata: atteso { findings: [...] } oppure un array');
+  }
+  const toolVersion = report.tool_version || ctx.toolVersions['hasura-metadata'];
+  // OWASP canonico 2025 dei permessi Hasura (nostro oracolo: gia 2025).
+  const HASURA_OWASP_2025 = 'A01:2025'; // Broken Access Control
+  // CWE-862 Missing Authorization (allineato a 07 §4.3): role pubblico + filter:{} =
+  // autorizzazione ASSENTE. Divergenza intenzionale dal CWE-285 della famiglia RLS.
+  const HASURA_CWE = {
+    HASURA001_PUBLIC_PERMISSION: 'CWE-862',
+    HASURA002_PUBLIC_FILTER: 'CWE-862',
+  };
+  const out = [];
+  for (const f of report.findings) {
+    const ruleId = f.control_id || 'HASURA_UNKNOWN';
+    const loc = f.location || {};
+    const normalizedPath = normalizePath(loc.file, { base: ctx.base });
+    // Simbolo = il match_path della permission (l'ancora semantica del difetto).
+    const symbol = f.match_path;
+    // match_signature: controllo + match_path + role + path (semantica, NON la riga).
+    const matchSignature = [ruleId, f.match_path || '', f.role || '', normalizedPath].join('|');
+    const finding = baseFinding(ctx, {
+      category: 'authz',
+      severity: normSeverity(f.severity, 'HIGH'),
+      location: {
+        file: normalizedPath,
+        start_line: intOr(loc.start_line, 0),
+        end_line: intOr(loc.end_line, loc.start_line, 0),
+        ...(symbol ? { symbol } : {}),
+      },
+      // L'oracolo Hasura non emette segreti: messaggio/snippet e' evidenza sicura.
+      evidence: f.message || f.snippet || `Controllo Hasura ${ruleId} su ${f.match_path}`,
+      source_oracle: {
+        oracle: 'hasura-metadata',
+        tool_version: toolVersion,
+        rule_id: ruleId,
+      },
+      owasp: HASURA_OWASP_2025,
+      owasp_source: HASURA_OWASP_2025,
+      ...(HASURA_CWE[ruleId] ? { cwe: HASURA_CWE[ruleId] } : {}),
+      fingerprint: fingerprintOf({
+        oracle: 'hasura-metadata',
+        ruleId,
+        normalizedPath,
+        matchSignature,
+      }),
+      remediation_hint: f.heuristic
+        ? 'Verifica euristica dei permessi Hasura demandata a hasura-metadata.'
+        : undefined,
+    });
+    out.push(finding);
+  }
+  return out;
+}
+
+// --- appsync-auth (authz) ----------------------------------------------------
+// Nativo (da appsync_auth_check.mjs): { oracle:'appsync-auth', tool_version,
+//   coverage, scanned_files, parse_warnings, findings:[{ control_id, severity,
+//   category:'authz', match_path, type_name, allow, location{file,start_line,
+//   end_line,statement}, snippet, message, heuristic? }] }. Gemello strutturale di
+//   normalizeFirestoreRules: NOSTRO oracolo (OWASP gia 2025) per il Broken Access
+//   Control sulle direttive @auth AppSync/Amplify Gen1. category=authz. Il
+//   fingerprint e' ANCORATO al match_path (`<TypeName>@auth`, mai alla riga, che
+//   schema.graphql sposta): stesso difetto sullo stesso path -> stesso fingerprint.
+function normalizeAppsyncAuth(native, ctx) {
+  const report = native && Array.isArray(native.findings) ? native : { findings: native };
+  if (!Array.isArray(report.findings)) {
+    throw new Error('appsync-auth: atteso { findings: [...] } oppure un array');
+  }
+  const toolVersion = report.tool_version || ctx.toolVersions['appsync-auth'];
+  const APPSYNC_OWASP_2025 = 'A01:2025'; // Broken Access Control
+  // CWE-862 Missing Authorization: allow:public = autorizzazione ASSENTE (accesso
+  // pubblico via API). Divergenza intenzionale dal CWE-285 della famiglia RLS.
+  const APPSYNC_CWE = {
+    APPSYNC001_PUBLIC_AUTH: 'CWE-862',
+  };
+  const out = [];
+  for (const f of report.findings) {
+    const ruleId = f.control_id || 'APPSYNC_UNKNOWN';
+    const loc = f.location || {};
+    const normalizedPath = normalizePath(loc.file, { base: ctx.base });
+    // Simbolo = il match_path della direttiva @auth (l'ancora semantica del difetto).
+    const symbol = f.match_path;
+    // match_signature: controllo + match_path + allow + path (semantica, NON la riga).
+    const matchSignature = [ruleId, f.match_path || '', f.allow || '', normalizedPath].join('|');
+    const finding = baseFinding(ctx, {
+      category: 'authz',
+      severity: normSeverity(f.severity, 'HIGH'),
+      location: {
+        file: normalizedPath,
+        start_line: intOr(loc.start_line, 0),
+        end_line: intOr(loc.end_line, loc.start_line, 0),
+        ...(symbol ? { symbol } : {}),
+      },
+      // L'oracolo AppSync non emette segreti: messaggio/snippet e' evidenza sicura.
+      evidence: f.message || f.snippet || `Controllo AppSync ${ruleId} su ${f.match_path}`,
+      source_oracle: {
+        oracle: 'appsync-auth',
+        tool_version: toolVersion,
+        rule_id: ruleId,
+      },
+      owasp: APPSYNC_OWASP_2025,
+      owasp_source: APPSYNC_OWASP_2025,
+      ...(APPSYNC_CWE[ruleId] ? { cwe: APPSYNC_CWE[ruleId] } : {}),
+      fingerprint: fingerprintOf({
+        oracle: 'appsync-auth',
+        ruleId,
+        normalizedPath,
+        matchSignature,
+      }),
+      remediation_hint: f.heuristic
+        ? 'Verifica euristica delle direttive @auth AppSync demandata a appsync-auth.'
+        : undefined,
+    });
+    out.push(finding);
+  }
+  return out;
+}
+
 // --- knip (dead-code) ---------------------------------------------------------
 // Nativo: { issues:[{ file, exports:[{name,line,col}], types:[...], files:[{name}],
 //   dependencies, ... }] }. category=dead-code; severity=LOW (igiene, 04 §4).
@@ -460,6 +726,84 @@ function normalizeVulture(native, ctx) {
         rule_id: ruleId,
       },
       fingerprint: fingerprintOf({ oracle: 'vulture', ruleId, normalizedPath, matchSignature }),
+      remediation_hint: 'Rimuovere il simbolo morto (previo gate umano).',
+    }));
+  }
+  return out;
+}
+
+// --- go-deadcode (dead-code Go — Eco-F5b) ------------------------------------
+// Nativo (da run_deadcode.mjs --tool=go-deadcode): { tool:'go-deadcode',
+//   issues:[{ symbol, file, line, kind:'unused-function' }] }. category=dead-code;
+//   severity=LOW (igiene, come knip/vulture). Un'issue = una funzione Go top-level
+//   irraggiungibile. Emettiamo un finding per simbolo, location.symbol=symbol (il
+//   symbol-carrier). Il fingerprint e' ANCORATO al simbolo (NON alla riga, che
+//   deadcode sposta): stessa funzione morta -> stesso fingerprint prima e dopo la
+//   fix, cosi' il loop (stillPresent per fingerprint) la riconosce.
+function normalizeGoDeadcode(native, ctx) {
+  const issues = native && Array.isArray(native.issues) ? native.issues : [];
+  const out = [];
+  for (const issue of issues) {
+    const normalizedPath = normalizePath(issue.file || '', { base: ctx.base });
+    const symbol = issue.symbol || undefined;
+    const ruleId = String(issue.kind || 'unused-function');
+    // match_signature: tipo-di-morto + simbolo + path (NON la riga).
+    const matchSignature = [ruleId, symbol || '', normalizedPath].join('|');
+    out.push(baseFinding(ctx, {
+      category: 'dead-code',
+      severity: 'LOW',
+      location: {
+        file: normalizedPath,
+        start_line: intOr(issue.line, 0),
+        end_line: intOr(issue.line, 0),
+        ...(symbol ? { symbol } : {}),
+      },
+      evidence: `Funzione Go irraggiungibile (${ruleId}): ${symbol || '?'} in ${normalizedPath} (go-deadcode).`,
+      source_oracle: {
+        oracle: 'go-deadcode',
+        tool_version: ctx.toolVersions['go-deadcode'],
+        rule_id: ruleId,
+      },
+      fingerprint: fingerprintOf({ oracle: 'go-deadcode', ruleId, normalizedPath, matchSignature }),
+      remediation_hint: 'Rimuovere la funzione morta (previo gate umano).',
+    }));
+  }
+  return out;
+}
+
+// --- dart (dead-code Dart/Flutter — Eco-F5b) ---------------------------------
+// Nativo (da run_deadcode.mjs --tool=dart): { tool:'dart', issues:[{ symbol, file,
+//   line, kind, code('unused_element'|'dead_code'), message }] }. category=dead-code;
+//   severity=LOW (igiene). Un'issue = un simbolo Dart non referenziato (o un blocco
+//   dead_code). Emettiamo un finding per simbolo, location.symbol=symbol (il
+//   symbol-carrier, quando presente). Il fingerprint e' ANCORATO al simbolo (NON
+//   alla riga): stesso simbolo morto -> stesso fingerprint prima e dopo la fix.
+function normalizeDart(native, ctx) {
+  const issues = native && Array.isArray(native.issues) ? native.issues : [];
+  const out = [];
+  for (const issue of issues) {
+    const normalizedPath = normalizePath(issue.file || '', { base: ctx.base });
+    const symbol = issue.symbol || undefined;
+    const code = String(issue.code || issue.kind || 'unused_element').toLowerCase();
+    const ruleId = code === 'dead_code' ? 'dead-code' : 'unused-element';
+    // match_signature: tipo-di-morto + simbolo + path (NON la riga).
+    const matchSignature = [ruleId, symbol || '', normalizedPath].join('|');
+    out.push(baseFinding(ctx, {
+      category: 'dead-code',
+      severity: 'LOW',
+      location: {
+        file: normalizedPath,
+        start_line: intOr(issue.line, 0),
+        end_line: intOr(issue.line, 0),
+        ...(symbol ? { symbol } : {}),
+      },
+      evidence: `Simbolo Dart non utilizzato (${ruleId}): ${symbol || '?'} in ${normalizedPath} (dart analyze).`,
+      source_oracle: {
+        oracle: 'dart',
+        tool_version: ctx.toolVersions.dart,
+        rule_id: ruleId,
+      },
+      fingerprint: fingerprintOf({ oracle: 'dart', ruleId, normalizedPath, matchSignature }),
       remediation_hint: 'Rimuovere il simbolo morto (previo gate umano).',
     }));
   }
@@ -794,10 +1138,32 @@ const ORACLE_ALIASES = {
   'firestore-rules': 'firestore-rules',
   firestore_rules: 'firestore-rules',
   firestore: 'firestore-rules',
+  'appwrite-perms': 'appwrite-perms',
+  appwrite_perms: 'appwrite-perms',
+  appwrite_perms_check: 'appwrite-perms',
+  'appwrite-perms-check': 'appwrite-perms',
+  'pocketbase-rules': 'pocketbase-rules',
+  pocketbase_rules: 'pocketbase-rules',
+  pocketbase_rules_check: 'pocketbase-rules',
+  'pocketbase-rules-check': 'pocketbase-rules',
+  'hasura-metadata': 'hasura-metadata',
+  hasura_metadata: 'hasura-metadata',
+  hasura_metadata_check: 'hasura-metadata',
+  'hasura-metadata-check': 'hasura-metadata',
+  'appsync-auth': 'appsync-auth',
+  appsync_auth: 'appsync-auth',
+  appsync_auth_check: 'appsync-auth',
+  'appsync-auth-check': 'appsync-auth',
   knip: 'knip',
   deadcode: 'knip',
   'dead-code': 'knip',
   vulture: 'vulture',
+  'go-deadcode': 'go-deadcode',
+  go_deadcode: 'go-deadcode',
+  godeadcode: 'go-deadcode',
+  dart: 'dart',
+  'dart-analyze': 'dart',
+  dart_analyze: 'dart',
   osv: 'osv',
   'osv-scanner': 'osv',
   semgrep: 'semgrep',
@@ -813,7 +1179,7 @@ export function normalize(oracle, native, opts = {}) {
   const canon = ORACLE_ALIASES[String(oracle).toLowerCase()];
   if (!canon) {
     throw new Error(
-      `oracolo sconosciuto: "${oracle}" (ammessi: gitleaks, rls-check, firestore-rules, knip, vulture, osv, semgrep)`,
+      `oracolo sconosciuto: "${oracle}" (ammessi: gitleaks, rls-check, firestore-rules, knip, vulture, go-deadcode, dart, osv, semgrep)`,
     );
   }
   const ctx = {
@@ -825,8 +1191,14 @@ export function normalize(oracle, native, opts = {}) {
       gitleaks: 'gitleaks',
       'rls-check': 'rls-check@trueline',
       'firestore-rules': 'firestore-rules-check',
+      'appwrite-perms': 'appwrite-perms-check',
+      'pocketbase-rules': 'pocketbase-rules-check',
+      'hasura-metadata': 'hasura-metadata-check',
+      'appsync-auth': 'appsync-auth-check',
       knip: 'knip',
       vulture: 'vulture',
+      'go-deadcode': 'go-deadcode',
+      dart: 'dart',
       osv: 'osv-scanner',
       semgrep: 'semgrep',
       ...(opts.toolVersions || {}),
@@ -839,10 +1211,22 @@ export function normalize(oracle, native, opts = {}) {
       return normalizeRlsCheck(native, ctx);
     case 'firestore-rules':
       return normalizeFirestoreRules(native, ctx);
+    case 'appwrite-perms':
+      return normalizeAppwritePerms(native, ctx);
+    case 'pocketbase-rules':
+      return normalizePocketbaseRules(native, ctx);
+    case 'hasura-metadata':
+      return normalizeHasuraMetadata(native, ctx);
+    case 'appsync-auth':
+      return normalizeAppsyncAuth(native, ctx);
     case 'knip':
       return normalizeKnip(native, ctx);
     case 'vulture':
       return normalizeVulture(native, ctx);
+    case 'go-deadcode':
+      return normalizeGoDeadcode(native, ctx);
+    case 'dart':
+      return normalizeDart(native, ctx);
     case 'osv':
       return normalizeOsv(native, ctx);
     case 'semgrep':
