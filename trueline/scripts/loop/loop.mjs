@@ -42,6 +42,11 @@ const RUN_GITLEAKS = resolve(ORACLES, 'run_gitleaks.mjs');
 const RLS_CHECK = resolve(ORACLES, 'rls_check.mjs');
 const RUN_DEADCODE = resolve(ORACLES, 'run_deadcode.mjs');
 const FIRESTORE_RULES_CHECK = resolve(ORACLES, 'firestore_rules_check.mjs');
+// eco-F2: oracoli authz dichiarativi per backend non-Firestore (appwrite.json /
+// pb_schema.json). Il re-run del loop nella categoria 'authz' dispatcha sul tool
+// che ha prodotto il finding (source_oracle.oracle) -> ramo firestore BIT-invariante.
+const APPWRITE_PERMS_CHECK = resolve(ORACLES, 'appwrite_perms_check.mjs');
+const POCKETBASE_RULES_CHECK = resolve(ORACLES, 'pocketbase_rules_check.mjs');
 const GO_BIN = process.platform === 'win32' ? 'C:/Users/claud/go/bin' : '/c/Users/claud/go/bin';
 
 // --- Re-run dell'oracolo per-categoria (stesso oracolo, stesso rule_id) ------
@@ -100,12 +105,30 @@ export function rerunOracleFor(finding, dir, runOpts) {
         res = run(RUN_DEADCODE, [dir]);
       }
       break;
-    case 'authz':
-      // SP-8: authz dichiarativa Firestore. L'oracolo cammina `dir` per firestore.rules
-      // ed emette {findings:[...]} (category 'authz'). Prova STATICA (no runtime).
-      oracle = 'firestore-rules'; scope = 'working-tree';
-      res = run(FIRESTORE_RULES_CHECK, [dir]);
+    case 'authz': {
+      // authz dichiarativa. DISPATCH ADDITIVO keyed sull'ORACOLO che ha prodotto il
+      // finding (source_oracle.oracle): il ramo Firestore (SP-8) resta BIT-invariante;
+      // eco-F2 aggiunge Appwrite (appwrite.json) e PocketBase (pb_schema.json). Tutti
+      // STATICI (no runtime): l'oracolo cammina `dir` ed emette {findings:[...]}
+      // (category 'authz'). Senza questo dispatch, il re-run girerebbe SEMPRE Firestore
+      // -> su un pack Appwrite/PocketBase (niente firestore.rules) tornerebbe 0 finding
+      // e il loop crederebbe il difetto "gia' azzerato" SENZA applicare la fix (falso
+      // verde, L-COL-002). Prova STATICA (no runtime).
+      scope = 'working-tree';
+      const authzOracle = String((finding.source_oracle && finding.source_oracle.oracle) || '');
+      if (authzOracle === 'appwrite-perms') {
+        oracle = 'appwrite-perms';
+        res = run(APPWRITE_PERMS_CHECK, [dir]);
+      } else if (authzOracle === 'pocketbase-rules') {
+        oracle = 'pocketbase-rules';
+        res = run(POCKETBASE_RULES_CHECK, [dir]);
+      } else {
+        // SP-8 (default invariato): Firestore Security Rules.
+        oracle = 'firestore-rules';
+        res = run(FIRESTORE_RULES_CHECK, [dir]);
+      }
       break;
+    }
     default:
       return { ok: false, findings: [], detail: `categoria non rieseguibile: ${finding.category}` };
   }

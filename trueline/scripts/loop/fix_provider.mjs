@@ -553,6 +553,135 @@ function fixSecretFbS1(dir, finding) {
   return { ok: true, detail: 'FB-S1: private_key neutralizzata (placeholder; leggere da env)' };
 }
 
+// =============================================================================
+// FIX APPWRITE / POCKETBASE (eco-F2) — additive. authz dichiarativa su file JSON
+// del backend (appwrite.json / pb_schema.json). Dispatch in selectKnownFix keyed
+// su cat==='authz' && <basename del file>: path DISGIUNTI da firestore.rules e dai
+// rami esistenti -> nessuna interferenza (BIT-invariante). I file sono JSON puro:
+// la fix fa JSON.parse -> modifica SCOPED (per match_path) -> JSON.stringify sulla
+// COPIA (mai il fixture canonico); l'oracolo re-parsa il JSON, quindi il
+// riformatto e' irrilevante per il verdetto.
+// =============================================================================
+
+// Risolve appwrite.json nella copia (di solito alla radice) — mai fuori dalla copia.
+function resolveAppwriteFileInCopy(dir, rel) {
+  const norm = String(rel || 'appwrite.json').replace(/\\/g, '/');
+  const m = /(?:^|\/)([^/]*appwrite\.json)$/.exec(norm);
+  const cand = resolve(dir, m ? m[1] : 'appwrite.json');
+  if (existsSync(cand)) return cand;
+  const direct = resolve(dir, norm);
+  return existsSync(direct) ? direct : null;
+}
+
+// AW-S3 (authz Appwrite): la permission concessa al ruolo speciale `any` (accesso
+// pubblico incondizionato) viene RISTRETTA a "users" (utenti autenticati) sulla
+// collection colpita, e documentSecurity:false -> true (isolamento per-documento).
+// Dopo la fix appwrite_perms_check NON flagga piu' la permission (PUBLIC_ANY_RE non
+// matcha "users") -> verified. Analogo dichiarativo del transfer RLS/Firestore. Il
+// match_path del finding (`<collectionId>#<permission>`) identifica COLLECTION e
+// PERMISSION: modifica SCOPED, non globale. Gestisce le due forme dell'oracolo
+// (config.collections[] e config.databases[].collections[]).
+function fixAppwriteS3(dir, finding) {
+  const rel = (finding && finding.location && finding.location.file) || 'appwrite.json';
+  const p = resolveAppwriteFileInCopy(dir, rel);
+  if (!p) return { ok: false, detail: `AW-S3: appwrite.json non risolto (${rel})` };
+  const matchPath = String((finding.location && finding.location.symbol) || '');
+  const hashIdx = matchPath.indexOf('#');
+  const collectionId = hashIdx >= 0 ? matchPath.slice(0, hashIdx) : matchPath;
+  let config;
+  try { config = JSON.parse(readFileSync(p, 'utf8')); }
+  catch (e) { return { ok: false, detail: `AW-S3: appwrite.json non parsabile (${e.message})` }; }
+
+  // Raccoglie le collection nelle due forme (top-level + databases[].collections[]).
+  const buckets = [];
+  if (Array.isArray(config.collections)) buckets.push(...config.collections);
+  if (Array.isArray(config.databases)) {
+    for (const db of config.databases) {
+      if (db && Array.isArray(db.collections)) buckets.push(...db.collections);
+    }
+  }
+  const anyRe = /\b(?:read|create|update|delete|write)\s*\(\s*["']any["']\s*\)/;
+  let changed = false;
+  for (const coll of buckets) {
+    if (!coll || typeof coll !== 'object') continue;
+    const id = (typeof coll.$id === 'string' && coll.$id)
+      || (typeof coll.name === 'string' && coll.name) || '';
+    // Se il finding identifica una collection, restringe SOLO quella.
+    if (collectionId && id !== collectionId) continue;
+    const perms = Array.isArray(coll.$permissions) ? coll.$permissions
+      : (Array.isArray(coll.permissions) ? coll.permissions : null);
+    if (!perms) continue;
+    for (let i = 0; i < perms.length; i += 1) {
+      if (typeof perms[i] === 'string' && anyRe.test(perms[i])) {
+        // `any` -> `users` (autenticati): l'unico ruolo cambia, il verbo resta.
+        perms[i] = perms[i].replace(/(["'])\s*any\s*(["'])/, '$1users$2');
+        changed = true;
+      }
+    }
+    // Isolamento per-documento sulla collection colpita: documentSecurity false->true.
+    if (coll.documentSecurity === false) { coll.documentSecurity = true; changed = true; }
+  }
+  if (!changed) {
+    return { ok: false, detail: `AW-S3: nessuna permission "any" da restringere (collection=${collectionId || '?'})` };
+  }
+  writeFileSync(p, JSON.stringify(config, null, 2) + '\n', 'utf8');
+  return { ok: true, detail: `AW-S3: permission "any" -> "users" + documentSecurity:true su ${collectionId || 'collection colpita'}` };
+}
+
+// Risolve pb_schema.json nella copia — mai fuori dalla copia.
+function resolvePbSchemaFileInCopy(dir, rel) {
+  const norm = String(rel || 'pb_schema.json').replace(/\\/g, '/');
+  const m = /(?:^|\/)([^/]*pb_schema\.json)$/.exec(norm);
+  const cand = resolve(dir, m ? m[1] : 'pb_schema.json');
+  if (existsSync(cand)) return cand;
+  const direct = resolve(dir, norm);
+  return existsSync(direct) ? direct : null;
+}
+
+// PB-S3 (authz PocketBase): il rule field PUBBLICO (stringa vuota "") viene
+// sostituito con una regola AUTENTICATA (`@request.auth.id != ""`) sul rule field
+// colpito. Dopo la fix pocketbase_rules_check NON flagga piu' la rule (val !== "")
+// -> verified. ⚠ TRAPPOLA LOAD-BEARING: si tocca SOLO il valore "" (pubblico). I
+// field null (LOCKED/admin-only = SICURI) e le regole non-vuote restano INVARIATI:
+// la fix non puo' trasformare un null in una regola (cambierebbe la semantica da
+// "bloccato" a "aperto agli autenticati"). Il match_path (`<collection>.<ruleField>`)
+// identifica COLLECTION e RULE FIELD: modifica SCOPED. Gestisce le due forme
+// (array nudo e { collections:[...] }).
+function fixPocketbaseS3(dir, finding) {
+  const rel = (finding && finding.location && finding.location.file) || 'pb_schema.json';
+  const p = resolvePbSchemaFileInCopy(dir, rel);
+  if (!p) return { ok: false, detail: `PB-S3: pb_schema.json non risolto (${rel})` };
+  const matchPath = String((finding.location && finding.location.symbol) || '');
+  const mm = /^(.*)\.(listRule|viewRule|createRule|updateRule|deleteRule)$/.exec(matchPath);
+  const collName = mm ? mm[1] : '';
+  const ruleField = mm ? mm[2] : '';
+  if (!ruleField) return { ok: false, detail: `PB-S3: match_path non riconosciuto (${matchPath})` };
+  let data;
+  try { data = JSON.parse(readFileSync(p, 'utf8')); }
+  catch (e) { return { ok: false, detail: `PB-S3: pb_schema.json non parsabile (${e.message})` }; }
+  const collections = Array.isArray(data) ? data
+    : (data && Array.isArray(data.collections) ? data.collections : null);
+  if (!collections) return { ok: false, detail: 'PB-S3: schema PocketBase non riconosciuto' };
+  let changed = false;
+  for (const coll of collections) {
+    if (!coll || typeof coll !== 'object' || Array.isArray(coll)) continue;
+    const name = (typeof coll.name === 'string' && coll.name)
+      || (typeof coll.id === 'string' && coll.id) || '';
+    if (collName && name !== collName) continue;
+    // SOLO la stringa vuota "" (pubblico) -> regola autenticata. null (LOCKED) e le
+    // regole non-vuote restano INVARIATE (trappola load-bearing PocketBase).
+    if (Object.prototype.hasOwnProperty.call(coll, ruleField) && coll[ruleField] === '') {
+      coll[ruleField] = '@request.auth.id != ""';
+      changed = true;
+    }
+  }
+  if (!changed) {
+    return { ok: false, detail: `PB-S3: rule field "${ruleField}" vuoto non trovato su ${collName || '?'}` };
+  }
+  writeFileSync(p, JSON.stringify(data, null, 2) + '\n', 'utf8');
+  return { ok: true, detail: `PB-S3: ${collName}.${ruleField} "" -> '@request.auth.id != ""' (autenticato)` };
+}
+
 // Mappa controlId(rule_id) -> costruttore di patch.
 const FIX_TABLE = {
   // gitleaks: il rule_id varia per regola; mappiamo per categoria nel selettore.
@@ -618,6 +747,22 @@ function selectKnownFix(finding) {
   if (cat === 'authz' && /firestore\.rules$/.test(file)) {
     const mp = (finding.location && finding.location.symbol) || '';
     return { kind: 'authz', apply: fixFirestoreRules, signature: `fix-fb-s3-owner-scope:${mp}` };
+  }
+  // --- RAMO AUTHZ APPWRITE appwrite.json (eco-F2, additivo) -----------------
+  // Path DISGIUNTO da firestore.rules/pb_schema.json -> nessuna interferenza. La
+  // signature include il collectionId (prefisso del match_path `<id>#<permission>`)
+  // cosi' collection distinte hanno patch MATERIALMENTE distinte.
+  if (cat === 'authz' && /appwrite\.json$/.test(file)) {
+    const mp = (finding.location && finding.location.symbol) || '';
+    const collectionId = mp.includes('#') ? mp.slice(0, mp.indexOf('#')) : mp;
+    return { kind: 'authz', apply: fixAppwriteS3, signature: `fix-appwrite-owner-scope:${collectionId}` };
+  }
+  // --- RAMO AUTHZ POCKETBASE pb_schema.json (eco-F2, additivo) --------------
+  // Path DISGIUNTO -> nessuna interferenza. La signature e' il match_path
+  // (`<collection>.<ruleField>`): rule field distinti = patch distinte.
+  if (cat === 'authz' && /pb_schema\.json$/.test(file)) {
+    const mp = (finding.location && finding.location.symbol) || '';
+    return { kind: 'authz', apply: fixPocketbaseS3, signature: `fix-pocketbase-owner-scope:${mp}` };
   }
   // --- RAMO SECRET FIREBASE serviceAccount.json (SP-8, additivo) -------------
   // Precede i rami config.ts: il path serviceAccount.json e' disgiunto -> non interferisce.

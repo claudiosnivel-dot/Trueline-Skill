@@ -116,6 +116,15 @@ const RLS_CHECK = resolve(ROOT, 'trueline', 'scripts', 'oracles', 'rls_check.mjs
 // Firestore Rules engine): nessuna dipendenza docker -> il floor [secret,
 // dependency-vuln,authz] non richiede docker per il criterio 2.
 const FIRESTORE_RULES_CHECK = resolve(ROOT,'trueline','scripts','oracles','firestore_rules_check.mjs');
+// eco-F2 (appwrite-jsts/pocketbase-jsts): oracoli authz custom STATICI sui file
+// dichiarativi del backend (appwrite.json / pb_schema.json), legati dai pack per la
+// categoria authz (tool=appwrite_perms_check kind:'appwrite-perms'; tool=
+// pocketbase_rules_check kind:'pocketbase-rules'). Gemelli strutturali di
+// firestore_rules_check (CWE-862, A01:2025): analizzano SOLO il testo JSON (niente
+// istanza Appwrite/PocketBase) -> nessuna dipendenza docker; il floor [secret,
+// dependency-vuln,authz] non richiede docker per il criterio 2 (come firebase-jsts).
+const APPWRITE_PERMS_CHECK = resolve(ROOT,'trueline','scripts','oracles','appwrite_perms_check.mjs');
+const POCKETBASE_RULES_CHECK = resolve(ROOT,'trueline','scripts','oracles','pocketbase_rules_check.mjs');
 // dead-code (verified_set, SP-4): wrapper unico (knip JS / vulture Python), il tool
 // effettivo è scelto dal binding manifest (oracles['dead-code'].tool).
 const RUN_DEADCODE = resolve(ROOT, 'trueline', 'scripts', 'oracles', 'run_deadcode.mjs');
@@ -205,6 +214,18 @@ const PACK_FIXTURES = {
   // dispatchati). kind/fixtureApp/registry come firebase-jsts -> stesso runVerifiedBody,
   // verified_set=[secret,dead-code,authz]; floor SENZA semgrep -> criterio 2 senza docker.
   'firebase-py': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','firebase-py','reference-app'), registry: resolve(ROOT,'eval','ecosystems','firebase-py','registry.json') },
+  // eco-F2: JS/TS+Appwrite, tier VERIFIED. INCROCIO firebase-jsts (lingua/struttura
+  // pack JS) x oracolo authz dichiarativo NUOVO (appwrite_perms_check su appwrite.json):
+  // pura DATA + questa riga + i rami engine additivi (appwrite-perms dispatchato in
+  // detectCategory/collectFindingsForLoop/canonOracle/normalize + fix fixAppwriteS3).
+  // kind/fixtureApp/registry come firebase-jsts -> stesso runVerifiedBody,
+  // verified_set=[secret,dead-code,authz]; floor SENZA semgrep -> criterio 2 senza docker.
+  'appwrite-jsts': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','appwrite-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','appwrite-jsts','registry.json') },
+  // eco-F2: JS/TS+PocketBase, tier VERIFIED. Come appwrite-jsts ma authz legato a
+  // pocketbase_rules_check su pb_schema.json (trappola load-bearing: ""=PUBLIC floor,
+  // null=LOCKED/SICURO -> nessun finding). verified_set=[secret,dead-code,authz];
+  // floor SENZA semgrep -> criterio 2 senza docker.
+  'pocketbase-jsts': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','pocketbase-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','pocketbase-jsts','registry.json') },
 };
 
 // ---------------------------------------------------------------------------
@@ -254,6 +275,12 @@ function canonOracle(name) {
   // alla stessa forma canonica, così il match del criterio 2 è robusto a entrambe
   // le forme (coerente con gli arm osv/rls qui sopra).
   if (n === 'firestore-rules' || n === 'firestore_rules' || n === 'firestore_rules_check') return 'firestore-rules';
+  // authz Appwrite (appwrite-jsts, eco-F2): registry source_oracle='appwrite-perms',
+  // normalize emette source_oracle.oracle='appwrite-perms'. Mappiamo anche il
+  // nome-tool del binding (appwrite_perms_check) alla stessa forma canonica.
+  if (n === 'appwrite-perms' || n === 'appwrite_perms' || n === 'appwrite_perms_check') return 'appwrite-perms';
+  // authz PocketBase (pocketbase-jsts, eco-F2): idem per pocketbase-rules.
+  if (n === 'pocketbase-rules' || n === 'pocketbase_rules' || n === 'pocketbase_rules_check') return 'pocketbase-rules';
   return n; // gitleaks | semgrep | knip
 }
 
@@ -864,6 +891,24 @@ function collectFindingsForLoop(dir, manifest) {
     if (j && Array.isArray(j.findings)) out.push(...normForLoop('firestore-rules', j, 'working-tree'));
   }
 
+  // authz -> appwrite_perms_check (cammina `dir` per appwrite.json). (eco-F2)
+  // Statico: emette { findings:[...] } (category 'authz' via normalize 'appwrite-perms').
+  // cwd=dir come gli altri oracoli -> fingerprint-parity col loop.
+  if (bindings.authz && bindings.authz.tool === 'appwrite_perms_check') {
+    const r = nodeRun(APPWRITE_PERMS_CHECK, [dir], dir);
+    let j = null; try { j = JSON.parse(r.stdout); } catch { /* */ }
+    if (j && Array.isArray(j.findings)) out.push(...normForLoop('appwrite-perms', j, 'working-tree'));
+  }
+
+  // authz -> pocketbase_rules_check (cammina `dir` per pb_schema.json). (eco-F2)
+  // Statico: emette { findings:[...] } (category 'authz' via normalize 'pocketbase-rules').
+  // cwd=dir come gli altri oracoli -> fingerprint-parity col loop.
+  if (bindings.authz && bindings.authz.tool === 'pocketbase_rules_check') {
+    const r = nodeRun(POCKETBASE_RULES_CHECK, [dir], dir);
+    let j = null; try { j = JSON.parse(r.stdout); } catch { /* */ }
+    if (j && Array.isArray(j.findings)) out.push(...normForLoop('pocketbase-rules', j, 'working-tree'));
+  }
+
   return out;
 }
 
@@ -993,6 +1038,36 @@ function detectCategory({ cat, tool, binding, copyDir, copyBase, manifest }) {
     try { native = JSON.parse(r.stdout); } catch { /* gestito */ }
     if (!native) return { error: `firestore_rules_check: output non parsabile (exit=${r.status})` };
     return { findings: safeNormalize('firestore-rules', native, opts) };
+  }
+  if (tool === 'appwrite_perms_check') {
+    // authz (appwrite-jsts, eco-F2) -> appwrite_perms_check <copy>/<scanDir>. La dir
+    // di scansione viene dal binding (manifest.oracles.authz.scan), default ["."].
+    // STATICO (analizza il solo appwrite.json, niente istanza Appwrite) -> nessuna
+    // dipendenza docker nel floor. safeNormalize con 'appwrite-perms' (nome-oracolo
+    // riconosciuto da normalize -> category='authz', source_oracle.oracle='appwrite-perms';
+    // canonOracle lo riconduce alla stessa forma del registry). Output gia'
+    // eval/-ancorato (cwd=ROOT), quindi opts.base resta copyBase.
+    const scanDirs = (binding.scan && binding.scan.length) ? binding.scan : ['.'];
+    const scanned = scanDirs.find((d) => existsSync(join(copyDir, d)));
+    const target = scanned ? join(copyDir, scanned) : copyDir;
+    const r = nodeRun(APPWRITE_PERMS_CHECK, [target]);
+    let native = null;
+    try { native = JSON.parse(r.stdout); } catch { /* gestito */ }
+    if (!native) return { error: `appwrite_perms_check: output non parsabile (exit=${r.status})` };
+    return { findings: safeNormalize('appwrite-perms', native, opts) };
+  }
+  if (tool === 'pocketbase_rules_check') {
+    // authz (pocketbase-jsts, eco-F2) -> pocketbase_rules_check <copy>/<scanDir>.
+    // Come appwrite ma sul file pb_schema.json. STATICO (niente istanza PocketBase)
+    // -> nessuna dipendenza docker. safeNormalize con 'pocketbase-rules'.
+    const scanDirs = (binding.scan && binding.scan.length) ? binding.scan : ['.'];
+    const scanned = scanDirs.find((d) => existsSync(join(copyDir, d)));
+    const target = scanned ? join(copyDir, scanned) : copyDir;
+    const r = nodeRun(POCKETBASE_RULES_CHECK, [target]);
+    let native = null;
+    try { native = JSON.parse(r.stdout); } catch { /* gestito */ }
+    if (!native) return { error: `pocketbase_rules_check: output non parsabile (exit=${r.status})` };
+    return { findings: safeNormalize('pocketbase-rules', native, opts) };
   }
   return { error: `oracolo non gestito per la categoria ${cat}: ${tool}` };
 }
