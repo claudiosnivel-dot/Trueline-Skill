@@ -1,6 +1,6 @@
 {
   "id": "dotnet-cs",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "languages": ["csharp"],
   "backend": "aspnet-app",
   "detect": { "lang_any": ["global.json", "app.csproj"] },
@@ -19,6 +19,6 @@
     "dead-code":       { "tool": "roslyn-analyzer", "note": "Roslyn/analyzer IDE (F5 opz., non verificato in fase 1)" }
   },
   "floor":        ["secret", "dependency-vuln", "authz"],
-  "verified_set": [],
+  "verified_set": ["secret"],
   "coverage_policy": "declared"
 }

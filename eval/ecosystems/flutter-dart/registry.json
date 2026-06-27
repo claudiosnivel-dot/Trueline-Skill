@@ -1,9 +1,9 @@
 {
-  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack flutter-dart (eco-F4, tier detection). Per ogni difetto seminato FD-S1..FD-S3: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso (tier detection, fase F4: tutti detection-only, verified_set vuoto). Il floor [secret, dependency-vuln, authz] e' obbligatorio. FD-S1 = secret hardcoded (gitleaks, working-tree); FD-S2 = dipendenza vulnerabile reale archive@3.3.0 (osv, lockfile pubspec.lock, advisories GHSA-9v85-q87q-g4vg + GHSA-r285-q736-9v95); FD-S3 = mutazione Supabase senza verifica identita (semgrep, best-effort Dart sperimentale). authz-surface = route-authz Supabase (supabase.from().insert/update/delete senza auth.currentUser check). NON RLS-al-DB. Semgrep Dart e' sperimentale -> authz/injection best-effort, oracolo degrada onesto (L-COL-006). verified_set=[] (fase detection, L-COL-030).",
+  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack flutter-dart (eco-F5a, tier verified-secret). Per ogni difetto seminato FD-S1..FD-S3: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso. Il floor [secret, dependency-vuln, authz] e' obbligatorio. FD-S1 = secret hardcoded (gitleaks, working-tree) -> VERIFIED (eco-F5a): fix sostituisce il literal _supabaseServiceKey con Platform.environment['SUPABASE_SERVICE_KEY'], gitleaks WT torna pulito. FD-S2 = dipendenza vulnerabile reale archive@3.3.0 (osv, lockfile pubspec.lock, advisories GHSA-9v85-q87q-g4vg + GHSA-r285-q736-9v95) -> detection-only. FD-S3 = mutazione Supabase senza verifica identita (semgrep, best-effort Dart sperimentale) -> detection-only. authz-surface = route-authz Supabase (supabase.from().insert/update/delete senza auth.currentUser check). NON RLS-al-DB. Semgrep Dart e' sperimentale -> authz/injection best-effort, oracolo degrada onesto (L-COL-006). verified_set=[secret] (eco-F5a, L-COL-030 fase 2).",
   "schema_version": "1.0",
-  "milestone": "eco-F4",
+  "milestone": "eco-F5a",
   "ecosystem": "flutter-dart",
-  "verified_set": [],
+  "verified_set": ["secret"],
   "reference_app": "eval/ecosystems/flutter-dart/reference-app",
   "defects": [
     {
@@ -12,7 +12,7 @@
       "source_oracle": "gitleaks",
       "owasp": "A07:2025",
       "cwe": "CWE-798",
-      "expected_fix_state": "detection-only",
+      "expected_fix_state": "verified",
       "anchor": {
         "file": "lib/config.dart",
         "marker": "SEED:FD-S1"

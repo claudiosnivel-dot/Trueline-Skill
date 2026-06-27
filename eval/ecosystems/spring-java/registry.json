@@ -3,7 +3,7 @@
   "schema_version": "1.0",
   "milestone": "F4",
   "ecosystem": "spring-java",
-  "verified_set": [],
+  "verified_set": ["secret"],
   "reference_app": "./reference-app",
   "defects": [
     {
@@ -12,7 +12,7 @@
       "source_oracle": "gitleaks",
       "owasp": "A07:2025",
       "cwe": "CWE-798",
-      "expected_fix_state": "detection-only",
+      "expected_fix_state": "verified",
       "anchor": {
         "file": "src/main/resources/application.properties",
         "marker": "SEED:SJ-S1"

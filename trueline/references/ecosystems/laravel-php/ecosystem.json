@@ -1,6 +1,6 @@
 {
   "id": "laravel-php",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "languages": ["php"],
   "backend": "laravel-app",
   "detect": { "lang_any": ["composer.json"] },
@@ -19,6 +19,6 @@
     "dead-code":       { "tool": "psalm" }
   },
   "floor":        ["secret", "dependency-vuln", "authz"],
-  "verified_set": [],
+  "verified_set": ["secret"],
   "coverage_policy": "declared"
 }

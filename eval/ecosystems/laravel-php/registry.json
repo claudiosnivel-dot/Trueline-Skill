@@ -1,9 +1,9 @@
 {
-  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack laravel-php (eco-F4, tier DETECTION). verified_set=[] (detection-only, floor=[secret,dependency-vuln,authz]). LP-S1 secret hardcoded (gitleaks), LP-S2 dependency-vuln (osv-scanner su composer.lock, guzzlehttp/guzzle@7.3.0 vulnerabile), LP-S3 route-authz (semgrep PHP, best-effort). Tutti expected_fix_state='detection-only': detection tier, nessuna auto-promozione a verified.",
+  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack laravel-php (eco-F5a, tier VERIFIED secret). verified_set=[secret] (LP-S1 -> verified via gitleaks; LP-S2/LP-S3 detection-only). LP-S1 secret hardcoded (gitleaks), LP-S2 dependency-vuln (osv-scanner su composer.lock, guzzlehttp/guzzle@7.3.0 vulnerabile), LP-S3 route-authz (semgrep PHP, best-effort).",
   "schema_version": "1.0",
-  "milestone": "eco-F4",
+  "milestone": "eco-F5a",
   "ecosystem": "laravel-php",
-  "verified_set": [],
+  "verified_set": ["secret"],
   "reference_app": "eval/ecosystems/laravel-php/reference-app",
   "defects": [
     {
@@ -12,7 +12,7 @@
       "source_oracle": "gitleaks",
       "owasp": "A07:2025",
       "cwe": "CWE-798",
-      "expected_fix_state": "detection-only",
+      "expected_fix_state": "verified",
       "anchor": {
         "file": "config/services.php",
         "marker": "SEED:LP-S1"

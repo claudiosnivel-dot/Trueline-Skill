@@ -1,9 +1,9 @@
 {
-  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack postgres-go (Eco-F4, tier DETECTION). Per ogni difetto seminato GO-S1..GO-S3: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso (detection-only: pack tier DETECTION, verified_set vuoto), ancora ispezionabile (file+marker | lockfile+symbol | file+marker), scope di scansione dell'oracolo. Il floor [secret, dependency-vuln, authz] e' obbligatorio; tutti i seed sono detection-only (nessun auto-promosso a verified). authz (semgrep) e' best-effort (semgrep assente nel sandbox -> deferred a F5/gate F6 su macchina con semgrep, L-COL-006). Pin dependency-vuln: github.com/dgrijalva/jwt-go@v3.2.0+incompatible (CVE-2020-26160 / GHSA-w73w-5m7g-f7qc), verificato con osv-scanner.",
+  "$comment": "Registro dei difetti attesi della fixture vulnerabile dell'ecosystem pack postgres-go (Eco-F5a, secret=verified). Per ogni difetto seminato GO-S1..GO-S3: id, categoria (vocabolario finding-category di 04), oracolo-fonte atteso, codice OWASP 2025 canonico (04 §2, L-COL-026), CWE, stato-fix atteso. GO-S1 (secret): verified (gitleaks working-tree pulito sul file main.go dopo fix). GO-S2 (dependency-vuln) e GO-S3 (authz) restano detection-only. Il floor [secret, dependency-vuln, authz] e' obbligatorio; verified_set=[secret]. authz (semgrep) e' best-effort (semgrep assente nel sandbox -> deferred a gate F6 su macchina con semgrep, L-COL-006). Pin dependency-vuln: github.com/dgrijalva/jwt-go@v3.2.0+incompatible (CVE-2020-26160 / GHSA-w73w-5m7g-f7qc), verificato con osv-scanner.",
   "schema_version": "1.0",
-  "milestone": "Eco-F4",
+  "milestone": "Eco-F5a",
   "ecosystem": "postgres-go",
-  "verified_set": [],
+  "verified_set": ["secret"],
   "reference_app": "eval/ecosystems/postgres-go/reference-app",
   "defects": [
     {
@@ -12,13 +12,13 @@
       "source_oracle": "gitleaks",
       "owasp": "A07:2025",
       "cwe": "CWE-798",
-      "expected_fix_state": "detection-only",
+      "expected_fix_state": "verified",
       "anchor": {
         "file": "main.go",
         "marker": "SEED:GO-S1"
       },
       "scan_scope": "working-tree",
-      "notes": "Secret hardcoded nel sorgente Go (apiKey const ad alta entropia in stile Stripe sk_live_...). Rilevato da gitleaks working-tree su main.go. Contrasto: envAPIKey letto da os.Getenv('API_KEY') NON flaggato. Tier DETECTION: detection-only (verified_set vuoto)."
+      "notes": "Secret hardcoded nel sorgente Go (apiKey const ad alta entropia in stile Stripe sk_live_...). Rilevato da gitleaks working-tree su main.go. Fix: sostituzione const con var letta da os.Getenv(\"API_KEY\") -> gitleaks working-tree pulito (0 finding su main.go) -> verified. Contrasto: envAPIKey letto da os.Getenv('API_KEY') NON flaggato."
     },
     {
       "id": "GO-S2",

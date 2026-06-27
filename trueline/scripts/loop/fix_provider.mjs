@@ -851,6 +851,108 @@ function fixAppsyncS3(dir, finding) {
   return { ok: true, detail: `AM-S3: allow: public -> allow: owner su ${typeName || 'type colpito'}` };
 }
 
+// =============================================================================
+// FIX SECRET PER-LINGUA (eco-F5a) — additivo. Promuove i 7 pack detection F4
+// (Go/Ruby/PHP/Java/C#/Dart/Elixir) al tier `verified` sulla categoria `secret`.
+// gitleaks e' language-agnostic: coglie il letterale hardcoded (sk_live_.../stringa
+// ad alta entropia assegnata). Ogni fix NEUTRALIZZA il SOLO letterale flaggato
+// sostituendolo con una lettura da env nell'idioma della lingua, PRESERVANDO la
+// sintassi del file. Dopo il fix, gitleaks ri-eseguito sul working-tree -> 0 finding
+// sul file -> verified. Un eventuale DB-URL/password nel seed NON e' flaggato da
+// gitleaks (fuori dal verdetto): la fix mira esattamente al letterale che l'oracolo
+// coglie, lasciando intatto il resto del file (BIT-invariante sul contrasto pulito).
+//
+// DISPATCH (selectKnownFix): keyed su cat==='secret' + ESTENSIONE del seed
+// (.go/.rb/.php/.properties/.cs/.dart/.exs). Estensioni DISGIUNTE dai rami secret
+// esistenti (.ts m5/postgres-jsts, .py supabase-py/postgres-py, serviceAccount.json
+// firebase) e fra loro -> nessun dirottamento dei secret di altri pack. Signature
+// distinta per ramo: fix-secret-<lang>-s1:<file>.
+// =============================================================================
+
+// Tabella per-lingua dei fix secret. Ogni voce: lingua, estensione del seed, path
+// noto del seed nella fixture e una replace che neutralizza il letterale hardcoded
+// con la lettura da env (idioma). La replace e' un NO-OP (ritorna identico) se il
+// pattern non c'e' -> applyPerLangSecretFix fallisce ONESTAMENTE (mai approssimata).
+const PERLANG_SECRET_FIXES = [
+  // postgres-go: const apiKey = "sk_live_..." -> var apiKey = os.Getenv("API_KEY").
+  // import "os" e' gia' presente; una const Go non puo' contenere una call -> `var`.
+  {
+    lang: 'go', ext: /\.go$/, rel: 'main.go',
+    fix: (s) => s.replace(/const\s+apiKey\s*=\s*"sk_live_[^"]*"/,
+      'var apiKey = os.Getenv("API_KEY")'),
+  },
+  // rails-rb: STRIPE_SECRET_KEY = "sk_live_..." -> ENV.fetch("STRIPE_SECRET_KEY").
+  {
+    lang: 'rb', ext: /\.rb$/, rel: 'config/initializers/api_keys.rb',
+    fix: (s) => s.replace(/(STRIPE_SECRET_KEY\s*=\s*)"sk_live_[^"]*"/,
+      '$1ENV.fetch("STRIPE_SECRET_KEY")'),
+  },
+  // laravel-php: 'key' => 'sk_live_...' -> 'key' => env('API_KEY').
+  {
+    lang: 'php', ext: /\.php$/, rel: 'config/services.php',
+    fix: (s) => s.replace(/('key'\s*=>\s*)'sk_live_[^']*'/, "$1env('API_KEY')"),
+  },
+  // spring-java: app.api.key=sk_live_... -> app.api.key=${API_KEY} (placeholder env).
+  {
+    lang: 'java', ext: /\.properties$/, rel: 'src/main/resources/application.properties',
+    fix: (s) => s.replace(/(app\.api\.key\s*=\s*)sk_live_\S*/, '$1${API_KEY}'),
+  },
+  // dotnet-cs: private const string AdminApiKey = "sk_live_..."; -> static readonly
+  // letta da Environment.GetEnvironmentVariable (const C# non puo' contenere una call).
+  {
+    lang: 'cs', ext: /\.cs$/, rel: 'Controllers/ItemsController.cs',
+    fix: (s) => s.replace(/private\s+const\s+string\s+AdminApiKey\s*=\s*"sk_live_[^"]*";/,
+      'private static readonly string AdminApiKey = Environment.GetEnvironmentVariable("API_KEY") ?? "";'),
+  },
+  // flutter-dart: const String _supabaseServiceKey = 'sk_live_...'; -> final letta da
+  // Platform.environment (import 'dart:io' show Platform gia' presente). Top-level
+  // `final` ammette init a runtime; `const` no.
+  {
+    lang: 'dart', ext: /\.dart$/, rel: 'lib/config.dart',
+    fix: (s) => s.replace(/const\s+String\s+_supabaseServiceKey\s*=\s*'sk_live_[^']*';/,
+      "final String _supabaseServiceKey = Platform.environment['API_KEY'] ?? '';"),
+  },
+  // phoenix-ex: secret_key: "sk_live_..." -> secret_key: System.get_env("API_KEY").
+  {
+    lang: 'ex', ext: /\.exs$/, rel: 'config/config.exs',
+    fix: (s) => s.replace(/(secret_key:\s*)"sk_live_[^"]*"/, '$1System.get_env("API_KEY")'),
+  },
+];
+
+// Risolve il path ASSOLUTO del seed nella COPIA `dir`. Preferisce il path noto del
+// seed (rel) sotto la copia; fallback al path del finding ancorato alla copia. NON
+// esce mai dalla copia (nessun ../ verso l'esterno).
+function resolveSecretSeedInCopy(dir, finding, rel) {
+  const direct = resolve(dir, rel);
+  if (existsSync(direct)) return direct;
+  const f = String((finding && finding.location && finding.location.file) || '').replace(/\\/g, '/');
+  if (f) {
+    const asIs = resolve(dir, f);
+    if (existsSync(asIs)) return asIs;
+  }
+  return null;
+}
+
+// Applica il fix secret per-lingua: legge il seed, neutralizza il letterale (replace
+// idiomatica), scrive sulla COPIA (mai il fixture canonico). Fallisce ONESTAMENTE se
+// il pattern non c'e' (replace NO-OP -> after === before).
+function applyPerLangSecretFix(dir, finding, spec) {
+  const p = resolveSecretSeedInCopy(dir, finding, spec.rel);
+  if (!p) return { ok: false, detail: `secret-${spec.lang}: seed ${spec.rel} non risolto nella copia` };
+  const before = readFileSync(p, 'utf8');
+  const after = spec.fix(before);
+  if (after === before) {
+    return { ok: false, detail: `secret-${spec.lang}: letterale hardcoded non trovato in ${spec.rel} (pattern cambiato?)` };
+  }
+  writeFileSync(p, after, 'utf8');
+  return { ok: true, detail: `secret-${spec.lang}: letterale in ${spec.rel} -> lettura da env (idioma ${spec.lang})` };
+}
+
+// Seleziona il fix per-lingua per `file` (per ESTENSIONE del seed). null se nessuno.
+function selectPerLangSecretFix(file) {
+  return PERLANG_SECRET_FIXES.find((spec) => spec.ext.test(file)) || null;
+}
+
 // Mappa controlId(rule_id) -> costruttore di patch.
 const FIX_TABLE = {
   // gitleaks: il rule_id varia per regola; mappiamo per categoria nel selettore.
@@ -954,6 +1056,23 @@ function selectKnownFix(finding) {
   // Precede i rami config.ts: il path serviceAccount.json e' disgiunto -> non interferisce.
   if (cat === 'secret' && /serviceAccount\.json$/.test(file)) {
     return { kind: 'secret', apply: fixSecretFbS1, signature: 'fix-fb-s1-neutralize-service-account' };
+  }
+
+  // --- RAMI SECRET PER-LINGUA (eco-F5a, additivi) ---------------------------
+  // 7 pack detection F4 (Go/Ruby/PHP/Java/C#/Dart/Elixir) -> verified su `secret`.
+  // Keyed su cat==='secret' + ESTENSIONE del seed (.go/.rb/.php/.properties/.cs/
+  // .dart/.exs): DISGIUNTE dai rami secret esistenti (.ts/.py/serviceAccount.json,
+  // valutati prima/dopo) e fra loro -> NON dirottano i secret di altri pack.
+  // Signature distinta per ramo: fix-secret-<lang>-s1:<file>.
+  if (cat === 'secret') {
+    const spec = selectPerLangSecretFix(file);
+    if (spec) {
+      return {
+        kind: 'secret',
+        apply: (d, f) => applyPerLangSecretFix(d, f, spec),
+        signature: `fix-secret-${spec.lang}-s1:${spec.rel}`,
+      };
+    }
   }
 
   if (cat === 'secret' && isPy) {
