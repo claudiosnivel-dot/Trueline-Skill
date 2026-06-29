@@ -94,7 +94,7 @@ import { cleanupAllVerifyWorkspaces } from '../../trueline/scripts/loop/verify_w
 // VERIFIED-PARITY (kind:'verified', SP-4): la macchina del loop + il fix-provider
 // deterministico (T2.1) + la caratterizzazione RLS a runtime (T1.2). Riusati come
 // SOTTO-ROUTINE; il "verde" resta un FATTO dell'oracolo riesieguito (L-COL-002).
-import { deterministicFixProvider } from '../../trueline/scripts/loop/fix_provider.mjs';
+import { deterministicFixProvider } from './fix_provider.eval.mjs';
 import { runFindingLoop } from '../../trueline/scripts/loop/loop.mjs';
 import { createWorkBranch } from '../../trueline/scripts/git/layered_git.mjs';
 import { LOOP_BUDGET } from '../../trueline/scripts/checkpoint/thresholds.mjs';

@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join, dirname, resolve, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { deterministicFixProvider } from './fix_provider.mjs';
+import { deterministicFixProvider } from '../../../eval/harness/fix_provider.eval.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..', '..', '..');

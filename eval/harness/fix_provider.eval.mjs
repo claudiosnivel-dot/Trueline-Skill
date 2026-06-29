@@ -26,11 +26,15 @@
 import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 
-import { removePySymbol } from './py_deadcode_edit.mjs';
-import { removeTsSymbol } from './ts_deadcode_edit.mjs';
-import { removeGoSymbol } from './go_deadcode_edit.mjs';
-import { removeDartSymbol } from './dart_deadcode_edit.mjs';
-import { resolveRlsMigrationsDir, resolveRlsMigrationFile } from './rls_scan.mjs';
+// L-COL-029: questo provider DETERMINISTICO e' EVAL-ONLY e vive in eval/ (fuori
+// dal .skill). Gli editor dead-code e rls_scan restano nel tree SPEDITO
+// (scripts/loop/): sono strumenti meccanici riusabili (un LLM-provider reale puo'
+// chiamarli). Import ri-puntati alla loro sede spedita.
+import { removePySymbol } from '../../trueline/scripts/loop/py_deadcode_edit.mjs';
+import { removeTsSymbol } from '../../trueline/scripts/loop/ts_deadcode_edit.mjs';
+import { removeGoSymbol } from '../../trueline/scripts/loop/go_deadcode_edit.mjs';
+import { removeDartSymbol } from '../../trueline/scripts/loop/dart_deadcode_edit.mjs';
+import { resolveRlsMigrationsDir, resolveRlsMigrationFile } from '../../trueline/scripts/loop/rls_scan.mjs';
 
 // Path RELATIVO STORICO della migration primaria (layout Supabase). Conservato
 // come fallback BIT-INVARIANTE: i fix RLS lo usano quando il resolver

@@ -31,7 +31,7 @@
 // Node ESM, solo built-in + i moduli M0/M1.
 
 import { delimiter, resolve, dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
@@ -39,7 +39,6 @@ import { normalize } from '../findings/normalize.mjs';
 import { validateMany } from '../findings/validate_finding.mjs';
 import { createVerifyWorkspace } from './verify_workspace.mjs';
 import { tidyAdvisory } from './build_discipline.mjs';
-import { deterministicFixProvider } from './fix_provider.mjs';
 import { runFindingLoop } from './loop.mjs';
 import { runCheckpoint, loadCharacterization } from '../checkpoint/checkpoint.mjs';
 import { partition } from '../characterization/partition.mjs';
@@ -51,6 +50,41 @@ import {
 import { classify, loadManifest } from '../ecosystem/resolve.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// --- Fix provider (L-COL-029) -------------------------------------------------
+// Le TABELLE DETERMINISTICHE di fix sono EVAL-ONLY e vivono in eval/ (fuori dal
+// .skill). In contesto repo/eval il provider deterministico viene caricato
+// DINAMICAMENTE -> comportamento BIT-INVARIANTE per tutti i gate (identico a
+// quando era importato staticamente da ./fix_provider.mjs). Nel .skill
+// IMPACCHETTATO eval/ non esiste: l'import dinamico fallisce -> fallback al
+// provider HUMAN-GATE (nessuna tabella spedita; la fix reale e' un LLM
+// human-gated, L-COL-005). L'import e' DINAMICO di proposito: uno statico verso
+// eval/ romperebbe il caricamento del modulo nel .skill (file assente).
+const EVAL_PROVIDER_URL = pathToFileURL(
+  resolve(__dirname, '..', '..', '..', 'eval', 'harness', 'fix_provider.eval.mjs'),
+).href;
+
+// Provider HUMAN-GATE (runtime reale): non propone alcuna patch automatica ->
+// la remediation e' proposta da un LLM ed e' sempre human-gated (L-COL-005).
+function humanGateFixProvider() {
+  return { propose() { return null; } };
+}
+
+async function resolveFixProvider() {
+  try {
+    const mod = await import(EVAL_PROVIDER_URL);
+    return mod.deterministicFixProvider();
+  } catch (e) {
+    // FAIL-CLOSED + ONESTO (L-COL-006): la fallback HUMAN-GATE vale SOLO quando il
+    // provider eval e' ASSENTE (.skill impacchettato: eval/ non c'e' -> MODULE_NOT_FOUND).
+    // Un errore REALE di caricamento (bug/sintassi/import rotto del provider) NON va
+    // mascherato in silenzio: si rilancia (in repo i gate falliscono comunque sul loro
+    // import statico; run_loop esce 2 con la causa su stderr) -> il difetto emerge.
+    if (e && e.code === 'ERR_MODULE_NOT_FOUND') return humanGateFixProvider();
+    console.error('[resolveFixProvider] caricamento del provider eval fallito:', e?.stack || String(e));
+    throw e;
+  }
+}
 const ORACLES = resolve(__dirname, '..', 'oracles');
 const RUN_GITLEAKS = resolve(ORACLES, 'run_gitleaks.mjs');
 const RLS_CHECK = resolve(ORACLES, 'rls_check.mjs');
@@ -238,7 +272,7 @@ function selectInScope(findings, manifest = null) {
   return result;
 }
 
-function main() {
+async function main() {
   const argv = process.argv.slice(2);
   const evalMode = argv.includes('--eval');
   const keep = argv.includes('--keep');
@@ -339,7 +373,7 @@ function main() {
     report.baselineSize = baseline.size;
 
     // (4) loop per-finding sul set in-scope.
-    const provider = deterministicFixProvider();
+    const provider = await resolveFixProvider();
     const budget = { startedAt: Date.now(), deadlineMs: Date.now() + LOOP_BUDGET.GLOBAL_WALL_CLOCK_MS };
     for (const finding of inScope) {
       const res = runFindingLoop(finding, { dir: ws.dir, fixProvider: provider, evalMode, runOpts: RUN_OPTS, budget });
@@ -417,6 +451,6 @@ function main() {
 }
 
 const __isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
-if (__isMain) main();
+if (__isMain) main().catch((e) => { console.error(e?.stack || String(e)); process.exit(2); });
 
 export { collectFindings, selectInScope };

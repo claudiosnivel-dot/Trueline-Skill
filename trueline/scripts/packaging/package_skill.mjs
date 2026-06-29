@@ -296,6 +296,33 @@ function structuralLint(treeRoot, { injectedMissing } = {}) {
     }
   }
 
+  // (7) L-COL-029: le TABELLE DETERMINISTICHE di fix sono EVAL-ONLY (vivono in
+  // eval/, fuori da BUNDLE_TOP) e NON devono MAI finire nel .skill. Controllo
+  // FALSIFICABILE che ancora sul PAYLOAD (gli identificatori UNICI del provider
+  // eval), non solo su una forma-export: cosi' resta robusto a re-export, arrow,
+  // default, o uno split table-only sotto altro nome. Tutto ANCORATO a INIZIO
+  // RIGA (/m) -> i commenti/regex INDENTATI di QUESTO stesso file (e la
+  // provider-call indentata di run_loop.mjs) NON fanno self-match.
+  const EVAL_PAYLOAD = new RegExp(
+    '^(?:export\\s+)?(?:async\\s+)?function\\s+(?:deterministicFixProvider|selectKnownFix)\\b'
+    + '|^(?:export\\s+)?const\\s+(?:PERLANG_SECRET_FIXES|FIX_TABLE)\\b'
+    + '|^(?:export\\s+)?const\\s+deterministicFixProvider\\s*=',
+    'm',
+  );
+  for (const rel of walk(treeRoot, treeRoot, [])) {
+    const base = rel.split('/').pop();
+    if (base === 'fix_provider.eval.mjs') {
+      errors.push(`provider deterministico EVAL-ONLY spedito nel .skill: ${rel} (L-COL-029)`);
+      continue;
+    }
+    if (!rel.endsWith('.mjs')) continue;
+    let txt = '';
+    try { txt = readFileSync(join(treeRoot, rel.split('/').join(sep)), 'utf8'); } catch { continue; }
+    if (EVAL_PAYLOAD.test(txt)) {
+      errors.push(`tabella di fix deterministica EVAL-ONLY presente nel .skill: ${rel} (L-COL-029)`);
+    }
+  }
+
   if (injectedMissing) {
     // verifica difensiva: l'iniezione DEVE aver prodotto almeno un orfano
     const orphanSeen = errors.some((e) => e.startsWith('riferimento ORFANO'));

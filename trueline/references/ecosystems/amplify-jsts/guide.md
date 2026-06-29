@@ -100,7 +100,8 @@ Dichiarare esplicitamente nel report di fase.
 
 ## Fix della remediation (engine, non dati)
 
-Il fix `fixAppsyncS3(dir, finding)` in `fix_provider.mjs` sostituisce
+Il fix `fixAppsyncS3(dir, finding)` (nel provider deterministico EVAL-ONLY
+`eval/harness/fix_provider.eval.mjs`, non spedito nel `.skill`) sostituisce
 `allow: public` con `allow: owner` nella rule colpita del `schema.graphql`.
 Signature: `fix-appsync-owner-scope:<TypeName>`.
 
