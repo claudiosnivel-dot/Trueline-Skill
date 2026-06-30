@@ -43,7 +43,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { resolve, dirname, basename } from 'node:path';
+import { resolve, dirname, basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -52,9 +52,24 @@ const __dirname = dirname(__filename);
 // Radice del repo: trueline/scripts/oracles -> root e 3 livelli sopra.
 const REPO_ROOT = resolve(__dirname, '..', '..', '..');
 
+const IS_WINDOWS = process.platform === 'win32';
+
 /** Stampa un messaggio diagnostico su stderr (lo stdout resta JSON puro). */
 function warn(msg) {
   process.stderr.write(`[run_osv] ${msg}\n`);
+}
+
+// Risolve l'eseguibile osv-scanner. Precedenza (Task 4): binario project-local
+// in `<dir>/.trueline/bin/` -> OSV_SCANNER_PATH -> `osv-scanner` sul PATH.
+// ADDITIVO/BIT-INVARIANTE: se `.trueline/bin` e assente (o `dir` non passato),
+// la risoluzione e identica a oggi (OSV_SCANNER_PATH ?? 'osv-scanner').
+function resolveOsvBin(dir) {
+  const exe = IS_WINDOWS ? 'osv-scanner.exe' : 'osv-scanner';
+  if (dir) {
+    const local = join(dir, '.trueline', 'bin', exe);
+    if (existsSync(local)) return local;
+  }
+  return process.env.OSV_SCANNER_PATH ?? 'osv-scanner';
 }
 
 /**
@@ -109,8 +124,9 @@ function main() {
   const lockfileDir = dirname(lockfileAbs);
   const lockfileBase = basename(lockfileAbs);
 
-  // 2) Cerca osv-scanner: prima OSV_SCANNER_PATH (se impostata), poi PATH.
-  const osvBin = process.env.OSV_SCANNER_PATH ?? 'osv-scanner';
+  // 2) Cerca osv-scanner: prima il project-local `<dir>/.trueline/bin`, poi
+  //    OSV_SCANNER_PATH (se impostata), poi PATH. `dir` = directory del lockfile.
+  const osvBin = resolveOsvBin(lockfileDir);
 
   warn(`lockfile: ${lockfileAbs}`);
   warn(`cwd invocazione: ${lockfileDir}`);
@@ -196,4 +212,9 @@ function main() {
   process.exit(0);
 }
 
-main();
+// Esegui main() SOLO da CLI. Importato (es. dal test del bin-lookup) NON deve
+// partire (main() farebbe process.exit su argomenti mancanti).
+const __isMain = process.argv[1] && resolve(process.argv[1]) === __filename;
+if (__isMain) main();
+
+export { resolveOsvBin };

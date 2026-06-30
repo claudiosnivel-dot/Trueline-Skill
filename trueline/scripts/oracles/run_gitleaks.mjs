@@ -53,11 +53,18 @@ function diag(msg) {
   process.stderr.write(`[run_gitleaks] ${msg}\n`);
 }
 
-// Risolve l'eseguibile gitleaks. Prima si affida al PATH (spawn lo cerca da
-// solo); se la ricerca fallisce, tenta percorsi noti (incl. il go/bin dove e
-// installato in questo ambiente, che NON e sul PATH).
-function resolveGitleaksBin() {
+// Risolve l'eseguibile gitleaks. Precedenza (Task 4): binario project-local in
+// `<dir>/.trueline/bin/` -> PATH -> percorsi noti (incl. go/bin di questo
+// ambiente, che NON e sul PATH). ADDITIVO/BIT-INVARIANTE: se `.trueline/bin`
+// e assente (o `dir` non passato), la risoluzione e identica a oggi.
+function resolveGitleaksBin(dir) {
   const exe = IS_WINDOWS ? 'gitleaks.exe' : 'gitleaks';
+  // 0) Project-local: `<dir>/.trueline/bin/<exe>`. Vince sui candidati globali.
+  //    Assente -> si prosegue col flusso odierno (nessun cambio di comportamento).
+  if (dir) {
+    const local = join(dir, '.trueline', 'bin', exe);
+    if (existsSync(local)) return local;
+  }
   // 1) PATH: lascia che sia spawn a risolvere "gitleaks".
   //    Verifichiamo prima con `gitleaks version` in modo da poter ripiegare.
   const onPath = spawnSync('gitleaks', ['version'], { encoding: 'utf8' });
@@ -169,7 +176,7 @@ function main() {
     PATH: `${process.env.PATH || ''}${delimiter}${extraBin}`,
   };
 
-  const bin = resolveGitleaksBin();
+  const bin = resolveGitleaksBin(dir);
   const invocations = buildInvocations(dir, scopeArg);
 
   let lastDiag = '';
@@ -201,4 +208,9 @@ function main() {
   process.exit(EXIT_EXEC_ERROR);
 }
 
-main();
+// Esegui main() SOLO da CLI. Importato (es. dal test del bin-lookup) NON deve
+// partire (main() farebbe process.exit su argomenti mancanti).
+const __isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (__isMain) main();
+
+export { resolveGitleaksBin };
