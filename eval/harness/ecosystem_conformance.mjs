@@ -306,9 +306,11 @@ const PACK_FIXTURES = {
   // semver@5.6.0 GHSA-c2qj-m37r-6jgf ReDoS CWE-1333).
   // RILEVAMENTO via deps_any (Fase 0 engine additivo): classify() legge package.json e tratta la
   // presenza di '@aws-sdk/client-dynamodb' o 'aws-sdk' come segnale forte (Pass 1), evitando
-  // collisione con postgres-jsts (lang_any-only, Pass 2). verified_set=[]; coverage_policy='declared'.
-  // PACK_FIXTURES kind:'detection' (corpo runDetectionBody, criteri 1/2/3/5/6; criterio 3 vacuo).
-  'dynamodb-jsts': { kind: 'detection', fixtureApp: resolve(ROOT,'eval','ecosystems','dynamodb-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','dynamodb-jsts','registry.json') },
+  // collisione con postgres-jsts (lang_any-only, Pass 2). coverage_policy='declared'.
+  // eco-#2: PROMOSSO a verified_set=[secret,dead-code] -> kind:'verified' (runVerifiedBody, criteri
+  // 1/2/3/5/6; no RLS -> blocco RLS-runtime saltato). secret sk_live_ in src/config.js -> process.env;
+  // dead-code unusedDeadHelper in src/dead.js -> rimozione-simbolo.
+  'dynamodb-jsts': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','dynamodb-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','dynamodb-jsts','registry.json') },
 };
 
 // ---------------------------------------------------------------------------

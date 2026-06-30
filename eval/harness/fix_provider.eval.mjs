@@ -437,6 +437,22 @@ function fixSecretPgS1(dir) {
   return { ok: true, detail: 'PG-S1: literal hardcoded in src/config.ts rimossi (config legge dal solo process.env)' };
 }
 
+// NoSQL-S1 — secret working-tree (mongodb/dynamodb/cloudflare-d1, JS): neutralizza
+// il literal Stripe `sk_live_...` hardcoded in src/config.js -> process.env. Cosi'
+// gitleaks working-tree torna PULITO -> verified. Disgiunto da fixSecretPgS1
+// (src/config.ts) e da fixSecretS1 (src/lib/config.ts): binding per path, .js vs
+// .ts -> additivo, BIT-invariante per i pack esistenti (nessuno ha src/config.js).
+function fixSecretNoSqlJsConfig(dir) {
+  const rel = 'src/config.js';
+  const p = resolve(dir, rel);
+  if (!existsSync(p)) return { ok: false, detail: `file assente: ${rel}` };
+  const before = readFileSync(p, 'utf8');
+  const after = before.replace(/(['"])sk_live_[^'"]*\1/, 'process.env.STRIPE_SECRET_KEY ?? ""');
+  if (after === before) return { ok: false, detail: 'NoSQL-S1: literal sk_live_ non trovato in src/config.js' };
+  writeFileSync(p, after, 'utf8');
+  return { ok: true, detail: 'NoSQL-S1: literal hardcoded in src/config.js -> process.env (gitleaks-clean)' };
+}
+
 // PG-S5 — dead-code TS (postgres-jsts): rimuove in modo SICURO la definizione del
 // simbolo morto segnalato da knip (finding {file, symbol}, ruleId unused-export).
 // Delega all'helper riusabile removeTsSymbol (ts_deadcode_edit.mjs): rimuove SOLO
@@ -1213,6 +1229,11 @@ function selectKnownFix(finding) {
     // src/lib/config.ts), quindi additivo e non interferente.
     if (/(^|\/)src\/config\.ts$/.test(file)) {
       return { kind: 'secret', apply: fixSecretPgS1, signature: 'fix-pg-s1-env-config-ts' };
+    }
+    // secret working-tree NoSQL JS (mongodb/dynamodb/cloudflare-d1): src/config.js
+    // (.js, disgiunto dai rami .ts sopra) -> neutralizza il literal sk_live_.
+    if (/(^|\/)src\/config\.js$/.test(file)) {
+      return { kind: 'secret', apply: fixSecretNoSqlJsConfig, signature: 'fix-nosql-s1-env-config-js' };
     }
     // secret working-tree Supabase (S1): src/lib/config.ts -> rimuovi il literal.
     if (/lib\/config\.ts$/.test(file)) {
