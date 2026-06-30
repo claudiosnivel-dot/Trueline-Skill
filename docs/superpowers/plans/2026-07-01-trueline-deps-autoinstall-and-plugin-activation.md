@@ -116,6 +116,7 @@ git commit -m "feat(preflight): downloadBinaryRelease project-local (node:https 
 
 **Files:**
 - Modify: `trueline/scripts/preflight.mjs` (`runInstall`, parsing flag, prompt)
+- Modify: `trueline/scripts/preflight.test.mjs` — il default `--target=project` cambia l'azione proposta per gitleaks/osv (download project-local invece di `go install`); T2/T4 (asserzioni storiche `go install`) ora invocano con `--target=global`, e si aggiungono T2b/T4b per il default project-local. Suite di nuovo VERDE (9/9).
 - Test: `trueline/scripts/preflight.target.test.mjs` (create) — invoca la CLI con `--json` e `--install --target=project --dry-run --simulate-missing=gitleaks` e asserisce il piano (project-local, nessun comando globale).
 
 **Interfaces:**

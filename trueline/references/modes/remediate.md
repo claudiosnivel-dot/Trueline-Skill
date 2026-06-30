@@ -216,6 +216,13 @@ intento è qualcosa che la skill non fa da sé.
   resto invariato", mai "l'app è sicura".
 - **Merge human-gated** (`L-COL-024`): il raggio di incertezza di una bonifica
   brownfield non giustifica il merge autonomo.
+- **Preflight project-local** (`L-COL-005`): prima di scaricare i binary-release
+  degli oracoli (gitleaks/osv-scanner project-local in `<project>/.trueline/bin/`)
+  la skill assicura che `.trueline/` sia nel `.gitignore` del progetto, così i
+  binari scaricati non finiscono nel versionato.
+- **Degradazione semgrep dichiarata** (`L-COL-006`): se semgrep non è disponibile
+  (né docker né python/pip/pipx) i controlli `injection`/`authz` **degradano** a
+  *not-run*, dichiarato all'utente — mai un verde finto.
 
 ---
 

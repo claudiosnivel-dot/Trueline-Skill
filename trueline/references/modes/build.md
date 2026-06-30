@@ -198,6 +198,13 @@ macrotask secondo il DAG.
   conferma si assume `main_deploy_coupled: true` → merge human-gated.
 - **Human-in-the-loop sulle fix** (`L-COL-005`): ogni patch richiede il "vai" umano
   prima dell'applicazione; anche ogni retry.
+- **Preflight project-local** (`L-COL-005`): prima di scaricare i binary-release
+  degli oracoli (gitleaks/osv-scanner project-local in `<project>/.trueline/bin/`)
+  la skill assicura che `.trueline/` sia nel `.gitignore` del progetto, così i
+  binari scaricati non finiscono nel versionato.
+- **Degradazione semgrep dichiarata** (`L-COL-006`): se semgrep non è disponibile
+  (né docker né python/pip/pipx) i controlli `injection`/`authz` del controllo 2
+  **degradano** a *not-run*, dichiarato all'utente — mai un verde finto.
 
 ---
 
