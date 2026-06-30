@@ -972,11 +972,22 @@ function collectFindingsForLoop(dir, manifest) {
   // tool del manifest, additivo (knip/vulture invariati: knip=default, gli altri --tool=).
   if (bindings['dead-code']) {
     const tool = bindings['dead-code'].tool || 'knip';
-    const r = (tool === 'knip')
-      ? nodeRun(RUN_DEADCODE, [dir], dir)
-      : nodeRun(RUN_DEADCODE, [dir, `--tool=${tool}`], dir);
-    let j = null; try { j = JSON.parse(r.stdout); } catch { /* */ }
-    if (j) out.push(...normForLoop(tool === 'knip' ? 'knip' : tool, j, 'working-tree'));
+    // Issue B / L-COL-006: l'engine sa eseguire+normalizzare solo questi tool
+    // dead-code (specchio di ORACLE_ALIASES in normalize.mjs + dei tool di
+    // run_deadcode). Un tool DICHIARATO ma non supportato (es. pmd/psalm/debride/
+    // roslyn-analyzer/compiler dei pack secret-only) -> dead-code DEGRADATO
+    // (coverage dichiarata), NON si crasha. Onesto: se un pack mettesse quel tool
+    // nel verified_set, il seed dead-code non verrebbe raccolto e il gate
+    // FALLIREBBE rumorosamente (nessun verde silenzioso); per i pack secret-only
+    // dead-code NON e' nel verified_set, quindi saltarlo e' corretto.
+    const DEADCODE_SUPPORTED = ['knip', 'vulture', 'go-deadcode', 'dart'];
+    if (DEADCODE_SUPPORTED.includes(tool)) {
+      const r = (tool === 'knip')
+        ? nodeRun(RUN_DEADCODE, [dir], dir)
+        : nodeRun(RUN_DEADCODE, [dir, `--tool=${tool}`], dir);
+      let j = null; try { j = JSON.parse(r.stdout); } catch { /* */ }
+      if (j) out.push(...normForLoop(tool === 'knip' ? 'knip' : tool, j, 'working-tree'));
+    }
   }
 
   // authz -> firestore_rules_check (cammina `dir` per firestore.rules). (SP-8)
