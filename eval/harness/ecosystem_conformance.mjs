@@ -299,8 +299,10 @@ const PACK_FIXTURES = {
   // RILEVAMENTO via deps_any (Fase 0 engine additivo): classify() legge package.json e tratta la
   // presenza di 'mongodb' o 'mongoose' come segnale forte (Pass 1), evitando collisione con
   // postgres-jsts (lang_any-only, Pass 2). verified_set=[]; coverage_policy='declared'.
-  // PACK_FIXTURES kind:'detection' (corpo runDetectionBody, criteri 1/2/3/5/6; criterio 3 vacuo).
-  'mongodb-jsts': { kind: 'detection', fixtureApp: resolve(ROOT,'eval','ecosystems','mongodb-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','mongodb-jsts','registry.json') },
+  // eco-#2: PROMOSSO verified_set=[secret,dead-code] -> kind:'verified' (runVerifiedBody, criteri
+  // 1/2/3/5/6; no RLS -> blocco RLS-runtime saltato). secret sk_live_ RELOCATO in src/config.js ->
+  // process.env; dead-code unusedDeadHelper in src/dead.js. route-authz detection-only (L-COL-030).
+  'mongodb-jsts': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','mongodb-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','mongodb-jsts','registry.json') },
   // eco-F6: JS/TS+DynamoDB, tier DETECTION. floor=[secret,dependency-vuln,authz]; authz legato a
   // semgrep JS (ruleset dynamodb-jsts-authz.yml: client.send(PutItemCommand/UpdateItemCommand/
   // DeleteItemCommand) in route mutante senza auth-guard, best-effort, degrada onesto se docker
