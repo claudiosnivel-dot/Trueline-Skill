@@ -3,7 +3,7 @@
   "schema_version": "1.0",
   "milestone": "eco-F6",
   "ecosystem": "cloudflare-d1-jsts",
-  "verified_set": [],
+  "verified_set": ["secret", "dead-code"],
   "reference_app": "./reference-app",
   "defects": [
     {
@@ -12,7 +12,7 @@
       "source_oracle": "gitleaks",
       "owasp": "A07:2025",
       "cwe": "CWE-798",
-      "expected_fix_state": "detection-only",
+      "expected_fix_state": "verified",
       "anchor": {
         "file": "src/config.js",
         "marker": "SEED:D1-S1"
@@ -47,7 +47,22 @@
         "marker": "SEED:D1-S3"
       },
       "scan_scope": "working-tree",
-      "notes": "Workers fetch handler che costruisce la query SQL di D1 per concatenazione senza auth-guard: env.DB.prepare('SELECT * FROM notes WHERE user_id = ' + userId) in src/index.js senza controllo Authorization header. L'oracolo semgrep + ruleset cloudflare-d1-jsts-authz.yml (regola d1-authz-unguarded-prepare-sql-concat, pattern $ENV.DB.prepare($A + $B)) DEVE flaggare la chiamata con concatenazione. Il contrasto (src/guarded.js con env.DB.prepare('... ?') parametrizzato + auth-guard esplicito) NON deve produrre finding (precisione: 0 FP, nessun + nell'argomento di prepare). Tier detection BEST-EFFORT (eco-F6): semgrep assente nel sandbox -> degrada onesto (conformance gate esce 1 dichiarato se docker non disponibile); quando semgrep e' disponibile, deve cogliere D1-S3 e avere 0 FP sul contrasto."
+      "notes": "Workers fetch handler che costruisce la query SQL di D1 per concatenazione senza auth-guard: env.DB.prepare('SELECT * FROM notes WHERE user_id = ' + userId) in src/index.js senza controllo Authorization header. L'oracolo semgrep + ruleset cloudflare-d1-jsts-authz.yml (regola d1-authz-unguarded-prepare-sql-concat, pattern $ENV.DB.prepare($A + $B)) DEVE flaggare la chiamata con concatenazione. Il contrasto (src/guarded.js con env.DB.prepare('... ?') parametrizzato + auth-guard esplicito) NON deve produrre finding (precisione: 0 FP). authz resta DETECTION-ONLY (fuori da verified_set: route-authz auto-fix non sicuro, L-COL-030). BEST-EFFORT: semgrep richiede docker; se assente degrada onesto (gate esce 1 dichiarato, mai falso verde)."
+    },
+    {
+      "id": "D1-S4",
+      "category": "dead-code",
+      "source_oracle": "knip",
+      "owasp": "-",
+      "cwe": "CWE-561",
+      "expected_fix_state": "verified",
+      "anchor": {
+        "file": "src/dead.js",
+        "symbol": "unusedDeadHelper",
+        "marker": "SEED:D1-S4"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Export `unusedDeadHelper` in src/dead.js MAI importato -> knip unused-export (dead-code). eco-#2 (verified): la rimozione del SIMBOLO (fixDeadcodeTsSymbol, .js-capable) porta il finding a `verified` (knip ri-eseguito 0 finding sul simbolo). Contrasto `usedHelper` importato e chiamato da src/index.js (raggiunto -> knip flagga solo l'export morto); knip entry include src/guarded.js perche' guardedHandler e' un export usato dal runtime Worker (contrasto authz, non morto). Precisione 0 FP."
     }
   ]
 }

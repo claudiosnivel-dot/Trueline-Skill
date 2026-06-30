@@ -288,8 +288,10 @@ const PACK_FIXTURES = {
   // semgrep JS (ruleset cloudflare-d1-jsts-authz.yml: env.DB.prepare(SQL+concat) senza auth-guard, best-effort,
   // degrada onesto se docker assente); secret=gitleaks(sk_live_... in src/config.js);
   // dep-vuln=osv(package-lock.json npm: lodash@4.17.20 GHSA-35jh-r3h4-6jhm CVE-2021-23337).
-  // verified_set=[]; coverage_policy='declared'. PACK_FIXTURES detection: criteri 1/2/3/5/6.
-  'cloudflare-d1-jsts': { kind: 'detection', fixtureApp: resolve(ROOT,'eval','ecosystems','cloudflare-d1-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','cloudflare-d1-jsts','registry.json') },
+  // eco-#2: PROMOSSO verified_set=[secret,dead-code]; coverage_policy='declared'. kind:'verified'
+  // (runVerifiedBody, criteri 1/2/3/5/6; no RLS -> blocco RLS-runtime saltato). secret sk_live_ in
+  // src/config.js -> process.env; dead-code unusedDeadHelper in src/dead.js. route-authz detection-only (L-COL-030).
+  'cloudflare-d1-jsts': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','cloudflare-d1-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','cloudflare-d1-jsts','registry.json') },
   // eco-F6: JS/TS+MongoDB, tier DETECTION. floor=[secret,dependency-vuln,authz]; authz legato a
   // semgrep JS (ruleset mongodb-jsts-authz.yml: insertOne/updateOne/deleteOne/findOneAndUpdate/save/create
   // senza auth-guard, best-effort, degrada onesto se docker assente); secret=gitleaks(sk_live_...);
