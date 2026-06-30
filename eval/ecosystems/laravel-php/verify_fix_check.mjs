@@ -56,7 +56,7 @@ import { fileURLToPath } from 'node:url';
 
 import { normalize } from '../../../trueline/scripts/findings/normalize.mjs';
 import { validateMany } from '../../../trueline/scripts/findings/validate_finding.mjs';
-import { deterministicFixProvider } from '../../../trueline/scripts/loop/fix_provider.mjs';
+import { deterministicFixProvider } from '../../harness/fix_provider.eval.mjs';
 import { runFindingLoop } from '../../../trueline/scripts/loop/loop.mjs';
 import { createWorkBranch } from '../../../trueline/scripts/git/layered_git.mjs';
 import { LOOP_BUDGET } from '../../../trueline/scripts/checkpoint/thresholds.mjs';

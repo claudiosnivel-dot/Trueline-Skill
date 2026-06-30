@@ -94,7 +94,7 @@ import { cleanupAllVerifyWorkspaces } from '../../trueline/scripts/loop/verify_w
 // VERIFIED-PARITY (kind:'verified', SP-4): la macchina del loop + il fix-provider
 // deterministico (T2.1) + la caratterizzazione RLS a runtime (T1.2). Riusati come
 // SOTTO-ROUTINE; il "verde" resta un FATTO dell'oracolo riesieguito (L-COL-002).
-import { deterministicFixProvider } from '../../trueline/scripts/loop/fix_provider.mjs';
+import { deterministicFixProvider } from './fix_provider.eval.mjs';
 import { runFindingLoop } from '../../trueline/scripts/loop/loop.mjs';
 import { createWorkBranch } from '../../trueline/scripts/git/layered_git.mjs';
 import { LOOP_BUDGET } from '../../trueline/scripts/checkpoint/thresholds.mjs';
@@ -288,8 +288,10 @@ const PACK_FIXTURES = {
   // semgrep JS (ruleset cloudflare-d1-jsts-authz.yml: env.DB.prepare(SQL+concat) senza auth-guard, best-effort,
   // degrada onesto se docker assente); secret=gitleaks(sk_live_... in src/config.js);
   // dep-vuln=osv(package-lock.json npm: lodash@4.17.20 GHSA-35jh-r3h4-6jhm CVE-2021-23337).
-  // verified_set=[]; coverage_policy='declared'. PACK_FIXTURES detection: criteri 1/2/3/5/6.
-  'cloudflare-d1-jsts': { kind: 'detection', fixtureApp: resolve(ROOT,'eval','ecosystems','cloudflare-d1-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','cloudflare-d1-jsts','registry.json') },
+  // eco-#2: PROMOSSO verified_set=[secret,dead-code]; coverage_policy='declared'. kind:'verified'
+  // (runVerifiedBody, criteri 1/2/3/5/6; no RLS -> blocco RLS-runtime saltato). secret sk_live_ in
+  // src/config.js -> process.env; dead-code unusedDeadHelper in src/dead.js. route-authz detection-only (L-COL-030).
+  'cloudflare-d1-jsts': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','cloudflare-d1-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','cloudflare-d1-jsts','registry.json') },
   // eco-F6: JS/TS+MongoDB, tier DETECTION. floor=[secret,dependency-vuln,authz]; authz legato a
   // semgrep JS (ruleset mongodb-jsts-authz.yml: insertOne/updateOne/deleteOne/findOneAndUpdate/save/create
   // senza auth-guard, best-effort, degrada onesto se docker assente); secret=gitleaks(sk_live_...);
@@ -297,8 +299,10 @@ const PACK_FIXTURES = {
   // RILEVAMENTO via deps_any (Fase 0 engine additivo): classify() legge package.json e tratta la
   // presenza di 'mongodb' o 'mongoose' come segnale forte (Pass 1), evitando collisione con
   // postgres-jsts (lang_any-only, Pass 2). verified_set=[]; coverage_policy='declared'.
-  // PACK_FIXTURES kind:'detection' (corpo runDetectionBody, criteri 1/2/3/5/6; criterio 3 vacuo).
-  'mongodb-jsts': { kind: 'detection', fixtureApp: resolve(ROOT,'eval','ecosystems','mongodb-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','mongodb-jsts','registry.json') },
+  // eco-#2: PROMOSSO verified_set=[secret,dead-code] -> kind:'verified' (runVerifiedBody, criteri
+  // 1/2/3/5/6; no RLS -> blocco RLS-runtime saltato). secret sk_live_ RELOCATO in src/config.js ->
+  // process.env; dead-code unusedDeadHelper in src/dead.js. route-authz detection-only (L-COL-030).
+  'mongodb-jsts': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','mongodb-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','mongodb-jsts','registry.json') },
   // eco-F6: JS/TS+DynamoDB, tier DETECTION. floor=[secret,dependency-vuln,authz]; authz legato a
   // semgrep JS (ruleset dynamodb-jsts-authz.yml: client.send(PutItemCommand/UpdateItemCommand/
   // DeleteItemCommand) in route mutante senza auth-guard, best-effort, degrada onesto se docker
@@ -306,9 +310,11 @@ const PACK_FIXTURES = {
   // semver@5.6.0 GHSA-c2qj-m37r-6jgf ReDoS CWE-1333).
   // RILEVAMENTO via deps_any (Fase 0 engine additivo): classify() legge package.json e tratta la
   // presenza di '@aws-sdk/client-dynamodb' o 'aws-sdk' come segnale forte (Pass 1), evitando
-  // collisione con postgres-jsts (lang_any-only, Pass 2). verified_set=[]; coverage_policy='declared'.
-  // PACK_FIXTURES kind:'detection' (corpo runDetectionBody, criteri 1/2/3/5/6; criterio 3 vacuo).
-  'dynamodb-jsts': { kind: 'detection', fixtureApp: resolve(ROOT,'eval','ecosystems','dynamodb-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','dynamodb-jsts','registry.json') },
+  // collisione con postgres-jsts (lang_any-only, Pass 2). coverage_policy='declared'.
+  // eco-#2: PROMOSSO a verified_set=[secret,dead-code] -> kind:'verified' (runVerifiedBody, criteri
+  // 1/2/3/5/6; no RLS -> blocco RLS-runtime saltato). secret sk_live_ in src/config.js -> process.env;
+  // dead-code unusedDeadHelper in src/dead.js -> rimozione-simbolo.
+  'dynamodb-jsts': { kind: 'verified', fixtureApp: resolve(ROOT,'eval','ecosystems','dynamodb-jsts','reference-app'), registry: resolve(ROOT,'eval','ecosystems','dynamodb-jsts','registry.json') },
 };
 
 // ---------------------------------------------------------------------------
@@ -966,11 +972,22 @@ function collectFindingsForLoop(dir, manifest) {
   // tool del manifest, additivo (knip/vulture invariati: knip=default, gli altri --tool=).
   if (bindings['dead-code']) {
     const tool = bindings['dead-code'].tool || 'knip';
-    const r = (tool === 'knip')
-      ? nodeRun(RUN_DEADCODE, [dir], dir)
-      : nodeRun(RUN_DEADCODE, [dir, `--tool=${tool}`], dir);
-    let j = null; try { j = JSON.parse(r.stdout); } catch { /* */ }
-    if (j) out.push(...normForLoop(tool === 'knip' ? 'knip' : tool, j, 'working-tree'));
+    // Issue B / L-COL-006: l'engine sa eseguire+normalizzare solo questi tool
+    // dead-code (specchio di ORACLE_ALIASES in normalize.mjs + dei tool di
+    // run_deadcode). Un tool DICHIARATO ma non supportato (es. pmd/psalm/debride/
+    // roslyn-analyzer/compiler dei pack secret-only) -> dead-code DEGRADATO
+    // (coverage dichiarata), NON si crasha. Onesto: se un pack mettesse quel tool
+    // nel verified_set, il seed dead-code non verrebbe raccolto e il gate
+    // FALLIREBBE rumorosamente (nessun verde silenzioso); per i pack secret-only
+    // dead-code NON e' nel verified_set, quindi saltarlo e' corretto.
+    const DEADCODE_SUPPORTED = ['knip', 'vulture', 'go-deadcode', 'dart'];
+    if (DEADCODE_SUPPORTED.includes(tool)) {
+      const r = (tool === 'knip')
+        ? nodeRun(RUN_DEADCODE, [dir], dir)
+        : nodeRun(RUN_DEADCODE, [dir, `--tool=${tool}`], dir);
+      let j = null; try { j = JSON.parse(r.stdout); } catch { /* */ }
+      if (j) out.push(...normForLoop(tool === 'knip' ? 'knip' : tool, j, 'working-tree'));
+    }
   }
 
   // authz -> firestore_rules_check (cammina `dir` per firestore.rules). (SP-8)

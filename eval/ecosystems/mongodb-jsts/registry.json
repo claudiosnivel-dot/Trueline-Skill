@@ -3,7 +3,7 @@
   "schema_version": "1.0",
   "milestone": "eco-F6",
   "ecosystem": "mongodb-jsts",
-  "verified_set": [],
+  "verified_set": ["secret", "dead-code"],
   "reference_app": "./reference-app",
   "defects": [
     {
@@ -12,9 +12,9 @@
       "source_oracle": "gitleaks",
       "owasp": "A07:2025",
       "cwe": "CWE-798",
-      "expected_fix_state": "detection-only",
+      "expected_fix_state": "verified",
       "anchor": {
-        "file": "src/index.js",
+        "file": "src/config.js",
         "marker": "SEED:MG-S1"
       },
       "scan_scope": "working-tree",
@@ -47,7 +47,22 @@
         "marker": "SEED:MG-S3"
       },
       "scan_scope": "working-tree",
-      "notes": "Route POST /items che chiama db.collection('items').insertOne(req.body) senza alcuna verifica identita'/ruolo: chiunque raggiunga l'endpoint puo' inserire documenti MongoDB (CWE-862 Missing Authorization, Broken Access Control). semgrep + ruleset mongodb-jsts-authz.yml DEVE flaggare l'insertOne nel handler POST senza auth-guard. Il contrasto (POST /items/secure con verifyToken prima dell'insertOne) NON deve produrre finding (precisione: 0 FP sul contrasto). Tier detection BEST-EFFORT (eco-F6): semgrep via docker; degrada onesto se docker assente (conformance gate esce 1 dichiarato, mai falso verde)."
+      "notes": "Route POST /items che chiama db.collection('items').insertOne(req.body) senza alcuna verifica identita'/ruolo: chiunque raggiunga l'endpoint puo' inserire documenti MongoDB (CWE-862 Missing Authorization, Broken Access Control). semgrep + ruleset mongodb-jsts-authz.yml DEVE flaggare l'insertOne nel handler POST senza auth-guard. Il contrasto (POST /items/secure con verifyToken prima dell'insertOne) NON deve produrre finding (precisione: 0 FP sul contrasto). authz resta DETECTION-ONLY (fuori da verified_set: route-authz auto-fix non sicuro, L-COL-030). BEST-EFFORT: semgrep via docker; degrada onesto se assente (gate esce 1 dichiarato, mai falso verde)."
+    },
+    {
+      "id": "MG-S4",
+      "category": "dead-code",
+      "source_oracle": "knip",
+      "owasp": "-",
+      "cwe": "CWE-561",
+      "expected_fix_state": "verified",
+      "anchor": {
+        "file": "src/dead.js",
+        "symbol": "unusedDeadHelper",
+        "marker": "SEED:MG-S4"
+      },
+      "scan_scope": "working-tree",
+      "notes": "Export `unusedDeadHelper` in src/dead.js MAI importato -> knip unused-export (dead-code). eco-#2 (verified): la rimozione del SIMBOLO (fixDeadcodeTsSymbol, .js-capable) porta il finding a `verified` (knip ri-eseguito 0 finding sul simbolo). Contrasto `usedHelper` importato e chiamato da src/index.js (raggiunto -> knip flagga solo l'export morto). La vuln-dep lodash@4.17.20 e' realmente importata in index.js (knip non la segnala come unused-dep). Precisione 0 FP."
     }
   ]
 }

@@ -1,6 +1,6 @@
 {
   "id": "cloudflare-d1-jsts",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "languages": ["js", "ts"],
   "backend": "cloudflare-d1",
   "detect": { "files_any": ["wrangler.toml"], "lang_any": ["package.json"] },
@@ -20,6 +20,6 @@
     "dead-code":       { "tool": "knip" }
   },
   "floor":        ["secret", "dependency-vuln", "authz"],
-  "verified_set": [],
+  "verified_set": ["secret", "dead-code"],
   "coverage_policy": "declared"
 }
