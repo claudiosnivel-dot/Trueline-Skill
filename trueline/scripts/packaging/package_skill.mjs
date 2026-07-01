@@ -589,6 +589,14 @@ if (pluginArg && lint.ok) {
     const pluginDir = resolve(pluginArg);
     // skills/trueline: identico al contenuto del .skill (copyTree + BUNDLE_TOP)
     copyTree(SKILL_SRC, join(pluginDir, 'skills', SKILL_NAME));
+    // node_modules RUNTIME della skill (pgsql-ast-parser & co.): il plugin dev'essere
+    // AUTOCONTENUTO (rls_check importa pgsql-ast-parser, import top-level). Sono esclusi
+    // dal .skill (isExcluded), ma il PLUGIN li BUNDLA (pure-JS, 0 binari nativi ->
+    // portabili) -> gira su macchina nuda senza npm. Il .skill resta invariato.
+    const nmSrc = join(SKILL_SRC, 'node_modules');
+    if (existsSync(nmSrc)) {
+      cpSync(nmSrc, join(pluginDir, 'skills', SKILL_NAME, 'node_modules'), { recursive: true });
+    }
     // .claude-plugin/ e hooks/: sorgenti versionati, copiati al livello del plugin
     // (NON in BUNDLE_TOP -> non entrano mai nel .skill: invarianza dell'archivio).
     for (const top of ['.claude-plugin', 'hooks']) {
