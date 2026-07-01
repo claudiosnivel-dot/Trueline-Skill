@@ -65,6 +65,15 @@ function flagValue(name) {
   return i >= 0 && i + 1 < args.length && !args[i + 1].startsWith('--') ? args[i + 1] : null;
 }
 const outArg = flagValue('--out');
+// Fase 2: target AGGIUNTIVO layout-plugin Claude Code. Non tocca il .skill
+// (default). `.claude-plugin/` e `hooks/` NON sono in BUNDLE_TOP -> il .skill
+// resta identico (i sorgenti plugin non entrano mai nell'archivio).
+const pluginArg = flagValue('--plugin');
+// --plugin richiede una directory di output: se il flag c'e' ma senza valore, e'
+// un errore d'uso, MAI un no-op silenzioso (che farebbe credere il plugin emesso).
+if (args.includes('--plugin') && !pluginArg) {
+  fail('--plugin richiede una directory di output (es. --plugin dist/trueline-plugin)', 2);
+}
 
 // --- Costanti del lint -------------------------------------------------------
 const SKILL_MD_MAX_LINES = 500; // L-COL-014: corpo < ~500 righe
@@ -570,6 +579,45 @@ if (lint.ok && !noArchive) {
   }
 }
 
+// 4b) LAYOUT-PLUGIN (opzionale, --plugin <dir>): target AGGIUNTIVO, non altera
+//     il .skill. Emette <dir>/.claude-plugin/plugin.json + <dir>/hooks/hooks.json
+//     + <dir>/skills/trueline/{SKILL.md,scripts,references,assets} (riuso di
+//     copyTree, stesse esclusioni del .skill). Emesso solo se il lint è verde.
+let pluginEmitted = null;
+if (pluginArg && lint.ok) {
+  try {
+    const pluginDir = resolve(pluginArg);
+    // skills/trueline: identico al contenuto del .skill (copyTree + BUNDLE_TOP)
+    copyTree(SKILL_SRC, join(pluginDir, 'skills', SKILL_NAME));
+    // .claude-plugin/ e hooks/: sorgenti versionati, copiati al livello del plugin
+    // (NON in BUNDLE_TOP -> non entrano mai nel .skill: invarianza dell'archivio).
+    for (const top of ['.claude-plugin', 'hooks']) {
+      const src = join(SKILL_SRC, top);
+      if (!existsSync(src)) continue;
+      cpSync(src, join(pluginDir, top), {
+        recursive: true,
+        filter: (s) => {
+          const rel = relative(SKILL_SRC, s);
+          if (rel === '' || rel === top) return true;
+          return !isExcluded(rel);
+        },
+      });
+    }
+    // Deriva la versione del plugin da skillSemver() (single source of truth): il
+    // sorgente .claude-plugin/plugin.json e' un template, la versione emessa segue
+    // skill_version (niente deriva al bump). Il .skill non e' toccato.
+    const emittedManifest = join(pluginDir, '.claude-plugin', 'plugin.json');
+    if (existsSync(emittedManifest)) {
+      const pm = JSON.parse(readFileSync(emittedManifest, 'utf8'));
+      pm.version = skillSemver();
+      writeFileSync(emittedManifest, JSON.stringify(pm, null, 2) + '\n');
+    }
+    pluginEmitted = { path: pluginDir };
+  } catch (e) {
+    fail(`emissione layout-plugin fallita: ${e.message}`, 2);
+  }
+}
+
 const tree = walk(stagingDir, stagingDir, []).sort();
 const ok = lint.ok && (noArchive || archiveEmitted !== null);
 
@@ -581,6 +629,7 @@ if (jsonMode) {
     manifest,
     tree,
     archive: archiveEmitted,
+    plugin: pluginEmitted,
     staging_dir: stagingDir,
     injected_missing_ref: injectedMissing,
   }, null, 2));
@@ -625,6 +674,15 @@ if (jsonMode) {
     console.log(`   [OK] emesso ${archiveEmitted.path} (${archiveEmitted.bytes} byte, tar+gzip deterministico)`);
   }
   console.log('');
+  if (pluginArg) {
+    console.log('4b) LAYOUT-PLUGIN (--plugin, target AGGIUNTIVO al .skill):');
+    if (!lint.ok) {
+      console.log('   [SKIP] lint ROSSO -> layout-plugin NON emesso');
+    } else if (pluginEmitted) {
+      console.log(`   [OK] emesso ${pluginEmitted.path} (.claude-plugin/ + hooks/ + skills/${SKILL_NAME}/)`);
+    }
+    console.log('');
+  }
   console.log('------------------------------------------------------------');
   console.log(`=== package_skill: ${ok ? 'OK' : 'FAIL'} ===`);
   console.log('------------------------------------------------------------');

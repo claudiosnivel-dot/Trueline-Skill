@@ -54,9 +54,20 @@ console.log('A) regressione modalita esistenti');
     json ? `tools=${json.tools.length} exit=${status}` : 'no JSON');
 }
 {
-  const { status, out } = run(['--simulate-missing=gitleaks']);
-  check('T2 report umano PROPONE il comando (AZIONE RICHIESTA + go install gitleaks)',
+  // Nota (Task 3): il comando storico "go install" è il canale GLOBALE; con
+  // --target=project (default) l'azione proposta diventa un download
+  // project-local. Per asserire il canale di sistema invochiamo --target=global.
+  const { status, out } = run(['--target=global', '--simulate-missing=gitleaks']);
+  check('T2 report umano PROPONE il comando (AZIONE RICHIESTA + go install gitleaks, --target=global)',
     status === 1 && /AZIONE RICHIESTA/.test(out) && /go install/.test(out) && /gitleaks/.test(out),
+    `exit=${status}`);
+}
+{
+  // T2b (Task 3): col default (--target=project) l'azione proposta è un download
+  // project-local in .trueline/bin/, NON il canale globale go install.
+  const { status, out } = run(['--simulate-missing=gitleaks']);
+  check('T2b default project-local PROPONE download in .trueline/bin (no go install)',
+    status === 1 && /AZIONE RICHIESTA/.test(out) && /\.trueline[/\\]bin/.test(out) && !/go install/.test(out),
     `exit=${status}`);
 }
 
@@ -68,9 +79,19 @@ console.log('\nB) consenso esplicito (L-COL-005)');
     `exit=${status} ran=${RAN.test(out)}`);
 }
 {
-  const { out } = run(['--install', '--yes', '--dry-run', '--simulate-missing=gitleaks']);
-  check('T4 --install --yes --dry-run mostra il comando per gitleaks SENZA eseguirlo',
+  // Canale GLOBALE (--target=global): il dry-run mostra il comando di sistema
+  // "go install" per gitleaks senza eseguirlo.
+  const { out } = run(['--install', '--yes', '--target=global', '--dry-run', '--simulate-missing=gitleaks']);
+  check('T4 --install --yes --dry-run --target=global mostra go install gitleaks SENZA eseguirlo',
     /\[dry-run\]/i.test(out) && /gitleaks/.test(out) && /go install/.test(out) && !RAN.test(out),
+    `ran=${RAN.test(out)}`);
+}
+{
+  // T4b (Task 3): col default (--target=project) il dry-run pianifica un download
+  // project-local in .trueline/bin/, senza eseguire e senza canale globale.
+  const { out } = run(['--install', '--yes', '--dry-run', '--simulate-missing=gitleaks', '--only=gitleaks']);
+  check('T4b --install --yes --dry-run default project-local pianifica .trueline/bin (no go install)',
+    /\[dry-run\]/i.test(out) && /gitleaks/.test(out) && /\.trueline[/\\]bin/.test(out) && !/go install/.test(out) && !RAN.test(out),
     `ran=${RAN.test(out)}`);
 }
 {

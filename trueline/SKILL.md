@@ -3,15 +3,25 @@ name: trueline
 description: >
   Trueline e una lifecycle skill di security review e remediation per progetti di
   coding JS/TS (JavaScript/TypeScript) su Supabase. Genera un blueprint di task
-  atomici verificabili, costruisce un macrotask alla volta, e verifica ogni
-  macrotask con oracoli deterministici (security/sicurezza, secret/segreti, RLS,
-  dead-code) prima di committare — l'oracolo emette il verdetto, mai l'LLM.
-  Tre modalita: BOOTSTRAP (avvia un nuovo progetto con un blueprint e task
-  atomici), BUILD (avanza il prossimo macrotask del blueprint), REMEDIATE (fai un
-  audit di sicurezza e bonifica secret e RLS di un repo esistente). Da usare
-  quando si avvia, si avanza, o si mette in sicurezza / si bonifica un progetto
-  JS/TS su Supabase con un agente: security audit, remediation di secret/RLS,
-  oracoli su un codebase Supabase, o pianificazione blueprint-first.
+  atomici verificabili, costruisce un macrotask alla volta (build), e verifica
+  ogni macrotask con oracoli deterministici (security/sicurezza, secret/segreti,
+  RLS, dead-code) prima di committare — l'oracolo emette il verdetto, mai l'LLM.
+  Tre modalita: bootstrap (avvia un nuovo progetto con un blueprint e task
+  atomici), build (avanza il prossimo macrotask del blueprint), remediate (fai un
+  audit di sicurezza e bonifica secret e RLS di un repo esistente). Trigger
+  multilingue (IT/EN): security review, security audit, fai un audit, metti in
+  sicurezza, harden, secure, remediate, remediation, bonifica, RLS, secret,
+  segreti, blueprint, avvia progetto, start project, avanza macrotask, next
+  macrotask, oracoli su un codebase Supabase, pianificazione blueprint-first.
+when_to_use: >
+  Usa quando l'utente chiede di, su un codebase JS/TS (JavaScript/TypeScript) su
+  Supabase con un agente: (bootstrap) avviare o impostare un nuovo progetto con
+  un blueprint e task atomici; (build) avanzare o costruire il prossimo macrotask
+  del blueprint; (remediate) fare un audit di sicurezza e bonificare secret e RLS
+  di un repo esistente. Trigger multilingue — IT: metti in sicurezza, fai un
+  audit, bonifica, remediation, RLS, secret/segreti, blueprint, avvia progetto,
+  avanza macrotask, oracoli; EN: security review, security audit, harden, secure,
+  remediate, secrets, blueprint, start project, next macrotask.
 ---
 
 # Trueline — corpo della skill (livello 2)

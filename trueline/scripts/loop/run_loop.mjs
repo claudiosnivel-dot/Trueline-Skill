@@ -97,7 +97,14 @@ const GO_BIN = process.platform === 'win32' ? 'C:/Users/claud/go/bin' : '/c/User
 const RUN_OPTS = { runId: 'loop-session', createdAt: '1970-01-01T00:00:00.000Z' };
 
 function runOracle(script, args, cwd) {
-  const env = { ...process.env, PATH: `${process.env.PATH || ''}${delimiter}${GO_BIN}` };
+  // Task 4: antepone il bin project-local `<cwd>/.trueline/bin` al PATH, poi il
+  // PATH corrente, poi GO_BIN (precedenza: project-local -> PATH -> go/bin).
+  // ADDITIVO/BIT-INVARIANTE: se `.trueline/bin` non esiste, e una dir inesistente
+  // in testa al PATH -> nessun effetto sulla risoluzione (comportamento odierno).
+  const localBin = cwd ? join(cwd, '.trueline', 'bin') : null;
+  const basePath = `${process.env.PATH || ''}${delimiter}${GO_BIN}`;
+  const PATH = localBin ? `${localBin}${delimiter}${basePath}` : basePath;
+  const env = { ...process.env, PATH };
   const res = spawnSync(process.execPath, [script, ...args], {
     cwd, env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
   });
