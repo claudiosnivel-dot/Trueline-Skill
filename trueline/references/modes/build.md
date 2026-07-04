@@ -60,6 +60,15 @@ in pieno in BUILD: i `acceptance_criteria` + `target_tests` del task corrente
 
 ## Pipeline (`01` §3.2)
 
+### 0. Preflight delle dipendenze (prima di tutto, `01` §4)
+
+**Primissima azione, prima del checkpoint (che gira gli oracoli).**
+`scripts/preflight.mjs` **controlla** le dipendenze (`gitleaks`/`osv-scanner`/
+`semgrep`/`knip`; `rls_check` è built-in), **le installa project-local** —
+`--install --target=project`, consent-gated → `<progetto>/.trueline/bin/`
+(gitignorato) — e **ti comunica i non-installabili** con i passi/comandi manuali
+(il controllo dipendente degrada a *not-run*, mai un verde finto, `L-COL-006`).
+
 ### 1. Seleziona il macrotask corrente
 
 Da `SESSION-STATE` + blueprint, rispettando le dipendenze del DAG
