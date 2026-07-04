@@ -145,27 +145,34 @@ faceva", non "e giusto". Detto in chiaro all'utente.
 
 ---
 
-## 4. Hook di preflight *(03 §4 / 09 §6)*
+## 4. Preflight delle dipendenze — LA PRIMA AZIONE COMUNE *(03 §4 / 09 §6)*
 
-**Prima** di qualunque operazione che richieda gli oracoli o un push, la skill invoca
-`scripts/preflight.mjs`. Il preflight:
+**Prima di qualunque oracolo** — quindi come **primissimo passo** di BUILD e REMEDIATE
+(e appena serve in BOOTSTRAP) — la skill esegue `scripts/preflight.mjs`. Il patto è
+sempre lo stesso: **controlla le dipendenze, le installa, e ciò che non riesce a
+installare te lo comunica per farlo a mano.** Nessun oracolo parte finché lo stato delle
+dipendenze non è chiaro.
 
-- **rileva** ogni tool esterno (`semgrep` via Docker, `gitleaks`, `osv-scanner`, i
-  tool dead-code `knip`/`ts-prune`/`depcheck`) con `command -v` / `npx --no-install`,
-  e confronta la **versione minima pinnata** nel manifest;
-- per un tool assente **propone** l'install adatto all'OS, **mai lo esegue senza
-  consenso** *(L-COL-005)*. Sul tuo via esplicito l'install lo puo' eseguire il
-  preflight stesso (`scripts/preflight.mjs --install --yes` — consent-gated: senza
-  `--yes` e senza un terminale interattivo non installa nulla). Un tool senza canale
-  di install -> **dichiarato non installabile** e il suo controllo **degrada a "non
-  eseguito"**, mai un verde finto *(L-COL-006)*;
-- per il **push** verifica remote + auth gia configurati: assenti -> la skill
-  **committa in locale** sul branch e lo **dichiara**, senza fallire in silenzio;
-- l'`rls_check` (`scripts/oracles/rls_check.mjs`) non ha dipendenze oltre il runtime
-  JS/TS: **viaggia con la skill e funziona sempre**.
+- **CONTROLLA** ogni tool esterno con rilevazione deterministica + confronto con la
+  **versione minima pinnata**: `gitleaks` (secret) · `osv-scanner` (dependency-vuln) ·
+  `semgrep` via Docker (injection/authz) · `knip` (dead-code). `rls_check`
+  (`scripts/oracles/rls_check.mjs`) è **built-in**, non richiede nulla: funziona sempre.
+- **INSTALLA** i mancanti/sotto-versione, **project-local per default** e **consent-gated**
+  *(L-COL-005)*: `scripts/preflight.mjs --install --target=project` scarica i
+  **binary-release** di gitleaks/osv-scanner (solo `node:https`, **nessun toolchain**) in
+  `<progetto>/.trueline/bin/` (gitignorato) e installa `knip` come devDependency; con
+  `--target=global` usa i canali di sistema (go/brew/docker). Senza consenso esplicito
+  (o `--yes`) **propone e chiede**, non installa da sé. → REMEDIATE gira anche su una
+  macchina senza Go/Docker/Python.
+- **COMUNICA i non-installabili**: un tool senza canale disponibile sull'OS (es.
+  `semgrep` senza Docker né Python) è **dichiarato non installabile**, il suo controllo
+  **degrada a "non eseguito"** (mai un verde finto, `L-COL-006`), e la skill **ti passa i
+  passi/comandi manuali** per installarlo tu.
+- Per il **push** verifica remote + auth: assenti → **committa in locale** sul branch e lo
+  **dichiara**, senza fallire in silenzio.
 
-Il preflight non vendorizza binari: rileva, confronta, propone. La SKILL bundla solo
-codice nostro + reference; gli oracoli di terzi restano esterni.
+Il preflight non vendorizza i binari di terzi: rileva, installa (col tuo consenso),
+degrada onesto. Il `.skill` bundla solo codice nostro + reference.
 
 ---
 

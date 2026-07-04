@@ -66,6 +66,16 @@ Non si caricano in REMEDIATE: `references/blueprint/` (non c'è un blueprint),
 
 ## Pipeline (`01` §3.3)
 
+### 0. Preflight delle dipendenze (prima di tutto, `01` §4)
+
+**Primissima azione, prima di qualunque oracolo.** `scripts/preflight.mjs`
+**controlla** le dipendenze (`gitleaks`/`osv-scanner`/`semgrep`/`knip`; `rls_check`
+è built-in), **le installa project-local** — `--install --target=project`,
+consent-gated → `<progetto>/.trueline/bin/` (gitignorato) — e **ti comunica i
+non-installabili** con i passi/comandi manuali (il controllo dipendente degrada a
+*not-run*, mai un verde finto, `L-COL-006`). Nessun oracolo dei passi 3–5 parte
+prima che lo stato delle dipendenze sia chiaro.
+
 ### 1. Inventario
 
 Struttura del codebase, ecosistema, superfici (edge function, route, tabelle
