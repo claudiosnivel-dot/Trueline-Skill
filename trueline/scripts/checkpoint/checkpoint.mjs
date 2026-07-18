@@ -54,6 +54,27 @@ const RLS_CHECK = resolve(ORACLES, 'rls_check.mjs');
 const RUN_DEADCODE = resolve(ORACLES, 'run_deadcode.mjs');
 const RUN_OSV = resolve(ORACLES, 'run_osv.mjs');
 const RUN_SEMGREP = resolve(ORACLES, 'run_semgrep.mjs');
+// A2a — oracoli di igiene strutturale (controllo 1 multi-oracolo).
+const RUN_DUPCHECK = resolve(ORACLES, 'run_dupcheck.mjs');
+const RUN_CYCLECHECK = resolve(ORACLES, 'run_cyclecheck.mjs');
+const TWIN_CHECK = resolve(ORACLES, 'twin_check.mjs');
+
+// Oracoli DETECTION-ONLY (L-COL-030): segnalano un FATTO strutturale ma non
+// gata-no MAI il verdetto. L'esclusione e' PER-ORACOLO, non per-categoria: `cycle`
+// e `twin` sono entrambi category=architecture, ma solo `cycle` blocca su delta;
+// `twin` (clone-and-rename per-entita') e' un segnale, mai un gate. In v1 nessun
+// fix-provider deterministico spedito -> nessun oracolo di igiene oltre dead-code/
+// dup/cycle gata; twin resta fuori dai blockers.
+const DETECTION_ONLY_ORACLES = new Set(['twin']);
+
+// Tool cablati al CONTROLLO 1 (igiene strutturale). Sono guidati dallo STESSO
+// manifest.oracles del controllo 2 (dopo A2a: duplication/architecture vi sono
+// dichiarati), quindi il loop manifest-driven del controllo 2 li vedrebbe come
+// "tool di sicurezza sconosciuti" e li declasserebbe (runTool default -> nota +
+// ranFail). Sono di competenza ESCLUSIVA del controllo 1: il controllo 2 li salta
+// (come gia' fa con 'knip'). `dependency-cruiser` incluso per compat storica (il
+// binding architecture usa 'madge', vedi run_cyclecheck).
+const CONTROL1_TOOLS = new Set(['knip', 'jscpd', 'madge', 'dependency-cruiser', 'twin']);
 
 const GO_BIN = process.platform === 'win32'
   ? 'C:/Users/claud/go/bin'
@@ -116,27 +137,101 @@ function deltaBlockers(findings, baseline, { deadcode = false, gateCategories = 
 }
 
 // =============================================================================
-// CONTROLLO 1 — DEAD CODE (knip)
+// CONTROLLO 1 — IGIENE STRUTTURALE (multi-oracolo, manifest-driven)
 // =============================================================================
-export function control1DeadCode(referenceApp, { baseline = new Set(), runOpts }) {
-  const r = runOracle(RUN_DEADCODE, [referenceApp], referenceApp);
-  if (!r.ok) {
-    return { id: 1, name: 'dead-code', status: 'error', green: false, detail: r.detail, findings: [], blockers: [] };
+//
+// Da mono-oracolo (knip/dead-code) a multi-oracolo, stesso pattern del controllo 2
+// dopo A0: dead-code SEMPRE (invariato), + dup_check/cycle_check se DICHIARATI dal
+// manifest (`oracles.duplication`/`oracles.architecture`), + twin_check SEMPRE
+// (detection-only, ecosystem-agnostic). Tutti gata-no PER DELTA (04 §6, mai per
+// severita): un difetto d'igiene PRE-ESISTENTE e' SEGNALATO, non blocca. `twin` e'
+// escluso dai blockers PER-ORACOLO (DETECTION_ONLY_ORACLES), non per-categoria.
+//
+// BIT-invarianza: un pack senza `oracles.duplication`/`architecture` esegue solo
+// dead-code + twin. twin non gata mai e su un progetto senza directory parallele
+// emette twins:[] -> 0 finding -> il VERDETTO green e' identico al vecchio
+// control1DeadCode (dead-code da solo, deltaBlockers per delta).
+
+// Esclude dai blockers i finding PRE-ESISTENTI (delta, baseline) e quelli prodotti
+// da un oracolo DETECTION-ONLY (twin). Annota `baseline_status` new/pre-existing
+// come deltaBlockers (04 §6), cosi' i finding portano il marcatore per il report.
+// baseline = Set<fingerprint>.
+export function partitionBlockers(findings, baseline) {
+  const out = [];
+  for (const f of findings) {
+    const isNew = !baseline.has(f.fingerprint);
+    f.baseline_status = isNew ? 'new' : 'pre-existing';
+    if (!isNew) continue; // pre-esistente: segnalato, non blocca (04 §6)
+    const oracle = f.source_oracle && f.source_oracle.oracle;
+    if (DETECTION_ONLY_ORACLES.has(oracle)) continue; // detection-only: segnale, mai gate
+    out.push(f);
   }
-  const n = normFindings('knip', r.json, { ...runOpts, scope: 'working-tree' });
-  if (!n.ok) {
-    return { id: 1, name: 'dead-code', status: 'error', green: false, detail: n.detail, findings: [], blockers: [] };
+  return out;
+}
+
+export function control1Hygiene(referenceApp, { baseline = new Set(), runOpts, manifest = null }) {
+  const all = [];
+  const sub = [];
+
+  // --- dead-code (INVARIATO: knip/vulture/... via run_deadcode) --------------
+  const dc = runOracle(RUN_DEADCODE, [referenceApp], referenceApp);
+  if (!dc.ok) {
+    return { id: 1, name: 'dead-code', status: 'error', green: false, detail: dc.detail, findings: [], blockers: [] };
   }
-  const blockers = deltaBlockers(n.findings, baseline, { deadcode: true });
+  const ndc = normFindings('knip', dc.json, { ...runOpts, scope: 'working-tree' });
+  if (!ndc.ok) {
+    return { id: 1, name: 'dead-code', status: 'error', green: false, detail: ndc.detail, findings: [], blockers: [] };
+  }
+  all.push(...ndc.findings); sub.push(`dead-code:${ndc.findings.length}`);
+
+  // --- A2a: oracoli d'igiene DICHIARATI dal manifest -------------------------
+  // Un oracolo dichiarato ma NON eseguito e' DICHIARATO degradato ("dup:degr"),
+  // MAI un verde silenzioso (L-COL-006). Assente dal manifest -> non eseguito
+  // (BIT-invarianza per i pack che non lo dichiarano).
+  const decl = manifest && manifest.oracles ? manifest.oracles : {};
+  if (decl.duplication) {
+    const minT = decl.duplication.min_tokens || 50;
+    const r = runOracle(RUN_DUPCHECK, [referenceApp, String(minT)], referenceApp);
+    if (r.ok) {
+      const n = normFindings('jscpd', r.json, { ...runOpts, scope: 'working-tree' });
+      if (n.ok) { all.push(...n.findings); sub.push(`dup:${n.findings.length}`); }
+      else sub.push('dup:degr');
+    } else sub.push('dup:degr');
+  }
+  if (decl.architecture) {
+    const r = runOracle(RUN_CYCLECHECK, [referenceApp], referenceApp);
+    if (r.ok) {
+      const n = normFindings('cycle', r.json, { ...runOpts, scope: 'working-tree' });
+      if (n.ok) { all.push(...n.findings); sub.push(`cycle:${n.findings.length}`); }
+      else sub.push('cycle:degr');
+    } else sub.push('cycle:degr');
+  }
+
+  // --- twin: SEMPRE (detection-only, ecosystem-agnostic, non gata mai) -------
+  // Best-effort: se non gira lo dichiariamo (twin:degr) ma NON declassa il verde
+  // (e' detection-only, non contribuisce mai al verdetto).
+  const tw = runOracle(TWIN_CHECK, [referenceApp], referenceApp);
+  if (tw.ok) {
+    const n = normFindings('twin', tw.json, { ...runOpts, scope: 'working-tree' });
+    if (n.ok) { all.push(...n.findings); sub.push(`twin:${n.findings.length}`); }
+    else sub.push('twin:degr');
+  } else sub.push('twin:degr');
+
+  const blockers = partitionBlockers(all, baseline);
   const green = blockers.length === 0;
   return {
     id: 1, name: 'dead-code', status: green ? 'green' : 'red', green,
     detail: green
-      ? `nessun dead-code NUOVO (totali=${n.findings.length}, pre-esistenti segnalati)`
-      : `${blockers.length} dead-code NUOVO introdotto`,
-    findings: n.findings, blockers,
+      ? `nessuna regressione d'igiene NUOVA [${sub.join(' ')}] (pre-esistenti segnalati)`
+      : `${blockers.length} dead-code NUOVO introdotto [${sub.join(' ')}]`,
+    findings: all, blockers,
   };
 }
+
+// Alias di compatibilita': i chiamanti storici importano control1DeadCode. Il
+// controllo 1 e' ora multi-oracolo, ma la firma e il verdetto per i pack senza i
+// nuovi oracoli restano invariati (BIT-invarianza).
+export const control1DeadCode = control1Hygiene;
 
 // =============================================================================
 // CONTROLLO 2 — SICUREZZA (gitleaks working-tree + rls_check + osv)
@@ -249,9 +344,12 @@ export function control2Security(referenceApp, { baseline = new Set(), runOpts, 
     for (const b of Object.values(manifest.oracles)) {
       const t = b && b.tool;
       if (!t) continue;
-      // knip e' il controllo 1 (dead-code), non il 2: NON entra nel controllo
-      // sicurezza. Ogni altro tool noto/ignoto passa per runTool (dedup per tool).
-      if (t === 'knip') continue;
+      // I tool del CONTROLLO 1 (dead-code/dup/cycle/twin: knip, jscpd, madge,
+      // dependency-cruiser, twin) sono di competenza esclusiva del controllo 1 e
+      // sono guidati dallo STESSO manifest.oracles: NON entrano nel controllo
+      // sicurezza (altrimenti runTool li declasserebbe come tool ignoti). Ogni
+      // altro tool noto/ignoto passa per runTool (dedup per tool).
+      if (CONTROL1_TOOLS.has(t)) continue;
       // Gli oracoli authz dichiarativi (A0) hanno il tool come proprio wrapper e
       // portano un binding (scan) che runTool consuma via bindingByTool.
       const wrapper = AUTHZ_TOOL_NAMES.has(t) ? t : (toWrapper[t] || t); // ignoto: runTool lo dichiara saltato.
@@ -648,7 +746,7 @@ export function runCheckpoint(referenceApp, opts = {}) {
     blueprintDir = null,
   } = opts;
 
-  const c1 = control1DeadCode(referenceApp, { baseline, runOpts });
+  const c1 = control1Hygiene(referenceApp, { baseline, runOpts, manifest });
   const c2 = control2Security(referenceApp, { baseline, runOpts, withOsv, manifest });
   const c3 = control3Regressions(referenceApp, { mode, characterization, finding });
   const c4 = control4Conformance(referenceApp, { mode, characterization, finding, blueprintDir, manifest });
