@@ -23,3 +23,8 @@ eval/anti-tamper/*/reference-app/
 # runtime dall'orchestratore (provision_fixtures.sh + npm install) -> gitignorati.
 eval/ecosystems/_a0-fixtures/**/.git/
 eval/ecosystems/_a0-fixtures/**/node_modules/
+
+# A2a: fixture del gate igiene strutturale — sorgenti TRACKED (materiale di gate);
+# inner .git e node_modules provvigionati a runtime dall'orchestratore -> gitignorati.
+eval/ecosystems/_a2a-fixtures/**/.git/
+eval/ecosystems/_a2a-fixtures/**/node_modules/

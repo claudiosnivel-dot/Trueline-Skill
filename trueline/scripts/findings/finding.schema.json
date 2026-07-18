@@ -38,7 +38,9 @@
         "crypto",
         "dependency-vuln",
         "config",
-        "misc"
+        "misc",
+        "duplication",
+        "architecture"
       ]
     },
     "severity": {

@@ -1,0 +1,16 @@
+{
+  "name": "a2a-cycle-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Fixture A2a cycle: UNICO difetto = ciclo di import src/a.ts <-> src/b.ts. Nessun dead-code, nessuna duplicazione, nessuna dir parallela. Il controllo 1 deve essere ROSSO per un blocker di categoria architecture (oracle=cycle, madge).",
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "jscpd": "^4.0.0",
+    "knip": "^6.27.0",
+    "madge": "^6.0.0",
+    "typescript": "^5.5.0"
+  }
+}

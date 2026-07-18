@@ -49,8 +49,8 @@ console.log('A) regressione modalita esistenti');
 {
   const { status, out } = run(['--json']);
   let json = null; try { json = JSON.parse(out); } catch { /* */ }
-  check('T1 --json resta valido (5 tool, exit 0)',
-    status === 0 && json && Array.isArray(json.tools) && json.tools.length === 5,
+  check('T1 --json resta valido (7 tool, exit 0)',
+    status === 0 && json && Array.isArray(json.tools) && json.tools.length === 7,
     json ? `tools=${json.tools.length} exit=${status}` : 'no JSON');
 }
 {
