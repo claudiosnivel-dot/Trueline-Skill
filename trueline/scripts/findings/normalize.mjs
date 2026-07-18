@@ -667,13 +667,24 @@ function normalizeKnip(native, ctx) {
     }
 
     // Simboli morti a livello di export/tipo/enum/namespace.
+    // Robustezza multi-major di knip: knip 6.x emette enumMembers/namespaceMembers
+    // come ARRAY; knip 5.x li emette come OGGETTO { [contenitore]: membri[] }.
+    // Normalizziamo entrambi a un array piatto (un oggetto -> Object.values().flat())
+    // cosi' l'oracolo dead-code non crolla su un target che pinna knip 5.x
+    // (coerente col floor MINIMUM_VERSIONS.knip dichiarato dal preflight).
     for (const [bucket, kind] of [
       ['exports', 'unused-export'],
       ['types', 'unused-type'],
       ['enumMembers', 'unused-enum-member'],
       ['namespaceMembers', 'unused-namespace-member'],
     ]) {
-      for (const sym of issue[bucket] || []) {
+      const raw = issue[bucket];
+      const list = Array.isArray(raw)
+        ? raw
+        : raw && typeof raw === 'object'
+          ? Object.values(raw).flat()
+          : [];
+      for (const sym of list) {
         const name = typeof sym === 'string' ? sym : sym.name;
         const line = typeof sym === 'object' ? intOr(sym.line, 0) : 0;
         out.push(
@@ -805,6 +816,118 @@ function normalizeDart(native, ctx) {
       },
       fingerprint: fingerprintOf({ oracle: 'dart', ruleId, normalizedPath, matchSignature }),
       remediation_hint: 'Rimuovere il simbolo morto (previo gate umano).',
+    }));
+  }
+  return out;
+}
+
+// --- jscpd (duplication — A2a) -----------------------------------------------
+// Nativo (da run_dupcheck.mjs): { oracle:'jscpd', minTokens, duplicates:[{
+//   firstFile:{name,startLoc,endLoc}, secondFile:{name,startLoc,endLoc}, lines,
+//   tokens, fragment }] }. category=duplication; severity=LOW (igiene, come knip).
+//   Un clone verbatim = un finding. Il fingerprint e' ANCORATO al CONTENUTO: il
+//   FRAMMENTO normalizzato (whitespace collassato) + la coppia di path
+//   canonicalizzata-e-ordinata (invariante a quale file jscpd elegge "first"):
+//   stesso blocco duplicato -> stesso fingerprint prima e dopo, MAI la riga (che
+//   jscpd sposta appena il file cambia sopra il blocco).
+function normalizeJscpd(native, ctx) {
+  const duplicates = native && Array.isArray(native.duplicates) ? native.duplicates : [];
+  const out = [];
+  for (const d of duplicates) {
+    const first = d.firstFile || {};
+    const second = d.secondFile || {};
+    const pathA = normalizePath(first.name || '', { base: ctx.base });
+    const pathB = normalizePath(second.name || '', { base: ctx.base });
+    const ruleId = 'duplicate-block';
+    const pair = [pathA, pathB].sort();
+    // Ancora di CONTENUTO: frammento normalizzato + coppia ordinata (NON la riga).
+    const frag = String(d.fragment || '').replace(/\s+/g, ' ').trim();
+    const matchSignature = [frag, pair[0], pair[1]].join('|');
+    const startLine = intOr(second.startLoc && second.startLoc.line, 0);
+    const endLine = intOr(second.endLoc && second.endLoc.line, startLine, 0);
+    out.push(baseFinding(ctx, {
+      category: 'duplication',
+      severity: 'LOW',
+      location: {
+        file: pathB || pair[0] || '(dup)',
+        start_line: startLine,
+        end_line: endLine,
+      },
+      evidence: `Blocco duplicato (${intOr(d.lines, 0)} righe, ${intOr(d.tokens, 0)} token) tra ${pair[0]} e ${pair[1]} (jscpd).`,
+      source_oracle: {
+        oracle: 'jscpd',
+        tool_version: ctx.toolVersions.jscpd,
+        rule_id: ruleId,
+      },
+      fingerprint: fingerprintOf({ oracle: 'jscpd', ruleId, normalizedPath: pair[0], matchSignature }),
+      remediation_hint: 'Estrarre il blocco duplicato in un modulo condiviso (previo gate umano).',
+    }));
+  }
+  return out;
+}
+
+// --- cycle (architecture — A2a, madge) ---------------------------------------
+// Nativo (da run_cyclecheck.mjs): { oracle:'cycle', tool:'madge', modulesScanned,
+//   cycles:[{ modules:string[] }] }. category=architecture; severity=LOW (igiene).
+//   Un ciclo di import = un finding. Il fingerprint e' ANCORATO al CONTENUTO: il
+//   SET di moduli canonicalizzato-e-ordinato (invariante alla ROTAZIONE del ciclo:
+//   a->b->a e b->a->b sono lo stesso ciclo), MAI la riga.
+function normalizeCycle(native, ctx) {
+  const cycles = native && Array.isArray(native.cycles) ? native.cycles : [];
+  const out = [];
+  for (const c of cycles) {
+    const mods = Array.isArray(c.modules) ? c.modules : [];
+    const norm = mods.map((m) => normalizePath(m, { base: ctx.base }));
+    const canon = [...norm].sort(); // set canonicalizzato -> rotazione-invariante
+    const ruleId = 'no-circular';
+    const matchSignature = canon.join('->');
+    const file = canon[0] || '(cycle)';
+    out.push(baseFinding(ctx, {
+      category: 'architecture',
+      severity: 'LOW',
+      location: { file, start_line: 0, end_line: 0 },
+      evidence: `Ciclo di import fra ${mods.length} moduli: ${norm.join(' -> ')} (madge).`,
+      source_oracle: {
+        oracle: 'cycle',
+        tool_version: ctx.toolVersions.cycle,
+        rule_id: ruleId,
+      },
+      fingerprint: fingerprintOf({ oracle: 'cycle', ruleId, normalizedPath: canon[0] || '', matchSignature }),
+      remediation_hint: 'Spezzare il ciclo di dipendenze (estrarre l\'interfaccia condivisa; previo gate umano).',
+    }));
+  }
+  return out;
+}
+
+// --- twin (architecture — A2a, detection-only) -------------------------------
+// Nativo (da twin_check.mjs): { oracle:'twin', minParallel, twins:[{ dirA, dirB,
+//   entityA, entityB, parallelFiles:string[] }] }. category=architecture; severity=
+//   LOW. Detection-only (mai gate: il chiamante esclude 'twin' dai blockers). Un
+//   sospetto clone-and-rename per-entita' = un finding. Il fingerprint e' ANCORATO
+//   al CONTENUTO: la COPPIA di directory ordinata (invariante allo scambio A/B),
+//   MAI la riga.
+function normalizeTwin(native, ctx) {
+  const twins = native && Array.isArray(native.twins) ? native.twins : [];
+  const out = [];
+  for (const t of twins) {
+    const dirA = normalizePath(t.dirA || '', { base: ctx.base });
+    const dirB = normalizePath(t.dirB || '', { base: ctx.base });
+    const pair = [dirA, dirB].sort(); // coppia-dir ordinata -> scambio-invariante
+    const ruleId = 'twin-directories';
+    const n = Array.isArray(t.parallelFiles) ? t.parallelFiles.length : 0;
+    const matchSignature = [pair[0], pair[1]].join('|');
+    out.push(baseFinding(ctx, {
+      category: 'architecture',
+      severity: 'LOW',
+      location: { file: pair[1] || pair[0] || '(twin)', start_line: 0, end_line: 0 },
+      evidence: `Directory parallele (sospetto clone-and-rename): ${pair[0]} <-> ${pair[1]} (${n} file paralleli, twin-check).`,
+      source_oracle: {
+        oracle: 'twin',
+        tool_version: ctx.toolVersions.twin,
+        rule_id: ruleId,
+      },
+      fingerprint: fingerprintOf({ oracle: 'twin', ruleId, normalizedPath: pair[0], matchSignature }),
+      remediation_hint: 'Valutare l\'astrazione delle due entita\' parallele (detection-only: nessun fix automatico).',
     }));
   }
   return out;
@@ -1167,6 +1290,18 @@ const ORACLE_ALIASES = {
   osv: 'osv',
   'osv-scanner': 'osv',
   semgrep: 'semgrep',
+  // A2a — oracoli di igiene strutturale.
+  jscpd: 'jscpd',
+  'dup-check': 'jscpd',
+  dupcheck: 'jscpd',
+  duplication: 'jscpd',
+  cycle: 'cycle',
+  'cycle-check': 'cycle',
+  cyclecheck: 'cycle',
+  madge: 'cycle',
+  twin: 'twin',
+  'twin-check': 'twin',
+  twincheck: 'twin',
 };
 
 /**
@@ -1179,7 +1314,7 @@ export function normalize(oracle, native, opts = {}) {
   const canon = ORACLE_ALIASES[String(oracle).toLowerCase()];
   if (!canon) {
     throw new Error(
-      `oracolo sconosciuto: "${oracle}" (ammessi: gitleaks, rls-check, firestore-rules, knip, vulture, go-deadcode, dart, osv, semgrep)`,
+      `oracolo sconosciuto: "${oracle}" (ammessi: gitleaks, rls-check, firestore-rules, knip, vulture, go-deadcode, dart, osv, semgrep, jscpd, cycle, twin)`,
     );
   }
   const ctx = {
@@ -1201,6 +1336,9 @@ export function normalize(oracle, native, opts = {}) {
       dart: 'dart',
       osv: 'osv-scanner',
       semgrep: 'semgrep',
+      jscpd: 'jscpd@4',
+      cycle: 'madge',
+      twin: 'twin-check@1.0.0',
       ...(opts.toolVersions || {}),
     },
   };
@@ -1231,6 +1369,12 @@ export function normalize(oracle, native, opts = {}) {
       return normalizeOsv(native, ctx);
     case 'semgrep':
       return normalizeSemgrep(native, ctx);
+    case 'jscpd':
+      return normalizeJscpd(native, ctx);
+    case 'cycle':
+      return normalizeCycle(native, ctx);
+    case 'twin':
+      return normalizeTwin(native, ctx);
     default:
       return [];
   }
