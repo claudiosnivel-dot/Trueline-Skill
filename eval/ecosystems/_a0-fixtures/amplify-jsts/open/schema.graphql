@@ -1,0 +1,6 @@
+# SEED authz open — @auth public: accesso pubblico incondizionato via AppSync.
+type PublicPost @model @auth(rules: [{ allow: public }]) {
+  id: ID!
+  title: String!
+  content: String
+}

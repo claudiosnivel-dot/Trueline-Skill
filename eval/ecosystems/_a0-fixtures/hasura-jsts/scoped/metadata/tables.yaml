@@ -1,0 +1,13 @@
+# CONTRASTO PULITO — sola permission owner-scoped (nessun ruolo pubblico).
+- table:
+    name: private_docs
+    schema: public
+  select_permissions:
+    - role: user
+      permission:
+        columns:
+          - id
+          - content
+        filter:
+          user_id:
+            _eq: X-Hasura-User-Id

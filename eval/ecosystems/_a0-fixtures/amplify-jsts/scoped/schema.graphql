@@ -1,0 +1,6 @@
+# CONTRASTO PULITO — @auth owner: accesso ristretto al proprietario.
+type PrivateNote @model @auth(rules: [{ allow: owner }]) {
+  id: ID!
+  note: String!
+  owner: String
+}

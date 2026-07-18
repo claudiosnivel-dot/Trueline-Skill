@@ -1,0 +1,20 @@
+{
+  "projectId": "a0-appwrite-scoped",
+  "collections": [
+    {
+      "$id": "private_data",
+      "name": "Private Data",
+      "documentSecurity": true,
+      "$permissions": [
+        "read(\"users\")",
+        "create(\"users\")",
+        "update(\"users\")",
+        "delete(\"users\")"
+      ],
+      "attributes": [
+        { "key": "ownerId", "type": "string", "size": 36, "required": true }
+      ],
+      "indexes": []
+    }
+  ]
+}

@@ -41,6 +41,7 @@ import {
   control2CategoriesFrom,
 } from './thresholds.mjs';
 import { classify, loadManifest } from '../ecosystem/resolve.mjs';
+import { AUTHZ_ORACLES, AUTHZ_TOOL_NAMES, runAuthzOracle } from '../oracles/authz_oracles.mjs';
 import { loadTasks } from '../blueprint/blueprint_tasks.mjs';
 import { runTargetFile } from './run_file.mjs';
 import { assertionTrace } from '../blueprint/ac_assertion_trace_check.mjs';
@@ -146,6 +147,7 @@ export function control2Security(referenceApp, { baseline = new Set(), runOpts, 
   const all = [];
   const sub = [];
   const notes = [];
+  const bindingByTool = new Map(); // tool authz -> binding del manifest (per lo scan)
 
   // --- Per-tool runner (un oracolo nominato) ---------------------------------
   // Ogni tool sa come invocare il proprio wrapper, con quale `oracle`/`scope`
@@ -153,6 +155,18 @@ export function control2Security(referenceApp, { baseline = new Set(), runOpts, 
   // nota, MAI falso verde — L-COL-006/L-COL-002) o HARD (errore di sicurezza).
   // Ritorna { fatal, note } — fatal => secErr immediato; note => degradato.
   function runTool(tool) {
+    // authz dichiarativa (A0): esegue l'oracolo authz del manifest e normalizza a
+    // 'authz'. Se lo script c'e' ma non produce finding -> contrasto pulito (verde
+    // legittimo). Se NON gira (assente/JSON rotto) -> degrado; il chiamante decide
+    // se e' un floor-miss (T4). Il campo `ranFail` e' inerte finche' T4 non lo consuma.
+    if (AUTHZ_TOOL_NAMES.has(tool)) {
+      const b = bindingByTool.get(tool);
+      const a = runAuthzOracle(tool, referenceApp, b, runOpts);
+      if (!a.ran) return { note: ` (${tool}: oracolo authz non eseguito, degradato — ${a.detail})`, ranFail: true };
+      if (!a.ok) return { fatal: secErr(`authz ${tool}`, a.detail) };
+      all.push(...a.findings); sub.push(`${AUTHZ_ORACLES[tool].normalizeKey}:${a.findings.length}`);
+      return {};
+    }
     switch (tool) {
       // gitleaks working-tree (scope BUILD; S1 vive qui). cwd = referenceApp per
       // allineare i path normalizzati (e quindi i fingerprint) a collectFindings
@@ -179,11 +193,11 @@ export function control2Security(referenceApp, { baseline = new Set(), runOpts, 
       // falsifichiamo il verde, ma lo dichiariamo degradato per osv (la fixture
       // M-1 NON ha CVE seminate, vedi run_osv §smoke). Gated da `withOsv`.
       case 'osv': {
-        if (!withOsv || !existsSync(RUN_OSV) || !existsSync(lockfile)) return {};
+        if (!withOsv || !existsSync(RUN_OSV) || !existsSync(lockfile)) return {}; // GATED-OFF: nessun ranFail (T4: mai floorMiss)
         const o = runOracle(RUN_OSV, [lockfile], referenceApp);
-        if (!o.ok) return { note: ' (osv: non eseguibile offline, degradato)' };
+        if (!o.ok) return { note: ' (osv: non eseguibile offline, degradato)', ranFail: true };
         const n = normFindings('osv', o.json, { ...runOpts, scope: 'deps' });
-        if (!n.ok) return { note: ' (osv: output non normalizzabile, degradato)' };
+        if (!n.ok) return { note: ' (osv: output non normalizzabile, degradato)', ranFail: true };
         all.push(...n.findings); sub.push(`osv:${n.findings.length}`);
         return {};
       }
@@ -196,21 +210,26 @@ export function control2Security(referenceApp, { baseline = new Set(), runOpts, 
       // "eval/reference-app") coincide con gitleaks/rls: fingerprint coerenti col
       // baseline-delta.
       case 'semgrep': {
-        if (!existsSync(RUN_SEMGREP)) return { note: ' (semgrep: wrapper assente, degradato)' };
+        // semgrep richiesto ma non eseguito -> ranFail (T4): declassa SOLO se semgrep
+        // e' un tool di FLOOR per l'ecosistema (per supabase-jsts authz/injection NON
+        // sono floor -> floorTools.has('semgrep')===false -> nessun floorMiss: m5 intatto).
+        if (!existsSync(RUN_SEMGREP)) return { note: ' (semgrep: wrapper assente, degradato)', ranFail: true };
         const s = runOracle(RUN_SEMGREP, [referenceApp], referenceApp);
         if (!(s.ok && s.json && Array.isArray(s.json.results))) {
           // docker assente / immagine non pinnata / JSON non valido: DEGRADATO.
-          return { note: ` (semgrep: oracolo non disponibile via docker, degradato — ${s.detail})` };
+          return { note: ` (semgrep: oracolo non disponibile via docker, degradato — ${s.detail})`, ranFail: true };
         }
         const n = normFindings('semgrep', s.json, { ...runOpts, scope: 'working-tree' });
-        if (!n.ok) return { note: ` (semgrep: output non normalizzabile, degradato — ${n.detail})` };
+        if (!n.ok) return { note: ` (semgrep: output non normalizzabile, degradato — ${n.detail})`, ranFail: true };
         all.push(...n.findings); sub.push(`semgrep:${n.findings.length}`);
         return {};
       }
       default:
         // tool sconosciuto: lo SALTIAMO DICHIARANDO (mai falso verde). Il gate di
         // conformita (Fase D) coglie un manifest che nomina un tool senza wrapper.
-        return { note: ` (${tool}: tool sconosciuto, saltato — DICHIARATO, mai falso verde)` };
+        // ranFail (T4): un tool DICHIARATO ma non eseguibile e' un oracolo non-eseguito;
+        // se la sua categoria e' nel FLOOR declassa il controllo 2 (L-COL-006).
+        return { note: ` (${tool}: tool sconosciuto, saltato — DICHIARATO, mai falso verde)`, ranFail: true };
     }
   }
 
@@ -233,7 +252,10 @@ export function control2Security(referenceApp, { baseline = new Set(), runOpts, 
       // knip e' il controllo 1 (dead-code), non il 2: NON entra nel controllo
       // sicurezza. Ogni altro tool noto/ignoto passa per runTool (dedup per tool).
       if (t === 'knip') continue;
-      const wrapper = toWrapper[t] || t; // ignoto: runTool lo dichiara saltato.
+      // Gli oracoli authz dichiarativi (A0) hanno il tool come proprio wrapper e
+      // portano un binding (scan) che runTool consuma via bindingByTool.
+      const wrapper = AUTHZ_TOOL_NAMES.has(t) ? t : (toWrapper[t] || t); // ignoto: runTool lo dichiara saltato.
+      if (AUTHZ_TOOL_NAMES.has(t)) bindingByTool.set(t, b);
       if (seen.has(wrapper)) continue;
       seen.add(wrapper);
       tools.push(wrapper);
@@ -244,18 +266,47 @@ export function control2Security(referenceApp, { baseline = new Set(), runOpts, 
     gateCategories = CONTROL2_GATE_CATEGORIES;
   }
 
+  // --- Rete strutturale (T4): tool che servono una categoria di FLOOR ----------
+  // Un oracolo la cui categoria e' nel `manifest.floor` e che e' RICHIESTO ma NON
+  // parte (ranFail) declassa il controllo 2 a degraded/green:false (L-COL-006).
+  // CONFINE (BIT-invarianza m5): solo i tool di FLOOR. osv gated-off ritorna {}
+  // (nessun ranFail); un best-effort detection-only FUORI floor (es. semgrep per
+  // supabase-jsts) degrada con nota ma NON e' in floorTools -> nessun declassamento.
+  // Solo ramo manifest-driven: senza manifest floorTools resta vuoto (legacy intatto).
+  const floorCats = new Set((manifest && Array.isArray(manifest.floor)) ? manifest.floor : []);
+  const floorTools = new Set();
+  if (manifest && manifest.oracles) {
+    for (const [key, b] of Object.entries(manifest.oracles)) {
+      const cats = key.split('|').map((c) => c.trim());
+      if (b && b.tool && cats.some((c) => floorCats.has(c))) floorTools.add(b.tool);
+    }
+  }
+
+  let floorMiss = null;
   for (const t of tools) {
     const r = runTool(t);
     if (r.fatal) return r.fatal;
     if (r.note) notes.push(r.note);
+    if (r.ranFail && floorTools.has(t)) floorMiss = floorMiss || t; // primo oracolo di floor non eseguito
   }
 
   // gateCategories: secret/rls (verificato-a-zero) PIU' le detection-blocking
   // injection/authz (M4). Un NUOVO finding semgrep injection/authz sopra soglia
   // BLOCCA; un S6/S7 PRE-ESISTENTE (gia' in baseline) no.
   const blockers = deltaBlockers(all, baseline, { deadcode: false, gateCategories });
-  const green = blockers.length === 0;
   const noteStr = notes.join('');
+  if (floorMiss && blockers.length === 0) {
+    // un oracolo di FLOOR non e' stato eseguito: NON e' verde (L-COL-006). Come i
+    // controlli 3/4, degradato -> il checkpoint d'insieme non e' verde. (Se ci sono
+    // blockers reali, il rosso vince: un difetto TROVATO e' piu' informativo di
+    // "non eseguito" -> cade al ramo red sotto.)
+    return {
+      id: 2, name: 'security', status: 'degraded', green: false,
+      detail: `oracolo di floor non eseguito: ${floorMiss} — controllo DEGRADATO, NON verde${noteStr}`,
+      findings: all, blockers: [],
+    };
+  }
+  const green = blockers.length === 0;
   return {
     id: 2, name: 'security', status: green ? 'green' : 'red', green,
     detail: green

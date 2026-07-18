@@ -48,6 +48,7 @@ import {
   createWorkBranch, decideMerge, requestDestructive, currentBranch, commitOnBranch,
 } from '../git/layered_git.mjs';
 import { classify, loadManifest } from '../ecosystem/resolve.mjs';
+import { AUTHZ_ORACLES, runAuthzOracle } from '../oracles/authz_oracles.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -90,8 +91,9 @@ const RUN_GITLEAKS = resolve(ORACLES, 'run_gitleaks.mjs');
 const RLS_CHECK = resolve(ORACLES, 'rls_check.mjs');
 const RUN_DEADCODE = resolve(ORACLES, 'run_deadcode.mjs');
 const RUN_SEMGREP = resolve(ORACLES, 'run_semgrep.mjs');
-// authz Firestore (SP-8): oracolo statico delle Security Rules (riuso SP-5).
-const FIRESTORE_RULES_CHECK = resolve(ORACLES, 'firestore_rules_check.mjs');
+// authz dichiarativa (A0): l'oracolo authz non e' piu' cablato qui (era
+// FIRESTORE_RULES_CHECK, SP-8) — collectFindings lo risolve dal manifest via la
+// sorgente unica ../oracles/authz_oracles.mjs (runAuthzOracle), default firestore.
 const GO_BIN = process.platform === 'win32' ? 'C:/Users/claud/go/bin' : '/c/Users/claud/go/bin';
 
 const RUN_OPTS = { runId: 'loop-session', createdAt: '1970-01-01T00:00:00.000Z' };
@@ -131,7 +133,7 @@ function norm(oracle, json, scope) {
 // docker): se l'oracolo non gira, i suoi finding semplicemente non entrano nella
 // baseline e il checkpoint li tratterebbe come nuovi — ma quello stesso checkpoint
 // dichiarerebbe semgrep DEGRADATO (oracolo assente), coerente con L-COL-006.
-function collectFindings(dir) {
+function collectFindings(dir, manifest = null) {
   const findings = [];
   const migrations = resolve(dir, 'supabase', 'migrations');
 
@@ -147,14 +149,22 @@ function collectFindings(dir) {
   const dc = runOracle(RUN_DEADCODE, [dir], dir);
   if (dc.ok) findings.push(...norm('knip', dc.json, 'working-tree'));
 
-  // authz Firestore (SP-8): firestore_rules_check cammina `dir` per firestore.rules
-  // e ne emette i rilievi (category 'authz'). Additivo: senza firestore.rules nella
-  // copia l'oracolo non emette finding -> baseline/scope BIT-invarianti per i pack
-  // non-Firestore. Prova STATICA (no emulatore, L-COL-006).
-  const fr = runOracle(FIRESTORE_RULES_CHECK, [dir], dir);
-  if (fr.ok && fr.json && Array.isArray(fr.json.findings)) {
-    findings.push(...norm('firestore-rules', fr.json, 'working-tree'));
-  }
+  // authz dichiarativa (A0): esegue l'oracolo authz del MANIFEST attivo — non piu'
+  // solo Firestore — cosi' la baseline pre-fix ha un finding authz su cui il loop
+  // (rerunOracleFor) puo' girare anche sui 4 backend non-Firebase (chiude il buco
+  // end-to-end REMEDIATE). Il binding authz-surface e' individuato per ruolo E per
+  // presenza in AUTHZ_ORACLES (il guard AUTHZ_ORACLES[b.tool] scarta le authz-surface
+  // NON dichiarative, es. rls_check di supabase-jsts -> resta firestore default ->
+  // BIT-invariante per Supabase e per il ramo senza manifest). runAuthzOracle e' la
+  // sorgente UNICA condivisa col checkpoint e con loop.mjs::rerunOracleFor (stesso
+  // normalize/fingerprint, parita' verificata su hasura). Prova STATICA (L-COL-006).
+  // NB: usa RUN_OPTS deterministici (gli stessi di norm()) per fingerprint stabili.
+  const authzBinding = manifest && manifest.oracles
+    ? Object.values(manifest.oracles).find((b) => b && b.role === 'authz-surface' && AUTHZ_ORACLES[b.tool])
+    : null;
+  const authzTool = authzBinding ? authzBinding.tool : 'firestore_rules_check';
+  const a = runAuthzOracle(authzTool, dir, authzBinding || {}, RUN_OPTS);
+  if (a.ok) findings.push(...a.findings);
 
   // semgrep (M4, 07 §4): pattern vietati injection/authz (S6/S7), detection-only.
   // Collezionati SOLO per la baseline pre-fix (non per il loop): cosi' il checkpoint
@@ -354,7 +364,7 @@ async function main() {
     const activeId = classify(ws.dir);
     const manifest = activeId ? loadManifest(activeId) : null;
     report.ecosystem = activeId;
-    const all = collectFindings(ws.dir);
+    const all = collectFindings(ws.dir, manifest);
 
     // BUILD-DISCIPLINE (BD-1, EVAL-ONLY): col fixture-app la copia E' l'artefatto
     // POST-COSTRUZIONE da GIUDICARE, non un repo da bonificare. Quindi:

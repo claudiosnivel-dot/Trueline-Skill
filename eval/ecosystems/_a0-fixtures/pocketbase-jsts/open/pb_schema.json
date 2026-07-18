@@ -1,0 +1,15 @@
+[
+  {
+    "id": "pbc_posts",
+    "name": "posts",
+    "type": "base",
+    "listRule": "",
+    "viewRule": null,
+    "createRule": "@request.auth.id != \"\"",
+    "updateRule": null,
+    "deleteRule": null,
+    "schema": [
+      { "id": "fld_posts_title", "name": "title", "type": "text", "required": true }
+    ]
+  }
+]

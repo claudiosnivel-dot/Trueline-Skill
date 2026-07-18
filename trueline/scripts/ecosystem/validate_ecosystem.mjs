@@ -29,6 +29,16 @@ export function validateEcosystem(m) {
   const oracleKeys = new Set();
   for (const key of Object.keys(m.oracles)) for (const cat of key.split('|')) oracleKeys.add(cat.trim());
 
+  // (1bis) vocabolario categorie: ogni chiave-categoria deve essere nell'enum
+  // chiuso di finding.schema.json (A0). Un refuso (es. "injecton") non deve
+  // passare silenzioso e far cadere la categoria dal gate a valle (L-COL-006).
+  const CATEGORY_ENUM = new Set([
+    'secret','rls','dead-code','injection','authz','crypto','dependency-vuln','config','misc',
+  ]);
+  for (const c of oracleKeys) {
+    if (!CATEGORY_ENUM.has(c)) errors.push(`categoria oracolo fuori vocabolario (finding.schema.json): "${c}"`);
+  }
+
   // (5) ogni binding ha un tool non vuoto
   for (const [key, b] of Object.entries(m.oracles)) {
     if (!b || !nonEmptyStr(b.tool)) errors.push(`binding "${key}" senza tool`);
