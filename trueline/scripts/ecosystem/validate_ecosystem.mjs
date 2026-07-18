@@ -34,6 +34,7 @@ export function validateEcosystem(m) {
   // passare silenzioso e far cadere la categoria dal gate a valle (L-COL-006).
   const CATEGORY_ENUM = new Set([
     'secret','rls','dead-code','injection','authz','crypto','dependency-vuln','config','misc',
+    'duplication','architecture',
   ]);
   for (const c of oracleKeys) {
     if (!CATEGORY_ENUM.has(c)) errors.push(`categoria oracolo fuori vocabolario (finding.schema.json): "${c}"`);
