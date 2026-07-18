@@ -23,6 +23,21 @@
 
 ---
 
+## AGGIORNAMENTO in build (ondata 1 — leggere PRIMA di T3/T4/T5)
+
+`cycle_check` **non usa più `dependency-cruiser`** (ispezionava 0 moduli sui `.ts` reali su
+Node 25) ma **`madge`** (grafo import) + un DFS custom nel wrapper. Conseguenze per i task
+rimanenti — la **fonte di verità è il codice già committato** (`run_cyclecheck.mjs` emette
+`{oracle:'cycle', tool:'madge', modulesScanned, cycles:[{modules}]}`):
+- **T3:** il normalizer si chiama **`normalizeCycle`**, il `case` è **`'cycle'`** (non
+  `'depcruise'`), `source_oracle.oracle = 'cycle'`. Tutto il resto invariato.
+- **T4:** `control1Hygiene` fa `normFindings('cycle', …)` per il ramo architecture.
+- **T5:** il keystone `cycle:red` controlla `source_oracle.oracle === 'cycle'`; il preflight
+  installa **`madge`** (non `dependency-cruiser`) accanto a `jscpd`.
+- **File structure:** niente `depcruise-config/` (rimossa; madge non ha config).
+
+---
+
 ## File Structure
 
 **Creati:**

@@ -89,19 +89,27 @@ rename-aware (nessun tool deterministico disponibile).
 
 ### 3.2 `cycle_check` — cicli di import (GATE delta)
 
-- **Tool:** `dependency-cruiser` (preflight project-local). Verificato 16.10.4 su Node 25
-  (engine warning non bloccante; JSON valido con `modules` + `summary.violations`).
-- **Wrapper:** `trueline/scripts/oracles/run_cyclecheck.mjs` — esegue `depcruise <dir>
-  --output-type json` con una **config vendorizzata** che attiva la sola regola `no-circular`
-  (`trueline/references/oracles/depcruise-config/no-circular.cjs`, version-pinned come il
-  ruleset Semgrep). Legge `summary.violations` filtrando `rule.name==='no-circular'`.
-- **Normalize:** `normalizeDepcruise` → `category:'architecture'`, `severity:LOW`. Un finding
-  per ciclo; **fingerprint** = `sha256(oracle | 'cycle' | set-di-moduli-canonicalizzato)` — il
-  ciclo A→B→A ha lo stesso fingerprint indipendentemente dal modulo di partenza.
+> **Aggiornamento in build (verificato sul reale):** `dependency-cruiser` ispezionava **0
+> moduli** sui `.ts` di un progetto Vite reale (ASV) su Node 25, dopo 5 configurazioni — non
+> risolveva il TypeScript. **Sostituito con `madge`**, che costruisce il grafo degli import
+> parsando i TS (verificato: trova il ciclo `["a.ts","b.ts"]` in fixture, 0 su DAG pulito, e
+> ispeziona ASV). Il tool fornisce **solo il grafo**; i cicli li calcola il wrapper con un DFS
+> deterministico (sotto il nostro controllo). L'oracolo emette `oracle:'cycle'`.
+
+- **Tool:** `madge` (preflight project-local o npx). Costruisce il grafo import (`--json`,
+  parser TS integrato) — la parte difficile; nessuna config vendorizzata necessaria.
+- **Wrapper:** `trueline/scripts/oracles/run_cyclecheck.mjs` — esegue `madge --json
+  --extensions ts,tsx,js,jsx,mjs,cjs <src|.>`, ottiene il grafo `{file:[deps]}`, e trova i
+  **cicli con un DFS** (rilevamento di back-edge sullo stack, dedup per set di nodi). Grafo
+  vuoto (0 moduli) → exit 1 **dichiarato** (mai `{cycles:[]}` nudo, `L-COL-006`).
+- **Normalize:** `normalizeCycle` → `category:'architecture'`, `severity:LOW`,
+  `source_oracle.oracle='cycle'`. Un finding per ciclo; **fingerprint** = `sha256(oracle |
+  'cycle' | set-di-moduli-canonicalizzato)` — il ciclo A→B→A ha lo stesso fingerprint
+  indipendentemente dal modulo di partenza.
 - **Gate:** controllo 1, delta (solo cicli NUOVI), LOW. Un ciclo è **convenzione-difetto**,
   mai gate assoluto → **solo delta**; su brownfield usare la baseline per il debito.
-- **Testimone:** il path del ciclo emesso da dependency-cruiser (l'umano lo segue import per
-  import).
+- **Testimone:** il path del ciclo (lista di moduli) emesso nel finding (l'umano lo segue
+  import per import).
 
 ### 3.3 `twin_check` — twinning per-entità (DETECTION-ONLY, mai gate)
 
