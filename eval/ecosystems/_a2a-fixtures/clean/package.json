@@ -1,0 +1,16 @@
+{
+  "name": "a2a-clean-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Fixture A2a clean (contrasto): nessuna duplicazione verbatim, nessun ciclo di import, nessuna dir parallela, nessun dead-code. Il controllo 1 deve essere interamente VERDE (nessun blocker d'igiene).",
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "jscpd": "^4.0.0",
+    "knip": "^6.27.0",
+    "madge": "^6.0.0",
+    "typescript": "^5.5.0"
+  }
+}

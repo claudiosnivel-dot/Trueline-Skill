@@ -1,0 +1,16 @@
+{
+  "name": "a2a-twin-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Fixture A2a twin: due dir sorelle src/commesse e src/preventivi con >=3 file paralleli (clone-and-rename per-entita'). Nessun dead-code, nessuna duplicazione verbatim >=50 token, nessun ciclo. Il controllo 1 deve restare VERDE (twin e' detection-only, mai gate) MA emettere >=1 finding twin.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "jscpd": "^4.0.0",
+    "knip": "^6.27.0",
+    "madge": "^6.0.0",
+    "typescript": "^5.5.0"
+  }
+}

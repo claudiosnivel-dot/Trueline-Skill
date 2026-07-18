@@ -1,0 +1,16 @@
+{
+  "name": "a2a-dup-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Fixture A2a dup: UNICO difetto = un blocco verbatim >=50 token duplicato fra src/a.ts e src/b.ts. Nessun dead-code, nessun ciclo, nessuna dir parallela. Il controllo 1 deve essere ROSSO per un blocker di categoria duplication (jscpd).",
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "jscpd": "^4.0.0",
+    "knip": "^6.27.0",
+    "madge": "^6.0.0",
+    "typescript": "^5.5.0"
+  }
+}

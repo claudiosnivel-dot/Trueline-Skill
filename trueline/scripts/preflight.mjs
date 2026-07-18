@@ -136,11 +136,16 @@ const ENV_WITH_GOBIN = {
 //   gitleaks 8.18.0 → --report-path - (stdout) + subcomando git per la history.
 //   osv-scanner 1.6.0 → sottocomando "scan" + --lockfile relativo.
 //   knip     5.0.0  → --reporter json stabile.
+//   jscpd    4.0.0  → --reporters json + --min-tokens stabile (A2a dup_check).
+//   madge    6.0.0  → --json (grafo import) stabile su .ts/.tsx (A2a cycle_check).
 const MINIMUM_VERSIONS = {
   semgrep: [1, 60, 0],
   gitleaks: [8, 18, 0],
   'osv-scanner': [1, 6, 0],
-  knip: [5, 0, 0],
+  knip: [6, 0, 0], // knip 5.x emette enumMembers/namespaceMembers come OGGETTO (non array);
+                   // normalizeKnip itera assumendo array -> il floor reale e' knip 6 (reference-app: 6.16.1).
+  jscpd: [4, 0, 0],
+  madge: [6, 0, 0],
 };
 
 // --- Versioni PINNATE ESATTE per i binary-release scaricabili ----------------
@@ -583,9 +588,33 @@ function suggestInstall(toolName) {
       return { installable: false, channel: 'none', cmd: null };
     }
 
+    // jscpd/madge (A2a — igiene strutturale) sono devDependency project-local come
+    // knip: stesso canale npm/pnpm/yarn --save-dev. jscpd/madge si risolvono anche
+    // via la cache di npx (i wrapper hanno il fallback), ma la proposta d'install
+    // resta project-local per un ambiente deterministico.
+    case 'jscpd':
+      return npmDevInstall('jscpd');
+    case 'madge':
+      return npmDevInstall('madge');
+
     default:
       return { installable: false, channel: 'none', cmd: null };
   }
+}
+
+// Proposta d'install project-local di un pacchetto npm (devDependency), col primo
+// package manager disponibile. Mirror del ramo knip di suggestInstall.
+function npmDevInstall(pkg) {
+  if (runCmd('npm', ['--version']).ok) {
+    return { installable: true, channel: 'npm', cmd: `npm install --save-dev ${pkg}  # nella directory del progetto target` };
+  }
+  if (runCmd('pnpm', ['--version']).ok) {
+    return { installable: true, channel: 'pnpm', cmd: `pnpm add --save-dev ${pkg}  # nella directory del progetto target` };
+  }
+  if (runCmd('yarn', ['--version']).ok) {
+    return { installable: true, channel: 'yarn', cmd: `yarn add --dev ${pkg}  # nella directory del progetto target` };
+  }
+  return { installable: false, channel: 'none', cmd: null };
 }
 
 // --- Costruttore del risultato strutturato -----------------------------------
@@ -803,6 +832,40 @@ function detectKnip(simMissing, projectDir) {
   return buildResult(tool, 'npx', false, null, false, suggestInstall(tool));
 }
 
+// jscpd/madge (A2a) — devDependency project-local nel node_modules del progetto
+// target, come knip. La versione si legge da <dir>/node_modules/<tool>/package.json
+// (piu' veloce e senza eseguire il tool). Assente -> missing installabile via
+// npm i -D. NB: i wrapper run_dupcheck/run_cyclecheck hanno anche un fallback via
+// la cache di npx, quindi l'assenza del node_modules NON e' fatale a runtime; il
+// preflight la dichiara comunque (mai un verde finto, L-COL-006).
+function detectProjectNpmTool(tool, simMissing, projectDir) {
+  const min = MINIMUM_VERSIONS[tool];
+
+  if (simMissing) {
+    return buildResult(tool, 'npx', false, null, false, suggestInstall(tool));
+  }
+
+  const searchDirs = [
+    projectDir ? resolve(projectDir) : null,
+    process.cwd(),
+  ].filter(Boolean);
+
+  for (const dir of searchDirs) {
+    const pkgJson = join(dir, 'node_modules', tool, 'package.json');
+    if (!existsSync(pkgJson)) continue;
+    let parsed = null;
+    try {
+      parsed = parseVersion(String(JSON.parse(readFileSync(pkgJson, 'utf8')).version || ''));
+    } catch {
+      // best-effort
+    }
+    const vOk = versionAtLeast(parsed, min);
+    return buildResult(tool, 'npx', true, parsed, vOk, suggestInstall(tool));
+  }
+
+  return buildResult(tool, 'npx', false, null, false, suggestInstall(tool));
+}
+
 // --- rls_check: sempre disponibile, nessuna dipendenza esterna ---------------
 const RLS_CHECK_ENTRY = {
   tool: 'rls_check',
@@ -971,6 +1034,8 @@ async function main() {
     detectGitleaks(SIMULATE_MISSING === 'gitleaks'),
     detectOsvScanner(SIMULATE_MISSING === 'osv-scanner'),
     detectKnip(SIMULATE_MISSING === 'knip', PROJECT_DIR_ARG),
+    detectProjectNpmTool('jscpd', SIMULATE_MISSING === 'jscpd', PROJECT_DIR_ARG),
+    detectProjectNpmTool('madge', SIMULATE_MISSING === 'madge', PROJECT_DIR_ARG),
     RLS_CHECK_ENTRY,
   ];
 
