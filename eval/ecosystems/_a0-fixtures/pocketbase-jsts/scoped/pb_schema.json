@@ -1,0 +1,15 @@
+[
+  {
+    "id": "pbc_user_items",
+    "name": "user_items",
+    "type": "base",
+    "listRule": "@request.auth.id != \"\"",
+    "viewRule": "@request.auth.id != \"\"",
+    "createRule": "@request.auth.id != \"\"",
+    "updateRule": "@request.auth.id != \"\"",
+    "deleteRule": "@request.auth.id != \"\"",
+    "schema": [
+      { "id": "fld_ui_owner", "name": "owner", "type": "text", "required": true }
+    ]
+  }
+]

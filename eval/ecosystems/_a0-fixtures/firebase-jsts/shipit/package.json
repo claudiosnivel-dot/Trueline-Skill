@@ -1,0 +1,14 @@
+{
+  "name": "a0-firebase-jsts-shipit",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Fixture ship-it A0: unico difetto = firestore.rules allow if true. Nessun secret, nessun dead-code, un test node:test verde. Serve a dimostrare che PRE-FIX l'intero checkpoint e' VERDE col buco authz.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "knip": "6.16.1",
+    "typescript": "^5.5.0"
+  }
+}

@@ -1,0 +1,7 @@
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /public_notes/{noteId} {
+      allow read, write: if true;   // difetto authz — l'UNICO
+    }
+  }
+}

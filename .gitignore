@@ -17,3 +17,9 @@ eval/build-discipline/*/reference-app/
 # npm install) provvigionati dall'orchestratore -> gitignorate. I seeded-blueprint/ restano
 # TRACKED (sono il materiale di gate del fixture).
 eval/anti-tamper/*/reference-app/
+
+# A0: fixture del gate authz (control2 falso verde). I SORGENTI (open/scoped/shipit/_structural)
+# sono materiale di gate -> TRACKED. Gli inner .git e i node_modules sono provvigionati a
+# runtime dall'orchestratore (provision_fixtures.sh + npm install) -> gitignorati.
+eval/ecosystems/_a0-fixtures/**/.git/
+eval/ecosystems/_a0-fixtures/**/node_modules/

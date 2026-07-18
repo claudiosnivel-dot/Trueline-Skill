@@ -1,0 +1,18 @@
+{
+  "projectId": "a0-appwrite-open",
+  "collections": [
+    {
+      "$id": "public_posts",
+      "name": "Public Posts",
+      "documentSecurity": false,
+      "$permissions": [
+        "read(\"any\")",
+        "create(\"users\")"
+      ],
+      "attributes": [
+        { "key": "title", "type": "string", "size": 256, "required": true }
+      ],
+      "indexes": []
+    }
+  ]
+}
