@@ -20,6 +20,25 @@
 | `{{module_file}}` | `{{macrotask_name}}` | {{macrotask_summary}} |
 <!-- una riga per macrotask -->
 
+## 1bis. Contratto di altitudine (opzionale — abilita `arch_check` in BUILD)
+
+Dichiara gli **strati** dell'architettura e le dipendenze **vietate** fra strati.
+Se presente, `validate_blueprint` ne valida la forma e in BUILD `arch_check`
+verifica le regole contro il grafo import reale (madge) come **gate assoluto** —
+con vacuity guard obbligatorio (`atomic-task-schema.md`). Omettilo se non vuoi il
+gate di altitudine. Selettori glob repo-relative; `mode` opzionale (default
+`transitive`); `allow` = eccezioni accettate e audite (mai silenziose).
+
+```yaml
+architecture:
+  layers:
+    {{layer_name}}: "{{layer_glob}}"       # es. ui: "src/ui/**"
+  forbidden:
+    - { from: {{from_layer}}, to: {{to_layer}} }   # es. { from: ui, to: data }
+  # allow:
+  #   - { from: ui, to: data, module: "src/ui/Legacy.tsx", note: "TICKET-123" }
+```
+
 ## 2. Piano di build (ordine dei macrotask)
 
 Ordine derivato dal DAG dei task (`depends_on`):
