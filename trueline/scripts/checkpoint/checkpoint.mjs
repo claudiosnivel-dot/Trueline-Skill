@@ -45,6 +45,7 @@ import { AUTHZ_ORACLES, AUTHZ_TOOL_NAMES, runAuthzOracle } from '../oracles/auth
 import { loadTasks } from '../blueprint/blueprint_tasks.mjs';
 import { runTargetFile } from './run_file.mjs';
 import { assertionTrace } from '../blueprint/ac_assertion_trace_check.mjs';
+import { loadArchContract } from '../blueprint/arch_contract.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..', '..', '..');
@@ -58,6 +59,7 @@ const RUN_SEMGREP = resolve(ORACLES, 'run_semgrep.mjs');
 const RUN_DUPCHECK = resolve(ORACLES, 'run_dupcheck.mjs');
 const RUN_CYCLECHECK = resolve(ORACLES, 'run_cyclecheck.mjs');
 const TWIN_CHECK = resolve(ORACLES, 'twin_check.mjs');
+const ARCH_CHECK = resolve(ORACLES, 'arch_check.mjs');
 
 // Oracoli DETECTION-ONLY (L-COL-030): segnalano un FATTO strutturale ma non
 // gata-no MAI il verdetto. L'esclusione e' PER-ORACOLO, non per-categoria: `cycle`
@@ -66,6 +68,11 @@ const TWIN_CHECK = resolve(ORACLES, 'twin_check.mjs');
 // fix-provider deterministico spedito -> nessun oracolo di igiene oltre dead-code/
 // dup/cycle gata; twin resta fuori dai blockers.
 const DETECTION_ONLY_ORACLES = new Set(['twin']);
+
+// Oracoli a GATE ASSOLUTO (A2b): un contratto DICHIARATO dall'utente (arch_check)
+// blocca SEMPRE, non solo sul delta — come rls (USING(true) non si grandfather-a).
+// I loro finding bypassano il filtro baseline in partitionBlockers.
+const ABSOLUTE_GATE_ORACLES = new Set(['arch']);
 
 // Tool cablati al CONTROLLO 1 (igiene strutturale). Sono guidati dallo STESSO
 // manifest.oracles del controllo 2 (dopo A2a: duplication/architecture vi sono
@@ -159,19 +166,40 @@ function deltaBlockers(findings, baseline, { deadcode = false, gateCategories = 
 export function partitionBlockers(findings, baseline) {
   const out = [];
   for (const f of findings) {
+    const oracle = f.source_oracle && f.source_oracle.oracle;
+    const absolute = ABSOLUTE_GATE_ORACLES.has(oracle);
     const isNew = !baseline.has(f.fingerprint);
     f.baseline_status = isNew ? 'new' : 'pre-existing';
-    if (!isNew) continue; // pre-esistente: segnalato, non blocca (04 §6)
-    const oracle = f.source_oracle && f.source_oracle.oracle;
-    if (DETECTION_ONLY_ORACLES.has(oracle)) continue; // detection-only: segnale, mai gate
+    // Eccezione audita (L-COL-028): riportata, MAI un blocker.
+    if (f.fix_state === 'accepted-risk') continue;
+    // Delta: i pre-esistenti non bloccano — TRANNE gli oracoli a gate ASSOLUTO (arch).
+    if (!isNew && !absolute) continue;
+    // Detection-only (twin): segnale, mai gate.
+    if (DETECTION_ONLY_ORACLES.has(oracle)) continue;
     out.push(f);
   }
   return out;
 }
 
-export function control1Hygiene(referenceApp, { baseline = new Set(), runOpts, manifest = null }) {
+// A2b — attivazione di arch_check: BUILD + blueprint con contratto + ecosistema
+// graph-capable (JS/TS: il grafo import è un concetto JS/TS). Fuori da queste
+// condizioni il ramo NON esiste -> controllo 1 byte-identico (BIT-invarianza).
+function graphCapable(manifest) {
+  const langs = (manifest && manifest.languages) || [];
+  return langs.includes('js') || langs.includes('ts');
+}
+function archContractPresent(blueprintDir) {
+  try { return blueprintDir != null && loadArchContract(blueprintDir) != null; } catch { return false; }
+}
+
+export function control1Hygiene(referenceApp, { baseline = new Set(), runOpts, manifest = null, mode = 'remediate', blueprintDir = null }) {
   const all = [];
   const sub = [];
+  // A2b — arch_check è un GATE ASSOLUTO di floor: se degrada (contratto vacuo /
+  // grafo non costruito) NON è un verde (L-COL-006), a differenza di twin
+  // (detection-only) e di dup/cycle (igiene delta best-effort). Resta false per i
+  // chiamanti legacy (ramo arch assente) -> BIT-invarianza.
+  let archDegraded = false;
 
   // --- dead-code (INVARIATO: knip/vulture/... via run_deadcode) --------------
   const dc = runOracle(RUN_DEADCODE, [referenceApp], referenceApp);
@@ -217,13 +245,29 @@ export function control1Hygiene(referenceApp, { baseline = new Set(), runOpts, m
     else sub.push('twin:degr');
   } else sub.push('twin:degr');
 
+  // --- A2b: arch_check — contratto di altitudine (GATE ASSOLUTO, BUILD-only) ---
+  // Blueprint-driven (non manifest.oracles): attivo solo in BUILD con un contratto
+  // `architecture:` nel blueprint e un ecosistema JS/TS. Vacuity/degradato -> exit 1
+  // dell'oracolo -> runOracle ok:false -> 'arch:degr' (declassa il verde, mai un
+  // verde silenzioso). In REMEDIATE / senza contratto / non-JS-TS: ramo assente.
+  if (mode === 'build' && blueprintDir && graphCapable(manifest) && archContractPresent(blueprintDir)) {
+    const r = runOracle(ARCH_CHECK, [referenceApp, '--blueprint', blueprintDir], referenceApp);
+    if (r.ok) {
+      const n = normFindings('arch', r.json, { ...runOpts, scope: 'working-tree' });
+      if (n.ok) { all.push(...n.findings); sub.push(`arch:${n.findings.length}`); }
+      else { sub.push('arch:degr'); archDegraded = true; }
+    } else { sub.push('arch:degr'); archDegraded = true; }
+  }
+
   const blockers = partitionBlockers(all, baseline);
-  const green = blockers.length === 0;
+  const green = blockers.length === 0 && !archDegraded;
   return {
     id: 1, name: 'dead-code', status: green ? 'green' : 'red', green,
     detail: green
       ? `nessuna regressione d'igiene NUOVA [${sub.join(' ')}] (pre-esistenti segnalati)`
-      : `${blockers.length} dead-code NUOVO introdotto [${sub.join(' ')}]`,
+      : archDegraded && blockers.length === 0
+        ? `arch degradato (contratto vacuo / non eseguito) — NON verde (L-COL-006) [${sub.join(' ')}]`
+        : `${blockers.length} dead-code NUOVO introdotto [${sub.join(' ')}]`,
     findings: all, blockers,
   };
 }
@@ -746,7 +790,7 @@ export function runCheckpoint(referenceApp, opts = {}) {
     blueprintDir = null,
   } = opts;
 
-  const c1 = control1Hygiene(referenceApp, { baseline, runOpts, manifest });
+  const c1 = control1Hygiene(referenceApp, { baseline, runOpts, manifest, mode, blueprintDir });
   const c2 = control2Security(referenceApp, { baseline, runOpts, withOsv, manifest });
   const c3 = control3Regressions(referenceApp, { mode, characterization, finding });
   const c4 = control4Conformance(referenceApp, { mode, characterization, finding, blueprintDir, manifest });
