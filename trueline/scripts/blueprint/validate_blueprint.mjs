@@ -37,6 +37,7 @@
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadArchContract, validateArchContract } from './arch_contract.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -393,6 +394,22 @@ if (!error && tasks.length > 0) {
     for (const t of tasks) if (!nonEmptyStr(t.macrotask)) bad.push(`${t.id}: macrotask mancante`);
     check('(5) MACROTASK_OWNERSHIP', bad.length === 0,
       bad.length ? bad.join(' | ') : 'ogni task dichiara un macrotask');
+  }
+
+  // (6) ARCH_CONTRACT_WELL_FORMED — CONDIZIONALE (A2b): solo se il blueprint
+  //     dichiara un blocco `architecture:`. Assente -> nessun controllo (skip):
+  //     la fixture seeded senza strati resta verde (BIT-invarianza).
+  {
+    let contract = null, parseErr = null;
+    try { contract = loadArchContract(blueprintDir); } catch (e) { parseErr = e.message; }
+    if (parseErr) {
+      check('(6) ARCH_CONTRACT_WELL_FORMED', false, `contratto architettura non parsabile: ${parseErr}`);
+    } else if (contract) {
+      const v = validateArchContract(contract);
+      check('(6) ARCH_CONTRACT_WELL_FORMED', v.ok,
+        v.ok ? 'contratto strati/forbidden ben formato' : v.errors.join(' | '));
+    }
+    // contract === null -> nessun blocco architecture -> nessun check (skip legittimo)
   }
 }
 

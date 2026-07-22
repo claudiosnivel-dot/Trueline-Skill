@@ -933,6 +933,40 @@ function normalizeTwin(native, ctx) {
   return out;
 }
 
+// --- arch (architecture — A2b, contratto di altitudine dichiarato) -----------
+// Nativo (da arch_check.mjs): { oracle:'arch', findings:[{ from, to, source_module,
+//   target_module, path[], accepted_exception?, accept_note? }] }. category=
+//   architecture; severity=MEDIUM (breccia di CONTRATTO dichiarato, sopra l'igiene
+//   LOW di cycle/twin). owasp A04:2025 (Insecure Design) + CWE-1061. Il fingerprint è
+//   DIREZIONALE (from->to != to->from): NON si ordina. Una violazione allow-matched
+//   diventa fix_state='accepted-risk' -> il chiamante la riporta ma non la gata.
+function normalizeArch(native, ctx) {
+  const violations = native && Array.isArray(native.findings) ? native.findings : [];
+  const out = [];
+  for (const v of violations) {
+    const src = normalizePath(v.source_module || '', { base: ctx.base });
+    const tgt = normalizePath(v.target_module || '', { base: ctx.base });
+    const ruleId = 'forbidden-dependency';
+    const matchSignature = [ruleId, v.from, v.to, src, tgt].join('|'); // direzionale
+    const path = Array.isArray(v.path) && v.path.length
+      ? v.path.map((p) => normalizePath(p, { base: ctx.base })) : [src, tgt];
+    const f = baseFinding(ctx, {
+      category: 'architecture',
+      severity: 'MEDIUM',
+      location: { file: src || '(arch)', start_line: 0, end_line: 0 },
+      evidence: `Violazione di altitudine: lo strato "${v.from}" non deve dipendere da "${v.to}" — ${path.join(' -> ')} (arch-check).`,
+      owasp: 'A04:2025',
+      cwe: 'CWE-1061',
+      source_oracle: { oracle: 'arch', tool_version: ctx.toolVersions.arch, rule_id: ruleId },
+      fingerprint: fingerprintOf({ oracle: 'arch', ruleId, normalizedPath: src, matchSignature }),
+      remediation_hint: 'Invertire/spezzare la dipendenza fra strati (decisione architetturale umana; nessun fix automatico).',
+    });
+    if (v.accepted_exception) f.fix_state = 'accepted-risk';
+    out.push(f);
+  }
+  return out;
+}
+
 function makeKnipFinding(ctx, { ruleId, normalizedPath, symbol, startLine, evidence }) {
   // match_signature: tipo-di-morto + simbolo + path (NON la riga).
   const matchSignature = [ruleId, symbol || '', normalizedPath].join('|');
@@ -1302,6 +1336,10 @@ const ORACLE_ALIASES = {
   twin: 'twin',
   'twin-check': 'twin',
   twincheck: 'twin',
+  arch: 'arch',
+  'arch-check': 'arch',
+  arch_check: 'arch',
+  archcheck: 'arch',
 };
 
 /**
@@ -1339,6 +1377,7 @@ export function normalize(oracle, native, opts = {}) {
       jscpd: 'jscpd@4',
       cycle: 'madge',
       twin: 'twin-check@1.0.0',
+      arch: 'arch-check@trueline',
       ...(opts.toolVersions || {}),
     },
   };
@@ -1375,6 +1414,8 @@ export function normalize(oracle, native, opts = {}) {
       return normalizeCycle(native, ctx);
     case 'twin':
       return normalizeTwin(native, ctx);
+    case 'arch':
+      return normalizeArch(native, ctx);
     default:
       return [];
   }

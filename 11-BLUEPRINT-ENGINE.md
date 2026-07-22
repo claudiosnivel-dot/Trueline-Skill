@@ -77,6 +77,8 @@ Identificatori in inglese, prosa in italiano (convenzione di progetto). Formato 
 
 **target_tests** è il ponte da criterio a eseguibile: ogni `acceptance_criteria` deve essere coperto da almeno un test nominato. In BUILD, "verde sul controllo 4" significa: questi test passano.
 
+**Contratto di altitudine (A2b, opzionale)** — oltre ai task, il blueprint può dichiarare in `00-INDEX.md` un blocco **globale** `architecture: { layers, forbidden, allow }` (gli strati sono una proprietà del progetto, non del singolo task). Schema e regole nel [`references/blueprint/atomic-task-schema.md`](references/blueprint/atomic-task-schema.md) (§ "Contratto di altitudine"). Se presente, `validate_blueprint` ne valida la forma (controllo condizionale, §5.1); in BUILD `arch_check` verifica le regole `forbidden` contro il grafo import reale come gate assoluto.
+
 ## 4. Template del blueprint (output di BOOTSTRAP)
 
 BOOTSTRAP genera il blueprint **nel formato-utente** già in uso negli altri progetti, così da essere familiare e portabile:
@@ -103,6 +105,7 @@ La skill non procede a BUILD con un blueprint che non passa il self-check (specu
 3. **DAG** — `depends_on` non contiene cicli; nessun riferimento a `id` inesistente.
 4. **ID** — unici, non riusati.
 5. **Appartenenza** — ogni task atomico dichiara un `macrotask` esistente.
+6. **Contratto di altitudine** *(condizionale, A2b)* — SOLO se il blueprint dichiara un blocco `architecture:`: strati con selettore glob non vuoto, ≥1 regola `forbidden` verso strati dichiarati, `mode` noto (`ARCH_CONTRACT_WELL_FORMED`). Assente il blocco, il controllo **non viene emesso** (nessun falso rosso). Il blocco è documentato in [`references/blueprint/atomic-task-schema.md`](references/blueprint/atomic-task-schema.md).
 
 Coerente con la filosofia del progetto: tutto ciò che *può* essere deterministico lo è. La parte semantica, che non può esserlo, resta guidata dall'LLM ma vincolata da checklist (sotto).
 

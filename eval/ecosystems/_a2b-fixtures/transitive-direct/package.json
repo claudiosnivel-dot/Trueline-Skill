@@ -1,0 +1,2 @@
+{ "name": "a2b-direct-fixture", "version": "0.0.0", "private": true, "type": "module",
+  "devDependencies": { "knip": "^6.27.0", "madge": "^6.0.0", "typescript": "^5.5.0" } }
