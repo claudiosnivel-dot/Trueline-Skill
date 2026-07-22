@@ -74,3 +74,34 @@ non tracciato da alcun suo target_test in-scope rende il controllo 4 **rosso pri
 eseguire** (`scripts/blueprint/ac_assertion_trace_check.mjs`). Per-AC globale, ancorato
 all'id, string-aware. **Questo schema e `validate_blueprint` restano invariati**: il
 tag è una convenzione del file di test, non un campo del task.
+
+## Contratto di altitudine — blocco `architecture:` (BUILD, A2b)
+
+Il blueprint può dichiarare l'**altitudine** (gli strati architetturali e le
+dipendenze vietate) in un blocco `architecture:` **globale** in `00-INDEX.md`
+(non per-task: gli strati sono una proprietà del progetto). `validate_blueprint`
+ne valida la forma (condizionale); in BUILD `arch_check` verifica le regole
+`forbidden` contro il grafo import reale (madge), come **gate assoluto**.
+
+```yaml
+architecture:
+  layers:                         # nome-strato -> selettore glob (path repo-relative)
+    ui:     "src/ui/**"
+    domain: "src/domain/**"
+    data:   "src/data/**"
+  forbidden:                      # regole direzionali; `mode` opzionale (default transitive)
+    - { from: ui,     to: data }              # ui non deve RAGGIUNGERE data (anche via terzi)
+    - { from: domain, to: ui, mode: direct }  # solo edge diretti domain->ui
+  allow:                          # eccezioni ACCETTATE (audite, mai silenziose) — opzionale
+    - { from: ui, to: data, module: "src/ui/LegacyGrid.tsx", note: "temp, TICKET-123" }
+```
+
+| Campo | Regola (validate_blueprint, se il blocco è presente) |
+|---|---|
+| `layers` | ≥1 strato; ogni strato con selettore glob non vuoto |
+| `forbidden` | ≥1 regola; `from`/`to` = strati dichiarati; `mode` ∈ {direct, transitive} |
+| `allow` | opzionale; `from`/`to` = strati dichiarati; `module` + `note` |
+
+**Vacuity guard (`arch_check`, build-time, `L-COL-006`):** grafo vuoto, 0 regole,
+o una regola il cui `from`/`to` mappa a 0 moduli reali ⇒ **non-verde dichiarato**,
+mai un pass vacuo. **BUILD-only**: in REMEDIATE non c'è blueprint → non applicabile.
