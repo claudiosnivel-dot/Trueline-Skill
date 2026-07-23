@@ -68,6 +68,10 @@ const RUN_GITLEAKS = resolve(ORACLES, 'run_gitleaks.mjs');
 const RLS_CHECK = resolve(ORACLES, 'rls_check.mjs');
 const RUN_DEADCODE = resolve(ORACLES, 'run_deadcode.mjs');
 const RUN_OSV = resolve(ORACLES, 'run_osv.mjs');
+// A2a/A2c — oracoli d'igiene (per catturare il baseline d'igiene delta).
+const RUN_DUPCHECK = resolve(ORACLES, 'run_dupcheck.mjs');
+const RUN_CYCLECHECK = resolve(ORACLES, 'run_cyclecheck.mjs');
+const TWIN_CHECK = resolve(ORACLES, 'twin_check.mjs');
 
 // go/bin (gitleaks, osv-scanner) NON e' sul PATH di default in questo ambiente.
 const GO_BIN = process.platform === 'win32'
@@ -119,8 +123,14 @@ function runOracleProcess(scriptPath, args, cwd) {
 //   rls-check -> DDL delle migration (S3/S4/S5).
 //   knip      -> dead-code working-tree (S8).
 //   osv       -> dependency-vuln dal lockfile.
-function oracleInvocation(canon, projectDir) {
+function oracleInvocation(canon, projectDir, minTokens = 50) {
   switch (canon) {
+    case 'jscpd':
+      return { script: RUN_DUPCHECK, args: [projectDir, String(minTokens)], scope: 'working-tree', normOracle: 'jscpd' };
+    case 'cycle':
+      return { script: RUN_CYCLECHECK, args: [projectDir], scope: 'working-tree', normOracle: 'cycle' };
+    case 'twin':
+      return { script: TWIN_CHECK, args: [projectDir], scope: 'working-tree', normOracle: 'twin' };
     case 'gitleaks':
       return { script: RUN_GITLEAKS, args: [projectDir, 'working-tree'], scope: 'working-tree', normOracle: 'gitleaks' };
     case 'rls-check':
@@ -154,6 +164,16 @@ const ORACLE_ALIASES = {
   'dead-code': 'knip',
   osv: 'osv',
   'osv-scanner': 'osv',
+  // A2c — oracoli d'igiene strutturale (baseline d'igiene delta).
+  jscpd: 'jscpd',
+  duplication: 'jscpd',
+  'dup-check': 'jscpd',
+  cycle: 'cycle',
+  architecture: 'cycle',
+  madge: 'cycle',
+  'cycle-check': 'cycle',
+  twin: 'twin',
+  'twin-check': 'twin',
 };
 
 function canonicalOracle(name) {
@@ -196,7 +216,7 @@ export function capture(projectDir, oracles = DEFAULT_ORACLES, opts = {}) {
   const pairs = []; // { oracle, native } per normalizeAll (dedup fra oracoli)
 
   for (const canon of canonOracles) {
-    const inv = oracleInvocation(canon, dir);
+    const inv = oracleInvocation(canon, dir, Number(opts.minTokens) || 50);
     if (!inv) { errors.push(`oracolo sconosciuto: ${canon}`); continue; }
     // osv (optional): se il lockfile manca o il tool e' offline, NON falsifichiamo
     // la baseline -> lo dichiariamo degradato e proseguiamo (best-effort).
@@ -337,6 +357,29 @@ export function readBaseline(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
+// A2c — carica il baseline d'igiene COMMITTATO di un progetto, se presente.
+// Ritorna { present, set:Set<fingerprint> }. Path tracciato: <dir>/.trueline/
+// hygiene-baseline.json (nel progetto utente va tracciato con negazione .gitignore;
+// vedi references/modes). Assente -> { present:false, set:new Set() } (BIT-invarianza:
+// il checkpoint unisce un set vuoto). Illeggibile/corrotto -> present:false (fail-safe:
+// il vacuity guard del checkpoint lo tratta come "manca il baseline").
+export function hygieneBaselinePath(projectDir) {
+  return resolve(projectDir, '.trueline', 'hygiene-baseline.json');
+}
+export function loadHygieneBaseline(projectDir) {
+  const p = hygieneBaselinePath(projectDir);
+  if (!existsSync(p)) return { present: false, set: new Set() };
+  try {
+    const snap = JSON.parse(readFileSync(p, 'utf8'));
+    const fps = Array.isArray(snap.fingerprints)
+      ? snap.fingerprints
+      : (snap.findings && typeof snap.findings === 'object' ? Object.keys(snap.findings) : []);
+    return { present: true, set: new Set(fps) };
+  } catch {
+    return { present: false, set: new Set() };
+  }
+}
+
 function toRepoRel(abs) {
   const rel = abs.startsWith(REPO_ROOT) ? abs.slice(REPO_ROOT.length + 1) : abs;
   return rel.split(/[\\/]/).join('/');
@@ -353,7 +396,7 @@ function parseArgs(argv) {
     if (a.startsWith('--')) {
       const key = a.slice(2);
       // flag booleane note (no valore a seguire).
-      if (key === 'no-osv') { flags[key] = true; continue; }
+      if (key === 'no-osv' || key === 'hygiene') { flags[key] = true; continue; }
       const val = argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : 'true';
       flags[key] = val;
     } else {
@@ -364,6 +407,7 @@ function parseArgs(argv) {
 }
 
 function resolveOracleList(flags) {
+  if (flags.hygiene) return ['jscpd', 'cycle', 'twin'];
   let list = flags.oracles
     ? String(flags.oracles).split(',').map((s) => s.trim()).filter(Boolean)
     : [...DEFAULT_ORACLES];
@@ -389,6 +433,7 @@ function main(argv) {
   const runOpts = {
     runId: flags['run-id'] || (cmd === 'delta' ? 'delta' : DEFAULT_RUN_ID),
     createdAt: flags['created-at'] || DEFAULT_CREATED_AT,
+    minTokens: Number(flags['min-tokens']) || 50,
   };
   const baselinePath = flags.baseline
     ? resolve(process.cwd(), flags.baseline)
