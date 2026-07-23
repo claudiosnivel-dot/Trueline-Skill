@@ -50,9 +50,12 @@ const check = (name, cond, detail) => {
 };
 
 // Ritorna il controllo 1 (igiene) del checkpoint sul fixture. baseline opzionale
-// (Set<fingerprint>) per esercitare il delta-gate.
+// (Set<fingerprint>) per esercitare il delta-gate. mode:'build' perché questi
+// sotto-test validano il GATE d'igiene (dup/cycle bloccano sul delta), che post-A2c
+// è BUILD-only: in REMEDIATE dup/cycle sono REPORT-ONLY (come twin) e non gatano
+// mai — il default 'remediate' renderebbe dup:red/cycle:red falsi verdi.
 const control1 = (dir, baseline = new Set()) =>
-  control1Hygiene(dir, { manifest: SYNTH_MANIFEST, runOpts: RUN, baseline });
+  control1Hygiene(dir, { manifest: SYNTH_MANIFEST, runOpts: RUN, baseline, mode: 'build' });
 
 const requireFixture = (name) => {
   const dir = resolve(FIX, name);

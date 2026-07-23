@@ -1,0 +1,16 @@
+{
+  "name": "a2c-clean",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Fixture A2c clean: contrasto — nessun debito d'igiene (nessun clone, nessun ciclo, nessuna dir parallela, nessun dead-code). Il controllo 1 deve restare VERDE.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "jscpd": "^4.0.0",
+    "knip": "^6.27.0",
+    "madge": "^6.0.0",
+    "typescript": "^5.5.0"
+  }
+}
