@@ -3,10 +3,11 @@
 | | |
 |---|---|
 | **Progetto** | Trueline (`COL`) — ex codename *Collaudo*, `O-COL-001` chiusa in Chat E |
-| **Versione** | v0.1 (Chat E) |
-| **Data** | 14 giugno 2026 |
+| **Versione** | v0.2 (Chat E; emendata 22–25 lug 2026 — canale plugin Claude Code, §7–§8) |
+| **Data** | 14 giugno 2026 (emend. 22–25 luglio 2026) |
 | **Copre** | `O-COL-002` (canale), `O-COL-004` (presenza oracoli), `O-COL-009` (telemetria); meccanismo di `L-COL-007`, `009`, `013`, `014` |
 | **Dipende da** | `02-SKILL-ANATOMY` v0.1 (albero spedito, progressive disclosure), `03-ORACLES` v0.2 (oracoli + ruleset da vendorizzare), `07-CONVENTIONS-THREATMODEL` v0.2 (i 3 reference di convenzioni), `12-LIFECYCLE-PROMPTS` v0.1 (i 3 prompt in `assets/prompts/`), `05-VERIFY-FIX-LOOP` v0.1 (`detect_deploy_coupling` + esecutori), `11-BLUEPRINT-ENGINE` v0.1 (`validate_blueprint` + template) |
+| **Nota v0.2** | **Cambiato** rispetto a v0.1: il **canale d'install per Claude Code** (§7 — plugin da marketplace **locale** `trueline-local`, oltre al repo GitHub + install manuale). **Non cambiato**: `O-COL-002` — nessun registry **pubblico**, install resta controllabile e ispezionabile (§7–§8). |
 
 ---
 
