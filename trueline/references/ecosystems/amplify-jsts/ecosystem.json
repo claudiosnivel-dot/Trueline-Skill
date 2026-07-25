@@ -36,7 +36,9 @@
     },
     "dead-code": {
       "tool": "knip"
-    }
+    },
+    "duplication": { "tool": "jscpd", "min_tokens": 50 },
+    "architecture": { "tool": "madge" }
   },
   "test_runner": {
     "detect": ["vitest", "jest", "mocha"]
