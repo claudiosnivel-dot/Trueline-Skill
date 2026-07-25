@@ -90,7 +90,6 @@ import {
 import { validateEcosystem } from '../../trueline/scripts/ecosystem/validate_ecosystem.mjs';
 import { normalize } from '../../trueline/scripts/findings/normalize.mjs';
 import { validateMany } from '../../trueline/scripts/findings/validate_finding.mjs';
-import { cleanupAllVerifyWorkspaces } from '../../trueline/scripts/loop/verify_workspace.mjs';
 // VERIFIED-PARITY (kind:'verified', SP-4): la macchina del loop + il fix-provider
 // deterministico (T2.1) + la caratterizzazione RLS a runtime (T1.2). Riusati come
 // SOTTO-ROUTINE; il "verde" resta un FATTO dell'oracolo riesieguito (L-COL-002).
@@ -102,6 +101,28 @@ import { characterizeRls } from '../../trueline/scripts/characterization/rls_cha
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..', '..');
+// Radice temp PRIVATA per-invocazione (pattern BD-1, build_discipline_check r.83-90):
+// elimina la CONTESA sulla radice CONDIVISA eval/.tmp-verify, la cui pulizia GLOBALE
+// (cleanup di TUTTE le copie) rade al suolo anche le copie VIVE di un altro processo —
+// i falsi rossi storici su Windows. Forma "env se presente, altrimenti privata per-pid":
+// i FIGLI (oracoli, e il gate m5 del ramo DELEGATO) EREDITANO la radice del padre via
+// env — sono lo STESSO run logico — mentre due run indipendenti (due pack in parallelo)
+// hanno radici DIVERSE. Coperta da .gitignore "eval/.tmp-*/".
+//
+// NB (ordine ESM): NON importiamo verify_workspace.mjs. Gli import statici sono
+// valutati PRIMA del corpo del modulo, quindi quel modulo calcolerebbe la sua
+// TMP_VERIFY_ROOT dall'env AL MOMENTO DELL'IMPORT: impostare process.env qui sotto non
+// lo raggiungerebbe. I processi FIGLI invece leggono l'env corretta perche' la ereditano.
+//
+// PROPRIETA' della radice: e' NOSTRA solo se l'abbiamo creata noi (env ASSENTE
+// all'avvio). Se l'abbiamo EREDITATA siamo un FIGLIO e sotto quella radice vivono le
+// copie e i file del PADRE: raderla e' l'operazione che il pattern per-pid vuole
+// eliminare (distrugge il lavoro E le prove d'igiene altrui).
+const TMP_ROOT_INHERITED = Boolean(process.env.TRUELINE_TMP_VERIFY_ROOT);
+const TMP_VERIFY_ROOT = TMP_ROOT_INHERITED
+  ? resolve(process.env.TRUELINE_TMP_VERIFY_ROOT)
+  : resolve(ROOT, 'eval', `.tmp-eco-${process.pid}`);
+process.env.TRUELINE_TMP_VERIFY_ROOT = TMP_VERIFY_ROOT;
 const M5_GATE = resolve(ROOT, 'eval', 'harness', 'm5_gate_check.mjs');
 const RUN_GITLEAKS = resolve(ROOT, 'trueline', 'scripts', 'oracles', 'run_gitleaks.mjs');
 const RUN_OSV = resolve(ROOT, 'trueline', 'scripts', 'oracles', 'run_osv.mjs');
@@ -321,12 +342,51 @@ const PACK_FIXTURES = {
 // Helper di esecuzione/IO comuni (mirror del pattern di m5_gate_check.mjs).
 // ---------------------------------------------------------------------------
 function nodeRun(script, args, cwd = ROOT) {
-  const env = { ...process.env, PATH: `${process.env.PATH || ''}${delimiter}${GO_BIN}` };
+  const env = {
+    ...process.env,
+    PATH: `${process.env.PATH || ''}${delimiter}${GO_BIN}`,
+    TRUELINE_TMP_VERIFY_ROOT: TMP_VERIFY_ROOT,
+  };
   const res = spawnSync(process.execPath, [script, ...args], {
     cwd, env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
   });
   return { status: res.status, stdout: res.stdout || '', stderr: res.stderr || '', error: res.error };
 }
+
+// Backoff BLOCCANTE deterministico (niente setTimeout/Date.now/Math.random): assorbe
+// un lock transitorio di Windows tra i tentativi senza introdurre non-determinismo.
+function settleDeterministic(ms) {
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+  catch { /* Atomics non disponibile: prosegui senza attesa */ }
+}
+
+// Pulizia ROBUSTA della SOLA radice temp PRIVATA (stessa forma di cleanBdTmp). NON
+// lancia MAI: un lock transitorio di Windows su un file appena copiato/rimosso NON
+// deve trasformarsi in un falso rosso exit-1. Sostituisce il cleanup GLOBALE della
+// radice condivisa, che cancellava anche le copie vive di altri processi.
+// SOLO IL PROPRIETARIO SPAZZA: se la radice e' EREDITATA appartiene al padre (le sue
+// copie sono VIVE li' sotto mentre noi giriamo).
+function cleanEcoTmp() {
+  if (TMP_ROOT_INHERITED) return;
+  for (let i = 0; i < 6; i += 1) {
+    try {
+      if (!existsSync(TMP_VERIFY_ROOT)) return;
+      rmSync(TMP_VERIFY_ROOT, { recursive: true, force: true, maxRetries: 4, retryDelay: 60 });
+      if (!existsSync(TMP_VERIFY_ROOT)) return;
+    } catch { /* lock transitorio: ritenta col backoff sotto */ }
+    if (i < 5) settleDeterministic(80 * (i + 1));
+  }
+  /* esaurito: NON lanciamo. L'igiene tollera una radice vuota-ma-locked. */
+}
+
+// NB (deliberato): NON si osserva l'esistenza della radice CONDIVISA spedita
+// (eval/.tmp-verify). E' stato GLOBALE di TERZI — un orfano lasciato da un run_loop o
+// da un pack vicino renderebbe questo gate ROSSO in permanenza, il falso rosso che
+// h1_perpid_check r.743-747 dichiara VIETATO — e sarebbe comunque CIECO, perche'
+// verify_workspace POTA la radice appena si svuota: un figlio ricaduto sulla CONDIVISA
+// la creerebbe, ci lavorerebbe e la rimuoverebbe, lasciando la sonda verde. L'igiene si
+// asserisce su cio' che e' NOSTRO e attribuibile: la copia del pack (sotto la radice
+// PRIVATA per-pid) e' stata rimossa.
 
 // git in SOLA LETTURA (status/rev-parse/show-toplevel). Non muta nulla.
 function gitRead(cwd, args) {
@@ -440,8 +500,9 @@ function runDetectionBody(id, manifest, pack) {
   const innerStatusBefore = gitRead(pack.fixtureApp, ['status', '--porcelain']).stdout;
   const outerHeadBefore = gitRead(ROOT, ['rev-parse', 'HEAD']).stdout;
 
-  // Sweep di eventuali copie temp orfane (come m4/m5).
-  cleanupAllVerifyWorkspaces();
+  // Sweep di eventuali copie temp orfane sotto la NOSTRA radice PRIVATA (come m4/m5):
+  // mai la radice di un altro processo.
+  cleanEcoTmp();
 
   console.log('');
   console.log(`  CORPO DETECTION-PARAMETRICO <${id}> (kind:detection) — floor=[${floor.join(', ')}]`);
@@ -469,7 +530,7 @@ function runDetectionBody(id, manifest, pack) {
   } catch (e) {
     copyErr = e;
   }
-  assert('copia ISOLATA della fixtureApp creata (eval/.tmp-verify, .git incluso)',
+  assert('copia ISOLATA della fixtureApp creata (radice temp PRIVATA per-pid, .git incluso)',
     Boolean(copyDir) && existsSync(copyDir), copyErr ? copyErr.message : copyDir);
 
   // ISOLAMENTO (assertIsolatedRepo inline, L-COL-024): la copia NON deve risolvere
@@ -650,8 +711,18 @@ function assertHygiene({ pack, ws, copyDir, innerStatusBefore, innerHeadBefore, 
   let cleanupOk = true;
   try { if (ws && ws.cleanup) ws.cleanup(); } catch { cleanupOk = false; }
   assert('copia temp ripulita senza errori', cleanupOk, cleanupOk ? 'cleanup OK' : 'cleanup fallito');
-  assert('nessun residuo della copia temp (dir rimossa)', !copyDir || !existsSync(copyDir),
-    copyDir && existsSync(copyDir) ? 'residuo presente' : 'rimossa');
+  // Residuo della copia: la copia del pack vive SOTTO la radice PRIVATA per-pid e deve
+  // essere sparita dopo il cleanup. Osservazione ATTRIBUIBILE a questo run (il path e'
+  // nostro), letta A FREDDO: nessuno sweep la precede, altrimenti il controllo
+  // distruggerebbe la prova che deve leggere e non potrebbe piu' fallire.
+  // (copyDir assente = la copia non e' stata creata: lo dice gia' l'asserzione di
+  // criterio 2, qui non c'e' nulla da ripulire e non inventiamo un secondo rosso.)
+  const posixLower = (p) => String(p).replace(/\\/g, '/').toLowerCase();
+  const copyUnderPrivateRoot = !copyDir
+    || posixLower(resolve(copyDir)).startsWith(`${posixLower(TMP_VERIFY_ROOT)}/`);
+  assert('nessun residuo della copia temp (dir rimossa) e copia confinata alla radice PRIVATA per-pid',
+    (!copyDir || !existsSync(copyDir)) && copyUnderPrivateRoot,
+    `copia=${copyDir && existsSync(copyDir) ? 'residuo presente' : 'rimossa'} sotto-radice-privata=${copyUnderPrivateRoot}`);
   // La fixture ORIGINALE è bit-identica: status vuoto + HEAD interno invariato.
   const innerStatusAfter = gitRead(pack.fixtureApp, ['status', '--porcelain']).stdout;
   const innerHeadAfter = gitRead(pack.fixtureApp, ['rev-parse', 'HEAD']).stdout;
@@ -725,7 +796,8 @@ function runVerifiedBody(id, manifest, pack) {
   const innerStatusBefore = gitRead(pack.fixtureApp, ['status', '--porcelain']).stdout;
   const outerHeadBefore = gitRead(ROOT, ['rev-parse', 'HEAD']).stdout;
 
-  cleanupAllVerifyWorkspaces();
+  // Sweep della SOLA radice PRIVATA (mai quella di un altro processo).
+  cleanEcoTmp();
 
   console.log('');
   console.log(`  CORPO VERIFIED-PARITY <${id}> (kind:verified) — floor=[${floor.join(', ')}] verified_set=[${vset.join(', ')}]`);
@@ -746,7 +818,7 @@ function runVerifiedBody(id, manifest, pack) {
   let copyDir = null;
   let copyErr = null;
   try { ws = copyPackFixture(id, pack.fixtureApp); copyDir = ws.dir; } catch (e) { copyErr = e; }
-  assert('copia ISOLATA della fixtureApp creata (eval/.tmp-verify, .git incluso)',
+  assert('copia ISOLATA della fixtureApp creata (radice temp PRIVATA per-pid, .git incluso)',
     Boolean(copyDir) && existsSync(copyDir), copyErr ? copyErr.message : copyDir);
 
   let copyTop = '';
@@ -1232,12 +1304,11 @@ function safeNormalize(oracle, native, opts) {
   try { return normalize(oracle, native, opts); } catch { return []; }
 }
 
-// Copia la fixtureApp del PACK in una dir temp ISOLATA (eval/.tmp-verify/<id>,
-// gitignorata), .git INCLUSO. Mirror dell'isolamento di verify_workspace, ma sulla
-// fixture del pack (createVerifyWorkspace è cablato alla reference-app canonica).
-// Ritorna { dir, cleanup }.
+// Copia la fixtureApp del PACK in una dir temp ISOLATA sotto la radice PRIVATA
+// per-pid (eval/.tmp-eco-<pid>/<id>, gitignorata), .git INCLUSO. Mirror
+// dell'isolamento di verify_workspace, ma sulla fixture del pack
+// (createVerifyWorkspace è cablato alla reference-app canonica). Ritorna { dir, cleanup }.
 let __pfCounter = 0;
-const TMP_VERIFY_ROOT = resolve(ROOT, 'eval', '.tmp-verify');
 function copyPackFixture(id, fixtureApp) {
   try { mkdirSync(TMP_VERIFY_ROOT, { recursive: true }); } catch { /* esiste */ }
   // id unico per-run (pid + counter monotono), niente Date.now/Math.random.

@@ -14,11 +14,11 @@
 //
 // Il "verde" e' un FATTO degli ORACOLI riesiguiti dal loop (gitleaks/knip/
 // hasura_metadata_check), MAI una frase dell'LLM (L-COL-002). Su una COPIA
-// ISOLATA della fixture (MAI l'originale: eval/.tmp-verify-hs/<id>, .git incluso)
+// ISOLATA della fixture (MAI l'originale: eval/.tmp-verify-hs-<pid>/<id>, .git incluso)
 // il gate, in 10 stadi:
 //   1) SNAPSHOT d'integrita' (sola lettura) — repo ESTERNO + fixture INTERNA;
 //   2) PRECONDIZIONE: se reference-app/.git manca -> banner + exit 2;
-//   3) COPIA ISOLATA della fixture (eval/.tmp-verify-hs/<pid>-<n>, .git incluso);
+//   3) COPIA ISOLATA della fixture (eval/.tmp-verify-hs-<pid>/<pid>-<n>, .git incluso);
 //   4) createWorkBranch sul .git INTERNO della copia (come run_loop);
 //   5) collectFloorFindings: gitleaks WT+history (secret), knip (dead-code),
 //      hasura_metadata_check -> normalize('hasura-metadata',...,'working-tree')
@@ -64,7 +64,16 @@ const RUN_DEADCODE = resolve(ROOT, 'trueline', 'scripts', 'oracles', 'run_deadco
 // authz Hasura (eco-F3): oracolo statico della metadata YAML Hasura.
 const HASURA_METADATA_CHECK = resolve(ROOT, 'trueline', 'scripts', 'oracles', 'hasura_metadata_check.mjs');
 const GO_BIN = process.platform === 'win32' ? 'C:/Users/claud/go/bin' : '/c/Users/claud/go/bin';
-const TMP_VERIFY_ROOT = resolve(ROOT, 'eval', '.tmp-verify-hs');
+// Radice temp PRIVATA per-invocazione (pattern BD-1 / oracolo H-1): la radice FISSA
+// e' CONDIVISA fra run concorrenti e il suo cleanup (rm della RADICE quando si svuota)
+// rade al suolo anche le copie VIVE di un altro processo — i falsi rossi storici su
+// Windows. Forma "env se presente, altrimenti privata per-pid": lanciati da un harness
+// (ecosystem_conformance) EREDITIAMO la radice del padre via TRUELINE_TMP_VERIFY_ROOT —
+// siamo lo STESSO run logico — mentre due run indipendenti hanno radici DIVERSE.
+// Coperta da .gitignore "eval/.tmp-*/".
+const TMP_VERIFY_ROOT = process.env.TRUELINE_TMP_VERIFY_ROOT
+  ? resolve(process.env.TRUELINE_TMP_VERIFY_ROOT)
+  : resolve(ROOT, 'eval', `.tmp-verify-hs-${process.pid}`);
 
 // runOpts deterministici: IDENTICI a quelli che il loop usa in rerunOracleFor.
 const RUN_OPTS = { runId: 'loop', createdAt: '1970-01-01T00:00:00.000Z' };
@@ -97,7 +106,7 @@ function norm(oracle, json, scope) {
   return (v.ok ? f : []).map((x) => ({ ...x, _scope: scope }));
 }
 
-// Crea una COPIA ISOLATA della fixture (eval/.tmp-verify-hs/<id>, .git incluso).
+// Crea una COPIA ISOLATA della fixture (eval/.tmp-verify-hs-<pid>/<id>, .git incluso).
 let __c = 0;
 function copyFixture() {
   try { mkdirSync(TMP_VERIFY_ROOT, { recursive: true }); } catch { /* esiste */ }
@@ -236,7 +245,7 @@ let dir = null;
 try { ws = copyFixture(); dir = ws.dir; } catch (e) {
   assert('copia ISOLATA della fixture creata', false, e.message);
 }
-assert('copia ISOLATA della fixture creata (eval/.tmp-verify-hs, .git incluso)',
+assert('copia ISOLATA della fixture creata (eval/.tmp-verify-hs-<pid>, .git incluso)',
   Boolean(dir) && existsSync(dir), dir || 'assente');
 
 if (dir) {

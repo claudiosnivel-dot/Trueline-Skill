@@ -70,13 +70,12 @@
 
 import { spawnSync } from 'node:child_process';
 import {
-  existsSync, readFileSync, readdirSync, statSync,
+  existsSync, readFileSync, readdirSync, rmSync, statSync,
 } from 'node:fs';
-import { resolve, dirname, delimiter, relative, sep } from 'node:path';
+import { resolve, dirname, delimiter, relative, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { normalize } from '../../trueline/scripts/findings/normalize.mjs';
-import { cleanupAllVerifyWorkspaces } from '../../trueline/scripts/loop/verify_workspace.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..', '..');
@@ -94,17 +93,93 @@ const RUN_EVAL = resolve(ROOT, 'eval', 'harness', 'run_eval.mjs');
 const M1_GATE = resolve(ROOT, 'eval', 'harness', 'm1_gate_check.mjs');
 const M2_GATE = resolve(ROOT, 'eval', 'harness', 'm2_gate_check.mjs');
 const M3_GATE = resolve(ROOT, 'eval', 'harness', 'm3_gate_check.mjs');
-const TMP_VERIFY = resolve(ROOT, 'eval', '.tmp-verify');
+// Radice temp PRIVATA per-invocazione (pattern BD-1, build_discipline_check r.83-90):
+// elimina la CONTESA sulla radice CONDIVISA eval/.tmp-verify, la cui pulizia GLOBALE
+// (cleanup di TUTTE le copie) rade al suolo anche le copie VIVE di un altro processo —
+// i falsi rossi storici su Windows. Forma "env se presente, altrimenti privata per-pid":
+// i FIGLI (run_checkpoint, i gate m1/m2/m3 ri-eseguiti) EREDITANO la radice del padre
+// via env — sono lo STESSO run logico — mentre due run indipendenti hanno radici
+// DIVERSE. Coperta da .gitignore "eval/.tmp-*/".
+//
+// NB (ordine ESM): NON importiamo verify_workspace.mjs. Gli import statici sono
+// valutati PRIMA del corpo del modulo, quindi quel modulo calcolerebbe la sua
+// TMP_VERIFY_ROOT dall'env AL MOMENTO DELL'IMPORT: impostare process.env qui sotto non
+// lo raggiungerebbe. I processi FIGLI invece leggono l'env corretta perche' la ereditano.
+//
+// PROPRIETA' della radice: e' NOSTRA solo se l'abbiamo creata noi (env ASSENTE
+// all'avvio). Se l'abbiamo EREDITATA siamo un FIGLIO (m4 ri-eseguito da m5) e sotto
+// quella radice vivono le copie e i file del PADRE: raderla e' l'operazione che il
+// pattern per-pid vuole eliminare (distrugge il lavoro E le prove d'igiene altrui —
+// ed e' cio' che rendeva TAUTOLOGICA l'asserzione sul file baseline qui sotto, spazzato
+// dal figlio m1 prima ancora di essere osservato).
+const TMP_ROOT_INHERITED = Boolean(process.env.TRUELINE_TMP_VERIFY_ROOT);
+const TMP_VERIFY_ROOT = TMP_ROOT_INHERITED
+  ? resolve(process.env.TRUELINE_TMP_VERIFY_ROOT)
+  : resolve(ROOT, 'eval', `.tmp-m4-${process.pid}`);
+process.env.TRUELINE_TMP_VERIFY_ROOT = TMP_VERIFY_ROOT;
+// File temp usa-e-getta della baseline (sezione 7): vive SOTTO la radice privata
+// (prima era il file fisso eval/.tmp-m4-baseline.json, condiviso fra run concorrenti).
+// Nessun figlio lo puo' piu' cancellare al posto nostro: i gate ri-eseguiti EREDITANO
+// la radice e, non essendone proprietari, non la spazzano.
+const M4_BASELINE = join(TMP_VERIFY_ROOT, 'm4-baseline.json');
 const GO_BIN = process.platform === 'win32' ? 'C:/Users/claud/go/bin' : '/c/Users/claud/go/bin';
 
-// SWEEP DEGLI ORFANI ALL'AVVIO: un run_loop/run_checkpoint killato a meta'
-// (SIGKILL, non intercettabile) lascia una copia temp orfana in eval/.tmp-verify.
-// Senza sweep, l'orfano avvelena l'asserzione di sezione 8 "nessuna copia temp
-// residua" (e quella dei gate m1/m3 che M4 ri-esegue), producendo un rosso
-// persistente NON imputabile al run corrente. Lo ripuliamo PRIMA di qualunque
-// nostro run_checkpoint; l'asserzione finale resta valida e non e' indebolita: se
-// fosse il run corrente a lasciare un residuo, scatterebbe comunque.
-cleanupAllVerifyWorkspaces();
+// Backoff BLOCCANTE deterministico (niente setTimeout/Date.now/Math.random): assorbe
+// un lock transitorio di Windows tra i tentativi senza introdurre non-determinismo.
+function settleDeterministic(ms) {
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+  catch { /* Atomics non disponibile: prosegui senza attesa */ }
+}
+
+// Pulizia ROBUSTA della SOLA radice temp PRIVATA (stessa forma di cleanBdTmp). NON
+// lancia MAI: un lock transitorio di Windows su un file appena copiato/rimosso NON
+// deve trasformarsi in un falso rosso exit-1. Sostituisce il cleanup GLOBALE della
+// radice condivisa, che cancellava anche le copie vive di altri processi.
+// SOLO IL PROPRIETARIO SPAZZA: se la radice e' EREDITATA appartiene al padre (le sue
+// copie sono VIVE li' sotto mentre noi giriamo).
+function cleanM4Tmp() {
+  if (TMP_ROOT_INHERITED) return;
+  for (let i = 0; i < 6; i += 1) {
+    try {
+      if (!existsSync(TMP_VERIFY_ROOT)) return;
+      rmSync(TMP_VERIFY_ROOT, { recursive: true, force: true, maxRetries: 4, retryDelay: 60 });
+      if (!existsSync(TMP_VERIFY_ROOT)) return;
+    } catch { /* lock transitorio: ritenta col backoff sotto */ }
+    if (i < 5) settleDeterministic(80 * (i + 1));
+  }
+  /* esaurito: NON lanciamo. L'igiene tollera una radice vuota-ma-locked. */
+}
+
+// Voci presenti sotto la radice PRIVATA. Su Windows la RADICE puo' restare (vuota ma)
+// momentaneamente LOCKED da un figlio appena terminato: NON e' un residuo, ma NON e'
+// nemmeno "pulito PROVATO". `null` = radice presente e NON leggibile (stato IGNOTO):
+// ritornare [] farebbe puntare al verde ANCHE la via d'uscita dell'eccezione (L-COL-006).
+// (Nel NUOVO ordine la lettura NON e' preceduta da alcun rm della radice: lo stato
+// 'delete pending' di Windows che motivava la tolleranza non si presenta piu'.)
+function tmpEntries() {
+  if (!existsSync(TMP_VERIFY_ROOT)) return [];
+  try { return readdirSync(TMP_VERIFY_ROOT); }
+  catch { return null; }
+}
+
+// SWEEP DEGLI ORFANI ALL'AVVIO: un run_loop/run_checkpoint killato a meta' (SIGKILL,
+// non intercettabile) lascia una copia temp orfana sotto la NOSTRA radice. Ripuliamo
+// SOLO la radice PRIVATA e SOLO se e' NOSTRA (mai quella del padre o di un altro
+// processo), PRIMA di qualunque nostro run_checkpoint.
+cleanM4Tmp();
+// FOTOGRAFIA di cio' che c'era GIA': il residuo che asseriremo in sezione 8 e' il DELTA
+// rispetto a questa fotografia. Cosi' l'igiene e' IMPUTABILE a questo run (un orfano di
+// un terzo o le copie VIVE del padre, su una radice EREDITATA, non ci appartengono)
+// SENZA dover spazzare la radice prima di guardarla — lo sweep che precede l'asserzione
+// ne distruggerebbe la prova.
+const TMP_AT_START = new Set(tmpEntries() || []);
+
+// Residuo IMPUTABILE A QUESTO RUN: le voci comparse DOPO l'avvio e sopravvissute.
+function residualTmp() {
+  const now = tmpEntries();
+  if (now === null) return ['<radice presente ma NON leggibile: igiene non provata>'];
+  return now.filter((e) => !TMP_AT_START.has(e));
+}
 
 // Immagine semgrep PINNATA: la riproducibilita dell'oracolo dipende dal pin (deve
 // combaciare con run_semgrep.mjs / SEMGREP_IMAGE). 1.165.0 == semgrep/semgrep:latest.
@@ -115,7 +190,11 @@ const RUN_OPTS = { runId: 'm4-gate', createdAt: '1970-01-01T00:00:00.000Z', base
 
 // ---------------------------------------------------------------------------
 function nodeRun(script, args, cwd = ROOT) {
-  const env = { ...process.env, PATH: `${process.env.PATH || ''}${delimiter}${GO_BIN}` };
+  const env = {
+    ...process.env,
+    PATH: `${process.env.PATH || ''}${delimiter}${GO_BIN}`,
+    TRUELINE_TMP_VERIFY_ROOT: TMP_VERIFY_ROOT,
+  };
   const res = spawnSync(process.execPath, [script, ...args], {
     cwd, env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
   });
@@ -588,17 +667,20 @@ assert('controllo 2: un NUOVO finding semgrep in-scope (injection/authz) BLOCCA 
 const semgrepFps = s6s7.map((f) => f.fingerprint).filter(Boolean);
 let c2Base = null;
 if (semgrepFps.length) {
-  // Passiamo la baseline come array di fingerprint via un file temp gitignorato.
-  const baselineFile = resolve(ROOT, 'eval', '.tmp-m4-baseline.json');
+  // Passiamo la baseline come array di fingerprint via un file temp gitignorato,
+  // sotto la radice PRIVATA (nessuna contesa con un run concorrente).
+  const baselineFile = M4_BASELINE;
   try {
-    // scrittura diretta (built-in): file usa-e-getta sotto eval/ (gitignore .tmp-*).
-    const { writeFileSync, rmSync } = await import('node:fs');
+    // scrittura diretta (built-in): file usa-e-getta sotto la radice privata
+    // (gitignore "eval/.tmp-*/").
+    const { mkdirSync, writeFileSync, rmSync: rmFile } = await import('node:fs');
+    mkdirSync(TMP_VERIFY_ROOT, { recursive: true });
     writeFileSync(baselineFile, JSON.stringify(semgrepFps), 'utf8');
     const cpBase = nodeRun(RUN_CHECKPOINT, ['--eval', '--no-osv', '--baseline', baselineFile]);
     let cpBaseRep = null;
     try { cpBaseRep = JSON.parse(cpBase.stdout); } catch { /* gestito */ }
     c2Base = cpBaseRep && cpBaseRep.controls ? cpBaseRep.controls.find((c) => c.id === 2) : null;
-    rmSync(baselineFile, { force: true });
+    rmFile(baselineFile, { force: true });
   } catch { /* best effort: il file e' comunque gitignorato */ }
 }
 const c2BaseSemgrepBlockers = c2Base
@@ -631,11 +713,28 @@ assert('m3_gate_check ancora EXIT 0 (oppure 2 = DB di prova assente, non regress
   m3.status === 0 || m3.status === 2,
   m3.status === 2 ? 'exit=2 (DB di prova assente: precondizione M3, non regressione)' : `exit=${m3.status}`);
 
-assert('nessuna copia temp residua (eval/.tmp-verify)', !existsSync(TMP_VERIFY),
-  existsSync(TMP_VERIFY) ? 'directory ancora presente' : 'assente');
-assert('nessun residuo temp del gate M4 (eval/.tmp-m4-baseline.json)',
-  !existsSync(resolve(ROOT, 'eval', '.tmp-m4-baseline.json')),
-  existsSync(resolve(ROOT, 'eval', '.tmp-m4-baseline.json')) ? 'residuo presente' : 'assente');
+// Igiene, MISURATA PRIMA DI SPAZZARE: uno sweep immediatamente prima dell'asserzione
+// ne distruggerebbe la prova (il controllo non potrebbe piu' fallire). Si asserisce
+//   (a) nessuna copia temp lasciata da QUESTO run sotto la radice PRIVATA, e
+//   (b) il run_checkpoint FIGLIO ha lavorato SOTTO la NOSTRA radice: prova DIRETTA che
+//       l'env TRUELINE_TMP_VERIFY_ROOT e' stata ereditata, attribuibile a questo run.
+// NB: NON si osserva l'esistenza di eval/.tmp-verify. E' stato GLOBALE di terzi — un
+// orfano altrui renderebbe questo gate ROSSO in permanenza (vietato: h1_perpid_check
+// r.743-747) — ed e' per giunta CIECO, perche' verify_workspace POTA la radice appena
+// si svuota: un figlio ricaduto sulla CONDIVISA la creerebbe, ci lavorerebbe e la
+// rimuoverebbe, lasciando la sonda verde.
+const m4BaselineResidual = existsSync(M4_BASELINE);
+const m4Residual = residualTmp();
+const posixLower = (p) => String(p).replace(/\\/g, '/').toLowerCase();
+const cpWs = String((cpNewRep && cpNewRep.workspace) || '');
+const cpWsPrivate = cpWs !== '' && posixLower(cpWs).startsWith(`${posixLower(TMP_VERIFY_ROOT)}/`);
+assert('nessuna copia temp residua di QUESTO run sotto la radice PRIVATA (eval/.tmp-m4-<pid>) e run_checkpoint FIGLIO sulla NOSTRA radice',
+  m4Residual.length === 0 && cpWsPrivate,
+  `residui=[${m4Residual.join(', ')}] preesistenti=${TMP_AT_START.size} workspace-figlio=${cpWs || 'assente'} sotto-radice-privata=${cpWsPrivate}`);
+assert('nessun residuo temp del gate M4 (il file baseline usa-e-getta sotto la radice privata)',
+  !m4BaselineResidual, m4BaselineResidual ? 'residuo presente' : 'assente');
+// Sweep DOPO la misura (e solo se la radice e' NOSTRA).
+cleanM4Tmp();
 
 // Pulizia della copia effimera del ruleset che run_semgrep monta (.trueline/):
 // run_semgrep la ripulisce nel proprio finally; verifichiamo che non resti nulla
