@@ -200,8 +200,9 @@ ma il finding porta `verified` **per-finding**, non eleva la categoria a
 **Igiene strutturale in REMEDIATE (`L-COL-030`):** `dup_check`/`cycle_check`/`twin_check`
 (se il pack li dichiara) sono **report-only** — l'audit fa emergere il debito strutturale
 (cloni verbatim, cicli di import, coppie clone-and-rename) con baseline-delta, ma **non gata**
-la remediation e **non** lo auto-fixa (detection-only in v1). Il gate d'igiene sul delta è
-BUILD-only (`modes/build.md`).
+la remediation e **non** lo auto-fixa (detection-only in v1). L'audit li espone in
+`report.structural_debt` (dai finding già calcolati dal controllo 1, nessun re-run). Il gate
+d'igiene sul delta è BUILD-only (`modes/build.md`).
 
 ### 6. Git a strati
 
