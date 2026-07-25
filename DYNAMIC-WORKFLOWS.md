@@ -3,16 +3,16 @@
 | | |
 |---|---|
 | **Progetto** | Trueline (`COL`) — ex codename *Collaudo* |
-| **Versione** | v0.1 (Chat E) |
-| **Data** | 14 giugno 2026 |
-| **Copre** | `L-COL-027` (cardine); `O-COL-010` (piano richiesto) |
+| **Versione** | v0.2 (Chat E; emendata 25 lug 2026 — model policy per RUOLO + effort, §5/§5.1) |
+| **Data** | 14 giugno 2026 (emend. 25 luglio 2026) |
+| **Copre** | `L-COL-027` (cardine, emendato 25 lug 2026); `O-COL-010` (piano richiesto); `O-COL-012` (configurazione di orchestrazione — misura #1 in §5.1) |
 | **Dipende da** | `00-INDEX` v1.0 (manifest + ledger), `10-EVALUATION` v0.1 (l'harness che fa da gate), `11-BLUEPRINT-ENGINE` v0.1 (schema del task, `L-COL-019`), tutti i moduli per la mappa di milestone (§8) |
 
 ---
 
 ## 1. Cos'è — e cosa NON è
 
-Questo file descrive **come costruiamo Trueline** una volta chiuso il blueprint: l'implementazione è orchestrata con i **Dynamic Workflows di Opus 4.8**, cioè lo **strumento `Workflow` di Claude Code** (orchestrazione deterministica in JavaScript), non con la validazione sequenziale a una-cosa-alla-volta. *(L-COL-027)*
+Questo file descrive **come costruiamo Trueline** una volta chiuso il blueprint: l'implementazione è orchestrata con i **Dynamic Workflows**, cioè lo **strumento `Workflow` di Claude Code** (orchestrazione deterministica in JavaScript), non con la validazione sequenziale a una-cosa-alla-volta. *(L-COL-027)*
 
 Tre confini da tenere fermi — è un metodo di **build-time**, non un pezzo del prodotto:
 
@@ -24,7 +24,7 @@ Tre confini da tenere fermi — è un metodo di **build-time**, non un pezzo del
 
 ## 2. Meccanica
 
-Quattro fasi: **plan → distribute → verify → integrate**. L'orchestratore — la **sessione Claude Code su Opus 4.8** che lancia lo strumento — scompone il milestone in **task atomici indipendenti**, ne lancia uno per subagent in **ondate concorrenti**, fa verificare ogni output contro il suo **gate**, e **integra solo se il gate è verde**.
+Quattro fasi: **plan → distribute → verify → integrate**. L'orchestratore — la **sessione Claude Code** che lancia lo strumento, sul modello di punta a effort `max` (§5) — scompone il milestone in **task atomici indipendenti**, ne lancia uno per subagent in **ondate concorrenti**, fa verificare ogni output contro il suo **gate**, e **integra solo se il gate è verde**.
 
 - Il piano del workflow vive in **variabili JS fuori dal context** dell'orchestratore (è come funziona lo script dello strumento `Workflow`).
 - Primitivi reali: un'**ondata di task indipendenti** = `parallel([...])` (barriera, attende tutti) **oppure** `pipeline(items, build, verify, …)` quando build→verify→fix scorrono per-item senza barriera (default consigliato). Un `agent()` per task; `phase()` raggruppa i task nella vista di avanzamento.
@@ -62,18 +62,40 @@ TASK
 
 ## 5. Model policy *(L-COL-027 — contenuto)*
 
-| Ruolo / tipo di task | Modello |
+> **Emendamento del 25 luglio 2026 (`L-COL-027`, ledger `00-INDEX §4`).** La policy è ratificata sul modello **misurato in sessione** — `claude-opus-5[1m]`. L'invariante è il **RUOLO, non la versione**: dove sotto si legge «modello di punta» si intende il modello di punta *misurato*, non un id pinnato per sempre. Ogni cambio di **famiglia** richiede una nuova misura prima della ratifica (protocollo in linea nella nota di riconciliazione di `00-INDEX §4`; `O-COL-012`). Il **dial di effort** per ruolo è parte della policy dal 25 lug 2026.
+
+| Ruolo / tipo di task | Modello + effort |
 |---|---|
-| **Verifier** (ogni task) | **Opus 4.8** — sempre |
-| **Orchestratore** | **Opus 4.8** (la sessione Claude Code che lancia lo strumento) |
-| **Builder — logica delicata di Trueline** | **Opus 4.8** |
-| **Builder — task meccanici** | **Sonnet** |
+| **Verifier** (ogni task) | modello di punta, **effort `max`** — sempre, non negoziabile: è il ruolo che paga |
+| **Orchestratore** | modello di punta, **effort `max`** (la sessione Claude Code che lancia lo strumento) |
+| **Builder — logica delicata di Trueline** | modello di punta, **effort alto** |
+| **Builder — task meccanici** | **Sonnet** *oppure* modello di punta a **effort basso** — confronto **aperto** (`O-COL-012`), non ancora deciso |
 
 **Builder-Opus (logica delicata di Trueline):** la macchina del verify-fix loop (`05` §3) e la sequenza segreto-in-history (`05` §7); l'**RLS checker** col parser DDL (`03` §5.4); fingerprint/baseline-delta e dedup (`04` §6, `03` §6); la **partizione guardia/impattate** dei characterization test (`06` §4); `validate_blueprint` + checklist semantica (`11` §5); il detector di deploy-coupling (`01` §5.3); la normalizzazione → finding model, inclusa la mappa OWASP `L-COL-026` (`03` §6); la risoluzione-intento/dispatch (`01` §2, `02` §5).
 
 **Builder-Sonnet (meccanico):** gli **wrapper** degli oracoli a flag fissi (`run_semgrep`/`gitleaks`/`osv`/`deadcode`); i `references/modes/*`; i 3 template di prompt (`12`); frontmatter e boilerplate; la tabella di preflight (`03` §4); l'assemblaggio di `package_skill` (`09` §3).
 
-> **Niente Haiku.** Per codice che deve passare un gate, **Sonnet è il pavimento**: sotto-dimensionare sposta il costo nel fix-loop. La colonna `modello` del task indica il **builder**; il **verifier è sempre Opus**.
+> **Niente Haiku.** Per codice che deve passare un gate, **Sonnet è il pavimento**: sotto-dimensionare sposta il costo nel fix-loop. La colonna `modello` del task indica il **builder**; il **verifier è sempre il modello di punta, a effort `max`**.
+
+### 5.1 Misura #1 di `O-COL-012` — workflow H-1 (25 luglio 2026)
+
+Prima esecuzione nella configurazione nuova (onde strette / task larghi / effort per ruolo), su `wf_a24c2be1-ecb` (estensione del pattern per-pid all'harness). Controllo = A2c F1 (`wf_6c0b5121-fdb`), di cui `SESSION-STATE` conserva i numeri.
+
+| Metrica | Controllo (A2c F1) | H-1 (config nuova) | Lettura |
+|---|---|---|---|
+| ampiezza d'onda max | 12 agenti | **2** | manipolata come previsto |
+| agenti totali | 12 | 14 (5 builder · 6 verifier BLIND · 3 fixer) | comparabile |
+| interruzioni d'infrastruttura | 0 *(A2b: 1)* | **0** | nessun peggioramento |
+| falsi rossi da concorrenza | 0 dichiarati | **0** | — |
+| **CANARY — bug bloccanti colti dal verifier BLIND** | **4** (+1 orchestratore) | **14** (W1: 8 · W2: 6) | **il criterio di stop non scatta: sale** |
+| wall-clock | non registrato | 2h14m | **baseline istituita**, non confrontabile |
+| costo per task (Opus-basso vs Sonnet) | non registrato | **confondato — non usabile** | vedi sotto |
+
+**Ipotesi A — sostenuta, non chiusa.** Onde da 2 con task larghi: zero interruzioni, zero falsi rossi, canary in netta salita. Una sola esecuzione non chiude la domanda: serve un secondo workflow comparabile.
+
+**Ipotesi B — non decidibile da questa misura (onestà, `L-COL-006`).** I numeri grezzi darebbero Opus-`low` a 6.725 token di output contro 36.211 di Sonnet, a parità di esito (0 blocking per entrambi dai verifier BLIND). Ma **entrambi i bracci hanno trovato il lavoro sostanziale già fatto**: un verificatore di W2 aveva emesso un blocking **fuori mandato** e il fixer aveva eseguito in anticipo il lavoro di W3, lasciando ai due lotti solo 4 righe di commento per file. Il confronto **non va usato** per chiudere `O-COL-012`.
+
+**Lezione di progettazione (causa del confondimento).** Il keystone copriva i 16 pack mentre il mandato del task non li includeva: **il gate di un task non può essere più largo del task**, o i confini d'onda perdono. Vale per i nostri workflow quanto `L-COL-019` vale per i task di un blueprint.
 
 ## 6. Il gate NON è "DB locale" — sono gli oracoli di Trueline
 

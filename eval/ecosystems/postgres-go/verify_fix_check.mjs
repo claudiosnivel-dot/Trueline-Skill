@@ -7,7 +7,7 @@
 //
 // Il "verde" e' un FATTO degli ORACOLI rieseguiti dal loop (gitleaks), MAI
 // una frase dell'LLM (L-COL-002). Su una COPIA ISOLATA della fixture (MAI
-// l'originale: eval/.tmp-verify-go/<id>, .git incluso) il gate:
+// l'originale: eval/.tmp-verify-go-<pid>/<id>, .git incluso) il gate:
 //   1) raccoglie i finding del FLOOR dall'oracolo gitleaks working-tree;
 //   2) per il finding GO-S1 esegue runFindingLoop col fix-provider deterministico
 //      (eval-mode: gate umano auto-approvato, solo-eval, L-COL-021);
@@ -67,7 +67,16 @@ const GO_BIN = process.platform === 'win32' ? 'C:/Users/claud/go/bin' : '/c/User
 const DEADCODE_BIN = process.platform === 'win32'
   ? 'C:/Users/claud/go/bin/deadcode'
   : 'deadcode';
-const TMP_VERIFY_ROOT = resolve(ROOT, 'eval', '.tmp-verify-go');
+// Radice temp PRIVATA per-invocazione (pattern BD-1 / oracolo H-1): la radice FISSA
+// e' CONDIVISA fra run concorrenti e il suo cleanup (rm della RADICE quando si svuota)
+// rade al suolo anche le copie VIVE di un altro processo — i falsi rossi storici su
+// Windows. Forma "env se presente, altrimenti privata per-pid": lanciati da un harness
+// (ecosystem_conformance) EREDITIAMO la radice del padre via TRUELINE_TMP_VERIFY_ROOT —
+// siamo lo STESSO run logico — mentre due run indipendenti hanno radici DIVERSE.
+// Coperta da .gitignore "eval/.tmp-*/".
+const TMP_VERIFY_ROOT = process.env.TRUELINE_TMP_VERIFY_ROOT
+  ? resolve(process.env.TRUELINE_TMP_VERIFY_ROOT)
+  : resolve(ROOT, 'eval', `.tmp-verify-go-${process.pid}`);
 
 // runOpts deterministici: IDENTICI a quelli che il loop usa in rerunOracleFor
 // (default di runFindingLoop) cosi' i fingerprint che raccogliamo qui combaciano
@@ -129,7 +138,7 @@ function norm(oracle, json, scope) {
   return (v.ok ? f : []).map((x) => ({ ...x, _scope: scope }));
 }
 
-// Crea una COPIA ISOLATA della fixture (eval/.tmp-verify-go/<id>, .git incluso).
+// Crea una COPIA ISOLATA della fixture (eval/.tmp-verify-go-<pid>/<id>, .git incluso).
 // Mirror di copyPackFixture: id unico per-run (pid + counter).
 let __c = 0;
 function copyFixture() {
@@ -191,7 +200,7 @@ let dir = null;
 try { ws = copyFixture(); dir = ws.dir; } catch (e) {
   assert('copia ISOLATA della fixture creata', false, e.message);
 }
-assert('copia ISOLATA della fixture creata (eval/.tmp-verify-go, .git incluso)',
+assert('copia ISOLATA della fixture creata (eval/.tmp-verify-go-<pid>, .git incluso)',
   Boolean(dir) && existsSync(dir), dir || 'assente');
 
 // ISOLAMENTO: la copia NON deve risolvere al repo esterno ne' alla fixture orig.

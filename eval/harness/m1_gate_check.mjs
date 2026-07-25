@@ -16,14 +16,15 @@
 //   D) CHECKPOINT: controlli 1-2 verdi (delta), 3-4 DEGRADATI (M3, non falso verde).
 //   E) INTEGRITA FIXTURE: dopo il loop, eval/reference-app e' INTATTO ->
 //        i gate M0 (detection + present) escono ancora 0; nessuna copia temp
-//        residua in eval/.tmp-verify.
+//        lasciata da QUESTO run sotto la radice temp PRIVATA per-pid, e il
+//        run_loop figlio ha lavorato SOTTO quella radice (env ereditata).
 //
 // Esce 0 se TUTTI i criteri passano, 1 altrimenti.
 //
 // Node ESM, solo built-in + l'orchestratore del loop.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { resolve, dirname, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -31,15 +32,90 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..', '..');
 const RUN_LOOP = resolve(ROOT, 'trueline', 'scripts', 'loop', 'run_loop.mjs');
 const RUN_EVAL = resolve(ROOT, 'eval', 'harness', 'run_eval.mjs');
-const TMP_VERIFY = resolve(ROOT, 'eval', '.tmp-verify');
+// Radice temp PRIVATA per-invocazione (pattern BD-1, build_discipline_check r.83-90):
+// elimina la CONTESA sulla radice CONDIVISA eval/.tmp-verify, la cui pulizia GLOBALE
+// rade al suolo anche le copie VIVE di un altro processo (i falsi rossi storici su
+// Windows). Forma "env se presente, altrimenti privata per-pid": i FIGLI (run_loop,
+// gate ri-eseguiti) EREDITANO la radice del padre via env — sono lo STESSO run logico
+// — mentre due run indipendenti hanno radici DIVERSE. Coperta da .gitignore "eval/.tmp-*/".
+//
+// PROPRIETA' della radice: e' NOSTRA solo se l'abbiamo creata noi (env ASSENTE
+// all'avvio). Se l'abbiamo EREDITATA siamo un FIGLIO (es. m1 ri-eseguito da m4/m5) e
+// sotto quella radice vivono le copie e i file del PADRE: raderla e' esattamente
+// l'operazione che il pattern per-pid vuole eliminare (distrugge il lavoro E le prove
+// d'igiene altrui). Il non-proprietario non spazza MAI la radice: rimuove solo cio'
+// che ha creato lui.
+const TMP_ROOT_INHERITED = Boolean(process.env.TRUELINE_TMP_VERIFY_ROOT);
+const TMP_VERIFY_ROOT = TMP_ROOT_INHERITED
+  ? resolve(process.env.TRUELINE_TMP_VERIFY_ROOT)
+  : resolve(ROOT, 'eval', `.tmp-m1-${process.pid}`);
+process.env.TRUELINE_TMP_VERIFY_ROOT = TMP_VERIFY_ROOT;
 const GO_BIN = process.platform === 'win32' ? 'C:/Users/claud/go/bin' : '/c/Users/claud/go/bin';
 
 function nodeRun(script, args) {
-  const env = { ...process.env, PATH: `${process.env.PATH || ''}${delimiter}${GO_BIN}` };
+  const env = {
+    ...process.env,
+    PATH: `${process.env.PATH || ''}${delimiter}${GO_BIN}`,
+    TRUELINE_TMP_VERIFY_ROOT: TMP_VERIFY_ROOT,
+  };
   const res = spawnSync(process.execPath, [script, ...args], {
     cwd: ROOT, env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
   });
   return { status: res.status, stdout: res.stdout || '', stderr: res.stderr || '', error: res.error };
+}
+
+// Backoff BLOCCANTE deterministico (niente setTimeout/Date.now/Math.random): assorbe
+// un lock transitorio di Windows tra i tentativi senza introdurre non-determinismo.
+function settleDeterministic(ms) {
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+  catch { /* Atomics non disponibile: prosegui senza attesa */ }
+}
+
+// Pulizia ROBUSTA della SOLA radice temp PRIVATA (stessa forma di cleanBdTmp). NON
+// lancia MAI: un lock transitorio di Windows su un file appena scritto/rimosso NON
+// deve trasformarsi in un falso rosso exit-1. Sostituisce il cleanup GLOBALE della
+// radice condivisa, che cancellava anche le copie vive di altri processi.
+// SOLO IL PROPRIETARIO SPAZZA: se la radice e' EREDITATA appartiene al padre (le sue
+// copie sono VIVE li' sotto mentre noi giriamo).
+function cleanM1Tmp() {
+  if (TMP_ROOT_INHERITED) return;
+  for (let i = 0; i < 6; i += 1) {
+    try {
+      if (!existsSync(TMP_VERIFY_ROOT)) return;
+      rmSync(TMP_VERIFY_ROOT, { recursive: true, force: true, maxRetries: 4, retryDelay: 60 });
+      if (!existsSync(TMP_VERIFY_ROOT)) return;
+    } catch { /* lock transitorio: ritenta col backoff sotto */ }
+    if (i < 5) settleDeterministic(80 * (i + 1));
+  }
+  /* esaurito: NON lanciamo. L'igiene tollera una radice vuota-ma-locked. */
+}
+
+// Voci presenti sotto la radice PRIVATA. Su Windows la RADICE puo' restare (vuota ma)
+// momentaneamente LOCKED da un figlio appena terminato: NON e' un residuo, ma NON e'
+// nemmeno "pulito PROVATO". `null` = radice presente e NON leggibile (stato IGNOTO):
+// ritornare [] farebbe puntare al verde ANCHE la via d'uscita dell'eccezione (L-COL-006).
+// (Nel NUOVO ordine la lettura NON e' preceduta da alcun rm della radice: lo stato
+// 'delete pending' di Windows che motivava la tolleranza non si presenta piu'.)
+function tmpEntries() {
+  if (!existsSync(TMP_VERIFY_ROOT)) return [];
+  try { return readdirSync(TMP_VERIFY_ROOT); }
+  catch { return null; }
+}
+
+// SWEEP DEGLI ORFANI ALL'AVVIO (solo se la radice e' NOSTRA: un run precedente con lo
+// stesso pid, killato a meta', puo' averci lasciato una copia) + FOTOGRAFIA di cio' che
+// c'era GIA'. Il residuo che asseriremo e' il DELTA rispetto a questa fotografia: cosi'
+// l'igiene e' IMPUTABILE a questo run (un orfano di un terzo o le copie VIVE del padre,
+// su una radice EREDITATA, non ci appartengono) senza dover spazzare la radice PRIMA di
+// guardarla — lo sweep che precede l'asserzione ne distruggerebbe la prova.
+cleanM1Tmp();
+const TMP_AT_START = new Set(tmpEntries() || []);
+
+// Residuo IMPUTABILE A QUESTO RUN: le voci comparse DOPO l'avvio e sopravvissute.
+function residualTmp() {
+  const now = tmpEntries();
+  if (now === null) return ['<radice presente ma NON leggibile: igiene non provata>'];
+  return now.filter((e) => !TMP_AT_START.has(e));
 }
 
 const checks = [];
@@ -151,8 +227,25 @@ assert('Controllo 4 (conformita) DEGRADATO (M3, NON verde)',
 // --- E) INTEGRITA DEL FIXTURE ------------------------------------------------
 console.log('');
 console.log('6) Integrita del fixture canonico (eval/reference-app intatto):');
-assert('Nessuna copia temp residua (eval/.tmp-verify)', !existsSync(TMP_VERIFY),
-  existsSync(TMP_VERIFY) ? 'directory ancora presente' : 'assente');
+// Igiene, MISURATA PRIMA DI SPAZZARE: uno sweep immediatamente prima dell'asserzione
+// ne distruggerebbe la prova (il controllo non potrebbe piu' fallire). Si asserisce
+//   (a) nessuna copia temp lasciata da QUESTO run sotto la radice PRIVATA, e
+//   (b) il run_loop FIGLIO ha lavorato SOTTO la NOSTRA radice: prova DIRETTA che l'env
+//       TRUELINE_TMP_VERIFY_ROOT e' stata ereditata, attribuibile a questo run.
+// NB: NON si osserva l'esistenza di eval/.tmp-verify. E' stato GLOBALE di terzi — un
+// orfano altrui renderebbe questo gate ROSSO in permanenza (vietato: h1_perpid_check
+// r.743-747) — ed e' per giunta CIECO, perche' verify_workspace POTA la radice appena
+// si svuota: un figlio ricaduto sulla CONDIVISA la creerebbe, ci lavorerebbe e la
+// rimuoverebbe, lasciando la sonda verde.
+const m1Residual = residualTmp();
+const posixLower = (p) => String(p).replace(/\\/g, '/').toLowerCase();
+const loopWs = String(report.workspace || '');
+const loopWsPrivate = loopWs !== '' && posixLower(loopWs).startsWith(`${posixLower(TMP_VERIFY_ROOT)}/`);
+assert('Nessuna copia temp residua di QUESTO run sotto la radice PRIVATA (eval/.tmp-m1-<pid>) e run_loop FIGLIO sulla NOSTRA radice',
+  m1Residual.length === 0 && loopWsPrivate,
+  `residui=[${m1Residual.join(', ')}] preesistenti=${TMP_AT_START.size} workspace-figlio=${loopWs || 'assente'} sotto-radice-privata=${loopWsPrivate}`);
+// Sweep DOPO la misura (e solo se la radice e' NOSTRA).
+cleanM1Tmp();
 
 const det = nodeRun(RUN_EVAL, ['--mode=detection']);
 assert('Gate M0 detection ancora EXIT 0 (fixture intatto)', det.status === 0, `exit=${det.status}`);

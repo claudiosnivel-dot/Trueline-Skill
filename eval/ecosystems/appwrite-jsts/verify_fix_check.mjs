@@ -7,14 +7,14 @@
 //
 // Il "verde" è un FATTO degli ORACOLI rieseguiti dal loop (gitleaks/knip/
 // appwrite_perms_check), MAI una frase dell'LLM (L-COL-002). Su una COPIA
-// ISOLATA della fixture (MAI l'originale: eval/.tmp-verify-aw/<id>, .git incluso)
+// ISOLATA della fixture (MAI l'originale: eval/.tmp-verify-aw-<pid>/<id>, .git incluso)
 // il gate, in 10 stadi:
 //   1) SNAPSHOT d'integrità (sola lettura) — repo ESTERNO + fixture INTERNA;
 //   2) PRECONDIZIONE A: se oracle appwrite_perms_check.mjs manca -> banner + exit 2
 //      (il provisioning dell'oracle è dell'ENGINE integrator, L-COL-024);
 //      PRECONDIZIONE B: se reference-app/.git manca -> banner + exit 2 (il
 //      provisioning dell'inner-repo è dell'ORCHESTRATORE, L-COL-024);
-//   3) COPIA ISOLATA della fixture (eval/.tmp-verify-aw/<pid>-<n>, .git incluso);
+//   3) COPIA ISOLATA della fixture (eval/.tmp-verify-aw-<pid>/<pid>-<n>, .git incluso);
 //   4) createWorkBranch sul .git INTERNO della copia (come run_loop);
 //   5) collectFloorFindings: gitleaks WT+history (secret), knip (dead-code),
 //      appwrite_perms_check -> normalize('appwrite-perms',...,'working-tree')
@@ -78,7 +78,16 @@ const RUN_DEADCODE = resolve(ROOT, 'trueline', 'scripts', 'oracles', 'run_deadco
 // authz Appwrite (eco-F2): oracolo statico dei permessi collection Appwrite.
 const APPWRITE_PERMS_CHECK = resolve(ROOT, 'trueline', 'scripts', 'oracles', 'appwrite_perms_check.mjs');
 const GO_BIN = process.platform === 'win32' ? 'C:/Users/claud/go/bin' : '/c/Users/claud/go/bin';
-const TMP_VERIFY_ROOT = resolve(ROOT, 'eval', '.tmp-verify-aw');
+// Radice temp PRIVATA per-invocazione (pattern BD-1 / oracolo H-1): la radice FISSA
+// e' CONDIVISA fra run concorrenti e il suo cleanup (rm della RADICE quando si svuota)
+// rade al suolo anche le copie VIVE di un altro processo — i falsi rossi storici su
+// Windows. Forma "env se presente, altrimenti privata per-pid": lanciati da un harness
+// (ecosystem_conformance) EREDITIAMO la radice del padre via TRUELINE_TMP_VERIFY_ROOT —
+// siamo lo STESSO run logico — mentre due run indipendenti hanno radici DIVERSE.
+// Coperta da .gitignore "eval/.tmp-*/".
+const TMP_VERIFY_ROOT = process.env.TRUELINE_TMP_VERIFY_ROOT
+  ? resolve(process.env.TRUELINE_TMP_VERIFY_ROOT)
+  : resolve(ROOT, 'eval', `.tmp-verify-aw-${process.pid}`);
 
 // runOpts deterministici: IDENTICI a quelli che il loop usa in rerunOracleFor
 // (default di runFindingLoop) così i fingerprint che raccogliamo qui combaciano
@@ -113,7 +122,7 @@ function norm(oracle, json, scope) {
   return (v.ok ? f : []).map((x) => ({ ...x, _scope: scope }));
 }
 
-// Crea una COPIA ISOLATA della fixture (eval/.tmp-verify-aw/<id>, .git incluso).
+// Crea una COPIA ISOLATA della fixture (eval/.tmp-verify-aw-<pid>/<id>, .git incluso).
 // Mirror di copyPackFixture: id unico per-run (pid + counter). Cleanup never-throw.
 let __c = 0;
 function copyFixture() {
@@ -263,7 +272,7 @@ let dir = null;
 try { ws = copyFixture(); dir = ws.dir; } catch (e) {
   assert('copia ISOLATA della fixture creata', false, e.message);
 }
-assert('copia ISOLATA della fixture creata (eval/.tmp-verify-aw, .git incluso)',
+assert('copia ISOLATA della fixture creata (eval/.tmp-verify-aw-<pid>, .git incluso)',
   Boolean(dir) && existsSync(dir), dir || 'assente');
 
 // ISOLAMENTO: la copia NON deve risolvere al repo esterno né alla fixture orig.
