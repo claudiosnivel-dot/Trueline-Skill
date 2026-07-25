@@ -28,3 +28,10 @@ eval/ecosystems/_a0-fixtures/**/node_modules/
 # inner .git e node_modules provvigionati a runtime dall'orchestratore -> gitignorati.
 eval/ecosystems/_a2a-fixtures/**/.git/
 eval/ecosystems/_a2a-fixtures/**/node_modules/
+
+# A2c: fixture del gate attivazione igiene — sorgenti TRACKED (materiale di gate);
+# inner .git e node_modules (jscpd/madge) provvigionati a runtime dall'orchestratore.
+eval/ecosystems/_a2c-fixtures/**/.git/
+eval/ecosystems/_a2c-fixtures/**/node_modules/
+eval/ecosystems/_a2c-fixtures/**/.trueline/
+eval/ecosystems/_a2c-fixtures/**/package-lock.json

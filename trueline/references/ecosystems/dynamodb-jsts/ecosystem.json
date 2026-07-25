@@ -21,7 +21,9 @@
     "dependency-vuln": { "tool": "osv", "lockfiles": ["package-lock.json"] },
     "authz":           { "tool": "semgrep", "ruleset": "ruleset/", "role": "authz-surface" },
     "injection":       { "tool": "semgrep", "ruleset": "ruleset/" },
-    "dead-code":       { "tool": "knip" }
+    "dead-code":       { "tool": "knip" },
+    "duplication":     { "tool": "jscpd", "min_tokens": 50 },
+    "architecture":    { "tool": "madge" }
   },
   "test_runner": { "detect": ["vitest", "jest", "node:test"] },
   "floor":        ["secret", "dependency-vuln", "authz"],

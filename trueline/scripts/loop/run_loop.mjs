@@ -178,6 +178,29 @@ function collectFindings(dir, manifest = null) {
   return findings;
 }
 
+// A2c/F3 — DEBITO STRUTTURALE per l'audit REMEDIATE. control1Hygiene GIA' computa
+// dup/cycle/twin (F1) quando il manifest li dichiara, ma run_loop scarta i
+// control.findings nel serializzare report.checkpoint. Qui li RIUSA (nessun re-run):
+// estrae la fetta d'igiene del controllo 1 per report.structural_debt (detection-only,
+// non-bloccante, mai auto-fixata — L-COL-030). dead-code (knip) NON e' debito
+// strutturale (ha il suo gate delta). [] se il controllo 1 o i finding sono assenti.
+const HYGIENE_ORACLES = new Set(['jscpd', 'cycle', 'twin']);
+export function extractStructuralDebt(controls) {
+  const c1 = Array.isArray(controls) ? controls.find((c) => c && c.id === 1) : null;
+  const findings = (c1 && Array.isArray(c1.findings)) ? c1.findings : [];
+  return findings
+    .filter((f) => f.source_oracle && HYGIENE_ORACLES.has(f.source_oracle.oracle))
+    .map((f) => ({
+      fingerprint: f.fingerprint,
+      category: f.category,
+      severity: f.severity,
+      oracle: f.source_oracle.oracle,
+      location: f.location,
+      evidence: f.evidence,
+      baseline_status: f.baseline_status,
+    }));
+}
+
 const baseName = (p) => String(p).replace(/\\/g, '/').split('/').pop();
 
 // Esegue il recomputer (run.mjs) sulla copia e ritorna Map id->observed corrente.
@@ -425,6 +448,22 @@ async function main() {
       green: cp.green, summary: cp.summary, degraded: cp.degraded,
       controls: cp.controls.map((c) => ({ id: c.id, name: c.name, status: c.status, green: c.green, detail: c.detail })),
     };
+
+    // A2c/F3 — debito strutturale (report REMEDIATE) dai finding d'igiene GIA'
+    // calcolati dal controllo 1 (nessun re-run). Guardia sul manifest -> BIT-invariante
+    // per i pack senza dup/cycle. report.findings (loop) resta invariato.
+    const declaresHygiene = Boolean(manifest && manifest.oracles
+      && (manifest.oracles.duplication || manifest.oracles.architecture));
+    if (declaresHygiene) {
+      report.structural_debt = extractStructuralDebt(cp.controls);
+      if (!report.coverage) report.coverage = { characterized: [], declared_uncovered: [] };
+      if (Array.isArray(report.coverage.declared_uncovered)) {
+        report.coverage.declared_uncovered.push({
+          what: 'duplicazione verbatim >=min_tokens; cicli import JS/TS; directory clone-and-rename (twin)',
+          why: 'igiene strutturale detection-only (L-COL-030): rilevata e riportata, MAI auto-fixata; i simboli RINOMINATI e le duplicazioni sotto min_tokens non sono coperti',
+        });
+      }
+    }
 
     // (5.5) TIDY ADVISORY (BD-1, momento 3 — solo con --fixture-app, EVAL-ONLY).
     //   La disciplina di costruzione EMETTE un segnale ISPEZIONABILE di

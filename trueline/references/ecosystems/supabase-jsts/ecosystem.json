@@ -12,6 +12,8 @@
     "authz":           { "tool": "semgrep", "ruleset": "../oracles/semgrep-ai-ruleset/" },
     "crypto":          { "tool": "semgrep", "ruleset": "../oracles/semgrep-ai-ruleset/" },
     "dead-code":       { "tool": "knip" },
+    "duplication":     { "tool": "jscpd", "min_tokens": 50 },
+    "architecture":    { "tool": "madge" },
     "rls":             { "tool": "rls_check", "kind": "postgres-rls", "role": "authz-surface" }
   },
   "test_runner": { "detect": ["vitest", "jest", "node:test"], "run_file": "node --test {file}" },

@@ -45,8 +45,11 @@ in pieno in BUILD: i `acceptance_criteria` + `target_tests` del task corrente
 | `scripts/oracles/run_osv.mjs` | CVE nelle dipendenze (lockfile) |
 | `scripts/oracles/rls_check.mjs` | RLS checker custom su migration DDL |
 | `scripts/oracles/run_deadcode.mjs` | knip (primario) / ts-prune / depcheck |
+| `scripts/oracles/run_dupcheck.mjs` | jscpd — duplicazione verbatim (controllo 1, se dichiarato) |
+| `scripts/oracles/run_cyclecheck.mjs` | madge — cicli di import (controllo 1, JS/TS, se dichiarato) |
+| `scripts/oracles/twin_check.mjs` | twinning per-entità — **segnale** detection-only (mai gate) |
 | `scripts/findings/normalize.mjs` | output nativo degli oracoli → finding model |
-| `scripts/findings/baseline.mjs` | calcola il delta rispetto alla baseline precedente |
+| `scripts/findings/baseline.mjs` | baseline-delta (sicurezza) + **baseline d'igiene** committato per dup/cycle; `--hygiene` = refresh |
 | `scripts/findings/prioritize.mjs` | ordina i finding per il loop |
 | `scripts/findings/explain.mjs` | spiegazione in linguaggio semplice (triage) |
 | `scripts/findings/fp_policy.mjs` | policy conservativa falsi positivi (`L-COL-028`) |
@@ -116,13 +119,23 @@ oracolo (`01` §4):
 
 | # | Controllo | Oracolo (fonte di verità) | Verde quando |
 |---|---|---|---|
-| 1 | Dead-code | knip via `run_deadcode.mjs` | nessun nuovo morto introdotto dal macrotask (delta); il pre-esistente è segnalato, non cancellato in autonomia (`L-COL-021`) |
+| 1 | Igiene strutturale | dead-code (`run_deadcode`/knip) + dup/cycle (`run_dupcheck`/`run_cyclecheck`, se il pack li dichiara) + twin (segnale) | nessun **nuovo** difetto d'igiene introdotto (delta); dup/cycle gatano sul delta vs **baseline d'igiene committato**; il pre-esistente è segnalato, non cancellato in autonomia (`L-COL-021`) |
 | 2 | Sicurezza | Semgrep + gitleaks + osv + RLS checker | nessun finding nuovo ≥ soglia nelle categorie in scope (`references/oracles/thresholds.md`) |
 | 3 | Regressioni | suite di test esistente | nessun test prima verde ora rosso |
 | 4 | Conformità-logica | i `target_tests` del task atomico corrente | i criteri di accettazione (`L-COL-019`) sono soddisfatti |
 
 L'LLM **non** decide l'esito di nessuno dei quattro. Verde/rosso è una proprietà
 dell'output degli strumenti, non una frase.
+
+> **Coverage del controllo 1 (`L-COL-006`).** Duplicazione = verbatim ≥ `min_tokens`
+> token (jscpd); i cloni **rinominati** (clone-and-rename per-entità) NON sono coperti dal
+> gate → `twin_check` li **segnala** (detection-only, mai gate). Cicli = solo pack **JS/TS**
+> (madge); per le altre lingue i cicli sono dichiarati non-coperti. L'efficienza/altitudine
+> non è gate-abile (Rice); l'altitudine come *contratto dichiarato* è dominio di `arch_check`
+> (A2b), non del controllo 1. dup/cycle **gatano in BUILD**, sono **report-only in REMEDIATE**.
+> Il baseline d'igiene assorbe il debito pre-esistente (**refresh:** `baseline.mjs capture
+> <dir> --hygiene`, ricalcolo → ratchet); un oracolo d'igiene dichiarato ma **non eseguito**,
+> o un baseline d'igiene **assente** in BUILD, **NON** è verde (guard, come `arch_check`).
 
 ### 4. Verde → commit + modello git
 

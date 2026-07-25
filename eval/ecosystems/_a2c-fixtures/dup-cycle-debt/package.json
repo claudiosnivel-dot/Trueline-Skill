@@ -1,0 +1,16 @@
+{
+  "name": "a2c-dup-cycle-debt",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Fixture A2c dup-cycle-debt: debito d'igiene REALE = un blocco verbatim >=50 token duplicato (src/a.ts <-> src/b.ts, jscpd) + un import circolare (src/x.ts <-> src/y.ts, madge). Nessun dead-code (knip.json tratta tutti i src come entry). Materiale del keystone del gate BUILD delta d'igiene.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "jscpd": "^4.0.0",
+    "knip": "^6.27.0",
+    "madge": "^6.0.0",
+    "typescript": "^5.5.0"
+  }
+}

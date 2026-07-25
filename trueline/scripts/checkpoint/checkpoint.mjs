@@ -34,6 +34,7 @@ import { resolve, dirname, join, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { normalize } from '../findings/normalize.mjs';
+import { loadHygieneBaseline } from '../findings/baseline.mjs';
 import { validateMany } from '../findings/validate_finding.mjs';
 import { partition } from '../characterization/partition.mjs';
 import {
@@ -163,7 +164,7 @@ function deltaBlockers(findings, baseline, { deadcode = false, gateCategories = 
 // da un oracolo DETECTION-ONLY (twin). Annota `baseline_status` new/pre-existing
 // come deltaBlockers (04 §6), cosi' i finding portano il marcatore per il report.
 // baseline = Set<fingerprint>.
-export function partitionBlockers(findings, baseline) {
+export function partitionBlockers(findings, baseline, detectionOnly = DETECTION_ONLY_ORACLES) {
   const out = [];
   for (const f of findings) {
     const oracle = f.source_oracle && f.source_oracle.oracle;
@@ -174,8 +175,8 @@ export function partitionBlockers(findings, baseline) {
     if (f.fix_state === 'accepted-risk') continue;
     // Delta: i pre-esistenti non bloccano — TRANNE gli oracoli a gate ASSOLUTO (arch).
     if (!isNew && !absolute) continue;
-    // Detection-only (twin): segnale, mai gate.
-    if (DETECTION_ONLY_ORACLES.has(oracle)) continue;
+    // Detection-only (twin; +jscpd/cycle in REMEDIATE): segnale, mai gate.
+    if (detectionOnly.has(oracle)) continue;
     out.push(f);
   }
   return out;
@@ -192,7 +193,7 @@ function archContractPresent(blueprintDir) {
   try { return blueprintDir != null && loadArchContract(blueprintDir) != null; } catch { return false; }
 }
 
-export function control1Hygiene(referenceApp, { baseline = new Set(), runOpts, manifest = null, mode = 'remediate', blueprintDir = null }) {
+export function control1Hygiene(referenceApp, { baseline = new Set(), runOpts, manifest = null, mode = 'remediate', blueprintDir = null, hygieneBaselineMissing = false }) {
   const all = [];
   const sub = [];
   // A2b — arch_check è un GATE ASSOLUTO di floor: se degrada (contratto vacuo /
@@ -200,6 +201,11 @@ export function control1Hygiene(referenceApp, { baseline = new Set(), runOpts, m
   // (detection-only) e di dup/cycle (igiene delta best-effort). Resta false per i
   // chiamanti legacy (ramo arch assente) -> BIT-invarianza.
   let archDegraded = false;
+  // A2c — degrado d'igiene: un oracolo dup/cycle DICHIARATO ma NON eseguito (wrapper
+  // assente / JSON non normalizzabile -> dup:degr/cycle:degr) NON e' un verde silenzioso
+  // in BUILD (L-COL-006), in analogia esatta con archDegraded. Resta false per i pack
+  // che non dichiarano dup/cycle (BIT-invarianza) e in REMEDIATE (dup/cycle report-only).
+  let hygieneDegraded = false;
 
   // --- dead-code (INVARIATO: knip/vulture/... via run_deadcode) --------------
   const dc = runOracle(RUN_DEADCODE, [referenceApp], referenceApp);
@@ -223,16 +229,16 @@ export function control1Hygiene(referenceApp, { baseline = new Set(), runOpts, m
     if (r.ok) {
       const n = normFindings('jscpd', r.json, { ...runOpts, scope: 'working-tree' });
       if (n.ok) { all.push(...n.findings); sub.push(`dup:${n.findings.length}`); }
-      else sub.push('dup:degr');
-    } else sub.push('dup:degr');
+      else { sub.push('dup:degr'); hygieneDegraded = true; }
+    } else { sub.push('dup:degr'); hygieneDegraded = true; }
   }
   if (decl.architecture) {
     const r = runOracle(RUN_CYCLECHECK, [referenceApp], referenceApp);
     if (r.ok) {
       const n = normFindings('cycle', r.json, { ...runOpts, scope: 'working-tree' });
       if (n.ok) { all.push(...n.findings); sub.push(`cycle:${n.findings.length}`); }
-      else sub.push('cycle:degr');
-    } else sub.push('cycle:degr');
+      else { sub.push('cycle:degr'); hygieneDegraded = true; }
+    } else { sub.push('cycle:degr'); hygieneDegraded = true; }
   }
 
   // --- twin: SEMPRE (detection-only, ecosystem-agnostic, non gata mai) -------
@@ -259,15 +265,52 @@ export function control1Hygiene(referenceApp, { baseline = new Set(), runOpts, m
     } else { sub.push('arch:degr'); archDegraded = true; }
   }
 
-  const blockers = partitionBlockers(all, baseline);
-  const green = blockers.length === 0 && !archDegraded;
+  // Mode-aware (A2c): in BUILD dup/cycle gata-no sul DELTA (vs baseline d'igiene
+  // committato); in REMEDIATE sono REPORT-ONLY (audit del debito, non gate — come
+  // twin). twin resta detection-only in entrambe. BIT-invariante per i pack senza
+  // dup/cycle dichiarati (nessun finding jscpd/cycle in `all`).
+  //
+  // Vacuity (baseline d'igiene assente in BUILD): NON floodare blocker sul debito
+  // legacy — senza baseline dup/cycle non sono distinguibili new-vs-old, quindi
+  // diventano REPORT-ONLY (come in REMEDIATE) e il verde è negato dal guard
+  // `hygieneMissingActive` con il messaggio di refresh (né un'ondata cieca di
+  // blocker, né un verde silenzioso — L-COL-006). Il branch di detail `baseline
+  // mancante` presuppone appunto blockers d'igiene soppressi (blockers.length === 0).
+  // Il vacuity guard scatta SOLO se ci sono davvero finding d'igiene GATE (dup/cycle)
+  // da gestire: senza baseline non si distingue new-vs-old, quindi si dichiara e si nega
+  // il verde. Ma un progetto PULITO (0 dup/cycle) non ha nulla da grandfather-are -> NON
+  // dev'essere rosso per un baseline che non gli serve (altrimenti OGNI build JS/TS senza
+  // baseline sarebbe rosso, anche a debito zero). twin resta escluso (detection-only).
+  const hasHygieneGateFindings = all.some((f) => f.source_oracle
+    && (f.source_oracle.oracle === 'jscpd' || f.source_oracle.oracle === 'cycle'));
+  const hygieneMissingActive = hygieneBaselineMissing && mode === 'build' && hasHygieneGateFindings;
+  const detectionOnly = (mode === 'build' && !hygieneMissingActive)
+    ? DETECTION_ONLY_ORACLES
+    : new Set([...DETECTION_ONLY_ORACLES, 'jscpd', 'cycle']);
+  const blockers = partitionBlockers(all, baseline, detectionOnly);
+  // Degrado d'igiene (A2c, L-COL-006): un oracolo dup/cycle DICHIARATO ma NON eseguito
+  // (dup:degr/cycle:degr) declassa il verde SOLO in BUILD, in analogia esatta con
+  // archDegraded. In REMEDIATE dup/cycle sono report-only -> il degrado NON declassa
+  // (preserva m5 + la BIT-invarianza dei pack che non dichiarano dup/cycle).
+  const hygieneDegradedActive = hygieneDegraded && mode === 'build';
+  const green = blockers.length === 0 && !archDegraded && !hygieneMissingActive && !hygieneDegradedActive;
+  // Detail del ramo "NUOVO introdotto": NOMINA la/e categoria/e che bloccano (il
+  // controllo 1 è multi-oracolo — dead-code/duplication/architecture). Così il
+  // messaggio resta accurato e retro-compatibile: un blocker dead-code produce
+  // "dead-code NUOVO" (invariante atteso da build_discipline_check), un blocker
+  // dup produce "duplication NUOVO", ecc.
+  const blkCats = [...new Set(blockers.map((b) => b.category))].join('/');
   return {
     id: 1, name: 'dead-code', status: green ? 'green' : 'red', green,
-    detail: green
-      ? `nessuna regressione d'igiene NUOVA [${sub.join(' ')}] (pre-esistenti segnalati)`
-      : archDegraded && blockers.length === 0
-        ? `arch degradato (contratto vacuo / non eseguito) — NON verde (L-COL-006) [${sub.join(' ')}]`
-        : `${blockers.length} dead-code NUOVO introdotto [${sub.join(' ')}]`,
+    detail: hygieneMissingActive && blockers.length === 0 && !archDegraded
+      ? `baseline d'igiene mancante (dup/cycle attivi in BUILD) — NON verde (L-COL-006): esegui \`baseline.mjs capture <dir> --hygiene\` [${sub.join(' ')}]`
+      : green
+        ? `nessuna regressione d'igiene NUOVA [${sub.join(' ')}] (pre-esistenti segnalati)`
+        : archDegraded && blockers.length === 0
+          ? `arch degradato (contratto vacuo / non eseguito) — NON verde (L-COL-006) [${sub.join(' ')}]`
+          : hygieneDegradedActive && blockers.length === 0
+            ? `oracolo d'igiene dichiarato ma non eseguito (degradato) — NON verde (L-COL-006) [${sub.join(' ')}]`
+            : `${blockers.length} ${blkCats || 'dead-code'} NUOVO introdotto [${sub.join(' ')}]`,
     findings: all, blockers,
   };
 }
@@ -790,7 +833,19 @@ export function runCheckpoint(referenceApp, opts = {}) {
     blueprintDir = null,
   } = opts;
 
-  const c1 = control1Hygiene(referenceApp, { baseline, runOpts, manifest, mode, blueprintDir });
+  // A2c — baseline d'igiene COMMITTATO: unisci i suoi fingerprint (disgiunti per
+  // oracolo da quelli di sicurezza) al baseline in-run, così dup/cycle pre-esistenti
+  // sono grandfathered in BUILD. Vacuity guard: in BUILD con dup/cycle dichiarati ma
+  // file assente -> hygieneBaselineMissing (control1 non verde). BIT-invarianza: nessun
+  // pack dichiara dup/cycle e nessun file presente -> union vuota, guard false.
+  const hb = loadHygieneBaseline(referenceApp);
+  const baselineWithHygiene = hb.set.size ? new Set([...baseline, ...hb.set]) : baseline;
+  const declaresHygiene = Boolean(manifest && manifest.oracles
+    && (manifest.oracles.duplication || manifest.oracles.architecture));
+  const hygieneBaselineMissing = mode === 'build' && declaresHygiene && !hb.present;
+  const c1 = control1Hygiene(referenceApp, {
+    baseline: baselineWithHygiene, runOpts, manifest, mode, blueprintDir, hygieneBaselineMissing,
+  });
   const c2 = control2Security(referenceApp, { baseline, runOpts, withOsv, manifest });
   const c3 = control3Regressions(referenceApp, { mode, characterization, finding });
   const c4 = control4Conformance(referenceApp, { mode, characterization, finding, blueprintDir, manifest });

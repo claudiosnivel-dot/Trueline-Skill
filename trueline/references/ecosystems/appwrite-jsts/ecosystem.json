@@ -11,7 +11,9 @@
     "dependency-vuln": { "tool": "osv", "lockfiles": ["package-lock.json", "pnpm-lock.yaml", "yarn.lock"] },
     "authz":           { "tool": "appwrite_perms_check", "kind": "appwrite-perms", "scan": ["."], "role": "authz-surface" },
     "injection":       { "tool": "semgrep", "ruleset": "ruleset/" },
-    "dead-code":       { "tool": "knip" }
+    "dead-code":       { "tool": "knip" },
+    "duplication":     { "tool": "jscpd", "min_tokens": 50 },
+    "architecture":    { "tool": "madge" }
   },
   "test_runner": { "detect": ["vitest", "jest", "mocha"] },
   "floor":        ["secret", "dependency-vuln", "authz"],
