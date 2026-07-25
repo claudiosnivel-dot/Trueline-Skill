@@ -47,11 +47,40 @@ function miniApp() {
 const DECL = { oracles: { duplication: { tool: 'jscpd', min_tokens: 50 }, architecture: { tool: 'madge' } }, languages: ['ts'] };
 const RUN = { runId: 'a2c', createdAt: '1970-01-01T00:00:00.000Z' };
 
-test('vacuity guard: BUILD + dup/cycle dichiarati + baseline assente -> control1 NON verde', () => {
-  const d = miniApp();
-  const c1 = control1Hygiene(d, { baseline: new Set(), runOpts: RUN, manifest: DECL, mode: 'build', hygieneBaselineMissing: true });
+// miniApp con jscpd LOCALE stub che emette nDup duplicati (deterministico, offline).
+// Solo `duplication` dichiarata (niente madge/npx) -> test stabile. Il vacuity guard
+// (P2) scatta SOLO con debito d'igiene reale; a debito zero un progetto pulito senza
+// baseline dev'essere VERDE (non ha nulla da grandfather-are).
+const DUP_ONLY = { oracles: { duplication: { tool: 'jscpd', min_tokens: 50 } }, languages: ['ts'] };
+function miniAppDup(nDup) {
+  const d = mkdtempSync(join(tmpdir(), 'a2c-p2-'));
+  mkdirSync(join(d, 'src'), { recursive: true });
+  writeFileSync(join(d, 'src', 'index.ts'), 'export const x = 1;\n');
+  writeFileSync(join(d, 'package.json'), '{"name":"mini","version":"1.0.0"}\n');
+  mkdirSync(join(d, 'node_modules', 'knip', 'bin'), { recursive: true });
+  writeFileSync(join(d, 'node_modules', 'knip', 'bin', 'knip.js'), 'process.stdout.write(JSON.stringify({ issues: [] }));\n');
+  mkdirSync(join(d, 'node_modules', 'jscpd', 'bin'), { recursive: true });
+  const dup = '{firstFile:{name:"src/a.ts",startLoc:{line:1},endLoc:{line:20}},secondFile:{name:"src/b.ts",startLoc:{line:1},endLoc:{line:20}},lines:20,tokens:60,fragment:"clone"}';
+  writeFileSync(join(d, 'node_modules', 'jscpd', 'bin', 'jscpd'),
+    'const fs=require(\'fs\'),p=require(\'path\');const a=process.argv;const o=a[a.indexOf(\'--output\')+1];'
+    + `fs.writeFileSync(p.join(o,'jscpd-report.json'),JSON.stringify({duplicates:${nDup ? `[${dup}]` : '[]'}}));\n`);
+  return d;
+}
+
+test('P2 — BUILD + duplication dichiarata + baseline assente + 0 dup: VERDE (niente da grandfather-are)', () => {
+  const d = miniAppDup(0);
+  const c1 = control1Hygiene(d, { baseline: new Set(), runOpts: RUN, manifest: DUP_ONLY, mode: 'build', hygieneBaselineMissing: true });
   rmSync(d, { recursive: true, force: true });
-  assert.equal(c1.green, false, 'baseline d\'igiene mancante in BUILD -> non verde (L-COL-006)');
+  assert.match(c1.detail, /dup:0/, 'precondizione: jscpd ha girato e trovato 0 duplicati');
+  assert.equal(c1.green, true, 'progetto pulito (0 dup) senza baseline NON dev\'essere rosso (P2)');
+});
+
+test('vacuity guard — BUILD + duplication dichiarata + baseline assente + dup PRESENTE: NON verde (baseline mancante)', () => {
+  const d = miniAppDup(1);
+  const c1 = control1Hygiene(d, { baseline: new Set(), runOpts: RUN, manifest: DUP_ONLY, mode: 'build', hygieneBaselineMissing: true });
+  rmSync(d, { recursive: true, force: true });
+  assert.match(c1.detail, /dup:1/, 'precondizione: jscpd ha trovato 1 duplicato');
+  assert.equal(c1.green, false, 'debito d\'igiene + baseline assente in BUILD -> non verde (L-COL-006)');
   assert.match(c1.detail, /baseline/i);
 });
 

@@ -276,7 +276,14 @@ export function control1Hygiene(referenceApp, { baseline = new Set(), runOpts, m
   // `hygieneMissingActive` con il messaggio di refresh (né un'ondata cieca di
   // blocker, né un verde silenzioso — L-COL-006). Il branch di detail `baseline
   // mancante` presuppone appunto blockers d'igiene soppressi (blockers.length === 0).
-  const hygieneMissingActive = hygieneBaselineMissing && mode === 'build';
+  // Il vacuity guard scatta SOLO se ci sono davvero finding d'igiene GATE (dup/cycle)
+  // da gestire: senza baseline non si distingue new-vs-old, quindi si dichiara e si nega
+  // il verde. Ma un progetto PULITO (0 dup/cycle) non ha nulla da grandfather-are -> NON
+  // dev'essere rosso per un baseline che non gli serve (altrimenti OGNI build JS/TS senza
+  // baseline sarebbe rosso, anche a debito zero). twin resta escluso (detection-only).
+  const hasHygieneGateFindings = all.some((f) => f.source_oracle
+    && (f.source_oracle.oracle === 'jscpd' || f.source_oracle.oracle === 'cycle'));
+  const hygieneMissingActive = hygieneBaselineMissing && mode === 'build' && hasHygieneGateFindings;
   const detectionOnly = (mode === 'build' && !hygieneMissingActive)
     ? DETECTION_ONLY_ORACLES
     : new Set([...DETECTION_ONLY_ORACLES, 'jscpd', 'cycle']);
