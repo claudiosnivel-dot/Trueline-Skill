@@ -77,7 +77,8 @@ Ricapitolazione operativa da `03` §4, lato pacchetto:
 
 ## 7. Distribuzione e install manuale *(O-COL-002, L-COL-013, O-COL-009)*
 
-- **Canale v1: repo GitHub + install manuale.** Nessun marketplace: una skill di security **esegue script**, quindi un install controllabile è parte della fiducia *(O-COL-002)*. Si clona/scarica il repo e si colloca l'albero nella directory delle skill dell'agente.
+- **Canale v1: repo GitHub + install manuale.** Nessun marketplace **pubblico**: una skill di security **esegue script**, quindi un install controllabile è parte della fiducia *(O-COL-002)*. Si clona/scarica il repo e si colloca l'albero nella directory delle skill dell'agente.
+- **Canale corrente per Claude Code (agg. 22 lug 2026): plugin da marketplace LOCALE.** Trueline è installata come **plugin Claude Code** da un marketplace **locale** `trueline-local` — una **directory controllabile e ispezionabile** (`dist/trueline-marketplace`, prodotta da `package_skill --plugin`), **non** un registry pubblico: `claude plugin marketplace add <dir>` + `claude plugin install trueline@trueline-local` (scope user; hook `SessionStart` per l'auto-attivazione). **Preserva `O-COL-002`**: l'install resta controllabile e ispezionabile (dir locale, nessun phone-home, nessun auto-update pubblico); il plugin è **additivo** al `.skill` + install manuale, che resta il canale portabile/cross-tool (`L-COL-009`). **Riallineamento post-build:** rigenera il bundle (`package_skill --plugin <dir>`) + `claude plugin update trueline` — o **uninstall+install** se la versione non cambia (l'update è un no-op a versione invariata). Cache installata: `~/.claude/plugins/cache/trueline-local/trueline/<ver>/`.
 - **Namespace.** Il brand check (Chat E) ha trovato l'handle `github.com/trueline` **occupato** da un account non legato al dev-tooling: il repo vive quindi sotto un **tuo** namespace (org dedicata o repo `trueline` sul tuo account); il `name:` della skill è indipendente dall'handle. Il pacchetto npm `trueline` è **libero**, se in futuro un sotto-strumento venisse pubblicato.
 - **Licenza**: **MIT** in v1 *(O-COL-003)* — kernel adottabile; l'eventuale wrapper SaaS è a parte (VISION §12).
 - **Telemetria: nessuna** *(O-COL-009)*. Il pacchetto porta i default `--metrics=off` dove esistono (`03`); niente fa "phone home". osv-scanner, online di default, invia **solo nome+versione** dei pacchetti e ha `--offline` documentato (`03` §5.3).
@@ -85,7 +86,7 @@ Ricapitolazione operativa da `03` §4, lato pacchetto:
 
 ## 8. Cosa questo modulo NON copre
 
-- **Non è un marketplace/registry** né un meccanismo di **auto-update** in v1 (`O-COL-002`).
+- **Non è un marketplace/registry PUBBLICO** né un meccanismo di **auto-update** pubblico in v1 (`O-COL-002`). Il marketplace **locale** `trueline-local` (dir controllabile, §7) è consentito e coerente con `O-COL-002` (install controllabile = fiducia); ciò che resta escluso è un **registry pubblico** o l'auto-update non supervisionato.
 - **Non vendorizza binari di terzi** (`03` §4); non introduce telemetria (`O-COL-009`).
 - **Non è il wrapper SaaS** (VISION §12): il packaging confeziona il **kernel**, non un runtime gestito.
 - **Non fissa le soglie** (`03` §7) né lo schema (`04`): le impacchetta soltanto.
