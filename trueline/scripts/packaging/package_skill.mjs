@@ -525,14 +525,24 @@ const RELEASE_RECORD = process.env.TRUELINE_RELEASE_DIGESTS
 
 // Digest deterministico dell'albero ASSEMBLATO: path POSIX ordinati + sha256 del
 // contenuto. Niente mtime, niente ordine di FS -> stesso albero, stesso digest.
+//
+// FINE-RIGA NORMALIZZATI (CRLF -> LF) sui file di TESTO. Il repo gira con
+// core.autocrlf=true e senza .gitattributes: lo stesso commit produce CRLF su
+// Windows e LF altrove, quindi un digest sui byte grezzi cambierebbe fra macchine
+// e a ogni checkout — un ROSSO senza che nessuno abbia toccato il contenuto. La
+// conversione di git non e' una modifica d'autore, ed e' l'unica cosa che qui si
+// normalizza: ogni altra differenza di byte resta una differenza. I file BINARI
+// (rilevati dal byte NUL) sono hashati grezzi, senza toccarli.
 function shippedDigest(treeRoot) {
   const files = walk(treeRoot, treeRoot, []).sort();
   const h = createHash('sha256');
   for (const rel of files) {
     const abs = join(treeRoot, rel.split('/').join(sep));
+    let buf = readFileSync(abs);
+    if (!buf.includes(0)) buf = Buffer.from(buf.toString('utf8').replace(/\r\n/g, '\n'), 'utf8');
     h.update(rel);
     h.update('\0');
-    h.update(createHash('sha256').update(readFileSync(abs)).digest('hex'));
+    h.update(createHash('sha256').update(buf).digest('hex'));
     h.update('\n');
   }
   return h.digest('hex');
