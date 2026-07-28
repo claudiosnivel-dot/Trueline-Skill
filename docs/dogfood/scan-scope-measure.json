@@ -1,0 +1,1666 @@
+{
+  "measuredAt": "2026-07-28T20:54:08.761Z",
+  "projects": [
+    {
+      "name": "progetto-web-ai",
+      "dir": "C:/Users/claud/Desktop/progetto-web-ai",
+      "isGitRepo": true,
+      "oracleMs": 7676,
+      "total": 30,
+      "counts": {
+        "generated": 28,
+        "source": 0,
+        "env": 2,
+        "dependency": 0
+      },
+      "byTopLevel": {
+        "C:/": {
+          "total": 30,
+          "generated": 28,
+          "source": 0,
+          "env": 2,
+          "dependency": 0
+        }
+      },
+      "remainingIfGeneratedExcluded": 2,
+      "generatedOnlySecrets": [],
+      "byRule": {
+        "jwt": {
+          "total": 6,
+          "generated": 4,
+          "source": 0,
+          "env": 2,
+          "dependency": 0
+        },
+        "generic-api-key": {
+          "total": 12,
+          "generated": 12,
+          "source": 0,
+          "env": 0,
+          "dependency": 0
+        },
+        "trueline-generic-assigned-secret": {
+          "total": 12,
+          "generated": 12,
+          "source": 0,
+          "env": 0,
+          "dependency": 0
+        }
+      },
+      "trackedCount": 0,
+      "detail": {
+        "source": [],
+        "env": [
+          {
+            "file": ".env.local",
+            "line": 2,
+            "rule": "jwt",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".env.local",
+            "line": 3,
+            "rule": "jwt",
+            "secret": "REDACTED",
+            "tracked": false
+          }
+        ],
+        "dependency": [],
+        "generated": [
+          {
+            "file": ".next/cache/.rscinfo",
+            "line": 1,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/cache/.previewinfo",
+            "line": 1,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/cache/.previewinfo",
+            "line": 1,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/cache/.previewinfo",
+            "line": 1,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/cache/.previewinfo",
+            "line": 1,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/prerender-manifest.json",
+            "line": 58,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/prerender-manifest.json",
+            "line": 59,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/prerender-manifest.json",
+            "line": 58,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/prerender-manifest.json",
+            "line": 59,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/server/chunks/[root-of-the-server]__0hbo8zm._.js.map",
+            "line": 1,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/server/chunks/[root-of-the-server]__1lcawwu._.js.map",
+            "line": 1,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/server/middleware/middleware-manifest.json",
+            "line": 27,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/server/middleware/middleware-manifest.json",
+            "line": 28,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/server/middleware/middleware-manifest.json",
+            "line": 25,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/server/middleware/middleware-manifest.json",
+            "line": 27,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/server/middleware/middleware-manifest.json",
+            "line": 28,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/server/middleware-manifest.json",
+            "line": 27,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/server/middleware-manifest.json",
+            "line": 28,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/server/middleware-manifest.json",
+            "line": 25,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/server/middleware-manifest.json",
+            "line": 27,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/server/middleware-manifest.json",
+            "line": 28,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/server/server-reference-manifest.json",
+            "line": 329,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/server/chunks/ssr/_0n2nizl._.js",
+            "line": 26,
+            "rule": "jwt",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/server/chunks/ssr/node_modules_next_dist_0opsz1q._.js.map",
+            "line": 1,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/server/chunks/[root-of-the-server]__0hbo8zm._.js",
+            "line": 35,
+            "rule": "jwt",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/server/edge/chunks/node_modules_1z7_9yq._.js.map",
+            "line": 1,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/server/chunks/[root-of-the-server]__1lcawwu._.js",
+            "line": 33,
+            "rule": "jwt",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/server/edge/chunks/node_modules_1z7_9yq._.js",
+            "line": 32,
+            "rule": "jwt",
+            "secret": "REDACTED",
+            "tracked": false
+          }
+        ],
+        "generatedSample": [
+          {
+            "file": ".next/cache/.rscinfo",
+            "line": 1,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/cache/.previewinfo",
+            "line": 1,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/cache/.previewinfo",
+            "line": 1,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/cache/.previewinfo",
+            "line": 1,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/cache/.previewinfo",
+            "line": 1,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/prerender-manifest.json",
+            "line": 58,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/prerender-manifest.json",
+            "line": 59,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/prerender-manifest.json",
+            "line": 58,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/prerender-manifest.json",
+            "line": 59,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/server/chunks/[root-of-the-server]__0hbo8zm._.js.map",
+            "line": 1,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/server/chunks/[root-of-the-server]__1lcawwu._.js.map",
+            "line": 1,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/server/middleware/middleware-manifest.json",
+            "line": 27,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/server/middleware/middleware-manifest.json",
+            "line": 28,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/server/middleware/middleware-manifest.json",
+            "line": 25,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".next/server/middleware/middleware-manifest.json",
+            "line": 27,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "ASV Officina",
+      "dir": "C:/Users/claud/Desktop/ASV Officina",
+      "isGitRepo": true,
+      "oracleMs": 4249,
+      "total": 160,
+      "counts": {
+        "generated": 4,
+        "source": 153,
+        "env": 3,
+        "dependency": 0
+      },
+      "byTopLevel": {
+        "C:/": {
+          "total": 160,
+          "generated": 4,
+          "source": 153,
+          "env": 3,
+          "dependency": 0
+        }
+      },
+      "remainingIfGeneratedExcluded": 156,
+      "generatedOnlySecrets": [],
+      "byRule": {
+        "generic-api-key": {
+          "total": 123,
+          "generated": 0,
+          "source": 122,
+          "env": 1,
+          "dependency": 0
+        },
+        "jwt": {
+          "total": 6,
+          "generated": 1,
+          "source": 3,
+          "env": 2,
+          "dependency": 0
+        },
+        "trueline-generic-assigned-secret": {
+          "total": 31,
+          "generated": 3,
+          "source": 28,
+          "env": 0,
+          "dependency": 0
+        }
+      },
+      "trackedCount": 32,
+      "detail": {
+        "source": [
+          {
+            "file": "Docs/superpowers/plans/2026-06-06-account-dipendenti-ruoli.md",
+            "line": 77,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "e2e/storico-cliente-meccanico.spec.ts",
+            "line": 29,
+            "rule": "jwt",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "playwright.config.ts",
+            "line": 15,
+            "rule": "jwt",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "e2e/m5-gdpr.spec.ts",
+            "line": 32,
+            "rule": "jwt",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "backups/remote_data_2026-06-21_20-00-02.sql",
+            "line": 94,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-06-21_20-00-02.sql",
+            "line": 95,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-06-21_20-00-02.sql",
+            "line": 96,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-06-21_20-00-02.sql",
+            "line": 97,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-16_20-00-01.sql",
+            "line": 97,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-16_20-00-01.sql",
+            "line": 98,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-16_20-00-01.sql",
+            "line": 99,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-16_20-00-01.sql",
+            "line": 100,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-16_20-00-01.sql",
+            "line": 101,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-16_20-00-01.sql",
+            "line": 103,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-05_20-00-02.sql",
+            "line": 93,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-05_20-00-02.sql",
+            "line": 94,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-05_20-00-02.sql",
+            "line": 95,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-10_20-00-01.sql",
+            "line": 95,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-10_20-00-01.sql",
+            "line": 96,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-10_20-00-01.sql",
+            "line": 97,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-10_20-00-01.sql",
+            "line": 98,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-10_20-00-01.sql",
+            "line": 99,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-06_20-00-03.sql",
+            "line": 95,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-06_20-00-03.sql",
+            "line": 96,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-06_20-00-03.sql",
+            "line": 97,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-06_20-00-03.sql",
+            "line": 98,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-06_20-00-03.sql",
+            "line": 99,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-24_20-00-01.sql",
+            "line": 97,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-24_20-00-01.sql",
+            "line": 98,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-24_20-00-01.sql",
+            "line": 99,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-24_20-00-01.sql",
+            "line": 100,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-24_20-00-01.sql",
+            "line": 101,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-24_20-00-01.sql",
+            "line": 103,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-06-30_20-00-02.sql",
+            "line": 91,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-12_20-00-01.sql",
+            "line": 96,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-12_20-00-01.sql",
+            "line": 97,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-12_20-00-01.sql",
+            "line": 98,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-12_20-00-01.sql",
+            "line": 99,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-12_20-00-01.sql",
+            "line": 100,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-09_20-00-02.sql",
+            "line": 95,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-09_20-00-02.sql",
+            "line": 96,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-09_20-00-02.sql",
+            "line": 97,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-09_20-00-02.sql",
+            "line": 98,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-09_20-00-02.sql",
+            "line": 99,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-06-28_20-00-02.sql",
+            "line": 91,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-06-26_20-00-01.sql",
+            "line": 95,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-06-26_20-00-01.sql",
+            "line": 96,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-06-26_20-00-01.sql",
+            "line": 97,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-06-26_20-00-01.sql",
+            "line": 98,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-06-26_20-00-01.sql",
+            "line": 99,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-21_20-00-02.sql",
+            "line": 97,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-21_20-00-02.sql",
+            "line": 98,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-21_20-00-02.sql",
+            "line": 99,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-21_20-00-02.sql",
+            "line": 100,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-21_20-00-02.sql",
+            "line": 101,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-21_20-00-02.sql",
+            "line": 103,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-17_20-00-02.sql",
+            "line": 97,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-17_20-00-02.sql",
+            "line": 98,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-17_20-00-02.sql",
+            "line": 99,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-17_20-00-02.sql",
+            "line": 100,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-17_20-00-02.sql",
+            "line": 101,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-17_20-00-02.sql",
+            "line": 103,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-06-29_20-00-02.sql",
+            "line": 91,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-14_20-00-01.sql",
+            "line": 96,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-14_20-00-01.sql",
+            "line": 97,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-14_20-00-01.sql",
+            "line": 98,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-14_20-00-01.sql",
+            "line": 99,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-14_20-00-01.sql",
+            "line": 100,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-20_20-00-02.sql",
+            "line": 97,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-20_20-00-02.sql",
+            "line": 98,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-20_20-00-02.sql",
+            "line": 99,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-20_20-00-02.sql",
+            "line": 100,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-20_20-00-02.sql",
+            "line": 101,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-20_20-00-02.sql",
+            "line": 103,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-06-27_20-00-01.sql",
+            "line": 95,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-06-27_20-00-01.sql",
+            "line": 96,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-06-27_20-00-01.sql",
+            "line": 97,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-06-27_20-00-01.sql",
+            "line": 98,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-06-27_20-00-01.sql",
+            "line": 99,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-01_20-00-01.sql",
+            "line": 92,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-01_20-00-01.sql",
+            "line": 93,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-04_20-00-02.sql",
+            "line": 93,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-04_20-00-02.sql",
+            "line": 94,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-04_20-00-02.sql",
+            "line": 95,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-03_20-00-01.sql",
+            "line": 93,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-03_20-00-01.sql",
+            "line": 94,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-03_20-00-01.sql",
+            "line": 95,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-08_20-00-02.sql",
+            "line": 95,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-08_20-00-02.sql",
+            "line": 96,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-08_20-00-02.sql",
+            "line": 97,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-08_20-00-02.sql",
+            "line": 98,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-08_20-00-02.sql",
+            "line": 99,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-07_20-00-02.sql",
+            "line": 95,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-07_20-00-02.sql",
+            "line": 96,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-07_20-00-02.sql",
+            "line": 97,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-07_20-00-02.sql",
+            "line": 98,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-07_20-00-02.sql",
+            "line": 99,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-18_20-00-02.sql",
+            "line": 97,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-18_20-00-02.sql",
+            "line": 98,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-18_20-00-02.sql",
+            "line": 99,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-18_20-00-02.sql",
+            "line": 100,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-18_20-00-02.sql",
+            "line": 101,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-18_20-00-02.sql",
+            "line": 103,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-06-25_20-00-01.sql",
+            "line": 95,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-06-25_20-00-01.sql",
+            "line": 96,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-06-25_20-00-01.sql",
+            "line": 97,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-06-25_20-00-01.sql",
+            "line": 98,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-06-25_20-00-01.sql",
+            "line": 99,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-25_20-00-02.sql",
+            "line": 97,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-25_20-00-02.sql",
+            "line": 98,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-25_20-00-02.sql",
+            "line": 99,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-25_20-00-02.sql",
+            "line": 100,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-25_20-00-02.sql",
+            "line": 101,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-25_20-00-02.sql",
+            "line": 103,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-22_20-00-02.sql",
+            "line": 97,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-22_20-00-02.sql",
+            "line": 98,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-22_20-00-02.sql",
+            "line": 99,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-22_20-00-02.sql",
+            "line": 100,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-22_20-00-02.sql",
+            "line": 101,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-22_20-00-02.sql",
+            "line": 103,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 148,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 155,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 162,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 169,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 176,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 183,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 190,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 197,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 298,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 305,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 343,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 350,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 357,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 364,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 405,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 412,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 419,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 454,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 495,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 632,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 639,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 653,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 1016,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 1023,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 1058,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 1065,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 1106,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "src/lib/database.types.ts",
+            "line": 1113,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": true
+          },
+          {
+            "file": "backups/remote_data_2026-07-11_20-00-01.sql",
+            "line": 96,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-11_20-00-01.sql",
+            "line": 97,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-11_20-00-01.sql",
+            "line": 98,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-11_20-00-01.sql",
+            "line": 99,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "backups/remote_data_2026-07-11_20-00-01.sql",
+            "line": 100,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          }
+        ],
+        "env": [
+          {
+            "file": ".env.supabase",
+            "line": 1,
+            "rule": "generic-api-key",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".env",
+            "line": 2,
+            "rule": "jwt",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".env.local",
+            "line": 5,
+            "rule": "jwt",
+            "secret": "REDACTED",
+            "tracked": false
+          }
+        ],
+        "dependency": [],
+        "generated": [
+          {
+            "file": "dist/assets/index-BO02mMCV.js",
+            "line": 95,
+            "rule": "jwt",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "dist/assets/index-BO02mMCV.js",
+            "line": 721,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "dist/assets/index-BO02mMCV.js",
+            "line": 721,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "dist/assets/index-BO02mMCV.js",
+            "line": 721,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          }
+        ],
+        "generatedSample": [
+          {
+            "file": "dist/assets/index-BO02mMCV.js",
+            "line": 95,
+            "rule": "jwt",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "dist/assets/index-BO02mMCV.js",
+            "line": 721,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "dist/assets/index-BO02mMCV.js",
+            "line": 721,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": "dist/assets/index-BO02mMCV.js",
+            "line": 721,
+            "rule": "trueline-generic-assigned-secret",
+            "secret": "REDACTED",
+            "tracked": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "appuntamentiok",
+      "dir": "C:/Users/claud/Desktop/appuntamentiok",
+      "isGitRepo": true,
+      "oracleMs": 333,
+      "total": 0,
+      "counts": {
+        "generated": 0,
+        "source": 0,
+        "env": 0,
+        "dependency": 0
+      },
+      "byTopLevel": {},
+      "remainingIfGeneratedExcluded": 0,
+      "generatedOnlySecrets": [],
+      "byRule": {},
+      "trackedCount": 0,
+      "detail": {
+        "source": [],
+        "env": [],
+        "dependency": [],
+        "generated": [],
+        "generatedSample": []
+      }
+    },
+    {
+      "name": "reportflippa",
+      "dir": "C:/Users/claud/Desktop/reportflippa",
+      "isGitRepo": true,
+      "oracleMs": 589,
+      "total": 2,
+      "counts": {
+        "generated": 0,
+        "source": 0,
+        "env": 2,
+        "dependency": 0
+      },
+      "byTopLevel": {
+        "C:/": {
+          "total": 2,
+          "generated": 0,
+          "source": 0,
+          "env": 2,
+          "dependency": 0
+        }
+      },
+      "remainingIfGeneratedExcluded": 2,
+      "generatedOnlySecrets": [],
+      "byRule": {
+        "jwt": {
+          "total": 2,
+          "generated": 0,
+          "source": 0,
+          "env": 2,
+          "dependency": 0
+        }
+      },
+      "trackedCount": 0,
+      "detail": {
+        "source": [],
+        "env": [
+          {
+            "file": ".env.test.local",
+            "line": 5,
+            "rule": "jwt",
+            "secret": "REDACTED",
+            "tracked": false
+          },
+          {
+            "file": ".env.test.local",
+            "line": 6,
+            "rule": "jwt",
+            "secret": "REDACTED",
+            "tracked": false
+          }
+        ],
+        "dependency": [],
+        "generated": [],
+        "generatedSample": []
+      }
+    }
+  ]
+}
