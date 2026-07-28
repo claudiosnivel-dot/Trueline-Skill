@@ -51,7 +51,7 @@ Ruolo LLM ristretto (`L-COL-028`): segnala-con-evidenza + abbassa priorità; **m
 
 | Data | Progetto/pack | Modalità | Finding (categoria/oracolo) e perché rumoroso | Misura necessaria |
 |---|---|---|---|---|
-| _(nessuna ancora)_ | | | | |
+| 2026-07-28 | progetto-web-ai / supabase-jsts | REMEDIATE (scan a sola lettura) | **28 finding su 30 vengono da .next/** — output di build di Next.js, **gitignorato**: manifest, chunk e source-map generati (regole jwt, generic-api-key, trueline-generic-assigned-secret). I 2 finding restanti sono in .env.local (anch esso gitignorato). Il segnale vero verrebbe **soffocato** dal rumore, ed e il primo checkpoint di un progetto in costruzione a pagarlo. | Decidere il confine dello **scope di scansione** del working-tree: gitleaks non rispetta .gitignore. Misurare quanti finding restano escludendo gli artefatti di build (.next/, dist/, build/, coverage/) su 2-3 progetti reali, e se l esclusione debba essere **dichiarata nel manifest del pack** (come oracles.rls.scan) invece che cablata. Attenzione: escludere per gitignore e **troppo largo** — un .env gitignorato con credenziali vere resta un finding che si vuole vedere. |
 
 ## 4. Bypass (Trueline è stata aggirata) — il segnale più informativo
 
