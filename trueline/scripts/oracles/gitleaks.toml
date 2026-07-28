@@ -32,6 +32,46 @@ entropy = 3.0
 keywords = ["key", "token", "secret", "cred", "passwd", "password"]
 
 [[rules]]
+id = "trueline-connection-string-credentials"
+description = "Credenziali hardcoded dentro una connection string (DSN/URI di database o broker)"
+# Perche serve: `trueline-generic-assigned-secret` pretende un identificatore dal
+# nome sensibile (key/token/secret/cred/passwd/password). Una DSN e quasi sempre
+# assegnata a un identificatore innocuo (`url`, `dsn`, `DATABASE_URL`), quindi la
+# password del DB scivolava via non rilevata: buco grave per un prodotto verticale
+# su Supabase/Postgres.
+#
+# Cosa cattura: la sola PASSWORD della userinfo `schema://utente:password@host`
+# (gruppo 1 => secretGroup), mai l'host ne il nome del database.
+#
+# Discriminante anti-falsi-positivi (parte del disegno, non un dettaglio):
+#  - lunghezza minima 8 ED entropia >= 3.0 sulla sola password. Questo esclude per
+#    costruzione i placeholder di documentazione (`user:pass@`, `u:p@`) e — caso
+#    che conta per gli utenti reali — la DSN dello stack Supabase locale
+#    `postgres://postgres:postgres@127.0.0.1:54322/postgres` (entropia di
+#    "postgres" ~ 2.75 < 3.0): chi sviluppa in locale NON deve ricevere un finding;
+#  - la classe di caratteri della password esclude spazi, virgolette, `$`, `{}`,
+#    `[]` e `<>`, cosi le DSN parametriche (`postgres://u:${DB_PASSWORD}@h`,
+#    `postgres://u:<password>@h`) non producono finding.
+regex = '''(?i)\b(?:postgres(?:ql)?|mysql|mariadb|mssql|mongodb(?:\+srv)?|rediss?|amqps?)://[a-z0-9._%+\-]*:([^\s:@/\\"'`<>{}\[\]$]{8,})@[a-z0-9._\-]+'''
+secretGroup = 1
+entropy = 3.0
+# gitleaks valuta la regola solo se il frammento contiene una di queste keyword:
+# vanno elencati tutti gli schemi, nessuno e sottostringa di un altro.
+keywords = [
+  "postgres://",
+  "postgresql://",
+  "mysql://",
+  "mariadb://",
+  "mssql://",
+  "mongodb://",
+  "mongodb+srv://",
+  "redis://",
+  "rediss://",
+  "amqp://",
+  "amqps://",
+]
+
+[[rules]]
 id = "trueline-stripe-like-key"
 description = "Chiave segreta in stile Stripe (sk_live_/sk_test_), tollerante a underscore interni"
 regex = '''sk_(?:live|test)_[A-Za-z0-9_]{16,}'''
