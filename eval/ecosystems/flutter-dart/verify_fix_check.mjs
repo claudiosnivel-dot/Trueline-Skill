@@ -44,12 +44,17 @@
 // continua a segnalare _unusedHelper). Il gate NON e' un timbro sempre-verde.
 //
 // Gli oracoli gitleaks richiedono C:/Users/claud/go/bin sul PATH: lo arricchiamo
-// per gli spawn. dart analyze usa il PATH di sistema (dart nel PATH di Windows).
+// per gli spawn. `dart analyze` usa il comando risolto da resolveDart() sulle dir di
+// PATH (su Windows l'entry di Flutter e' un launcher .bat: va avviato via shell).
 // NON tocca MAI il git del repo ESTERNO se non in SOLA LETTURA. Le
 // mutazioni git avvengono sul .git INTERNO della COPIA (isolato, L-COL-024).
 //
 // Node ESM, solo built-in + i moduli del loop (tutti dep-free). Esce 0 sse TUTTI
-// i check passano; 1 altrimenti; 2 se l'inner-repo della fixture manca (skip).
+// i check passano e NIENTE e' rimasto non osservato; 1 se un check ESEGUITO e'
+// rosso; 2 (skip ONESTO, mai un verde) se l'inner-repo della fixture manca oppure
+// se un TOOL D'AMBIENTE non e' avviabile e una parte della copertura non e' osservabile
+// (`dart` per dart analyze) — vedi resolveDart()/dartAvailable() e il banner di GAP in
+// coda. Il gap si dichiara su MISURA, mai su deduzione.
 
 import { spawnSync } from 'node:child_process';
 import {
@@ -78,7 +83,13 @@ const GO_BIN = process.platform === 'win32' ? 'C:/Users/claud/go/bin' : '/c/User
 // (ecosystem_conformance) EREDITIAMO la radice del padre via TRUELINE_TMP_VERIFY_ROOT —
 // siamo lo STESSO run logico — mentre due run indipendenti hanno radici DIVERSE.
 // Coperta da .gitignore "eval/.tmp-*/".
-const TMP_VERIFY_ROOT = process.env.TRUELINE_TMP_VERIFY_ROOT
+//
+// PROPRIETA' della radice: e' NOSTRA solo se l'abbiamo creata noi (env ASSENTE all'avvio).
+// Fotografiamo il fatto PRIMA di qualunque uso: se l'abbiamo EREDITATA siamo un FIGLIO e
+// sotto quella radice vivono le copie VIVE e le prove d'igiene del PADRE — raderla e'
+// esattamente l'operazione che il pattern per-pid vuole eliminare.
+const TMP_ROOT_INHERITED = Boolean(process.env.TRUELINE_TMP_VERIFY_ROOT);
+const TMP_VERIFY_ROOT = TMP_ROOT_INHERITED
   ? resolve(process.env.TRUELINE_TMP_VERIFY_ROOT)
   : resolve(ROOT, 'eval', `.tmp-verify-dart-${process.pid}`);
 
@@ -126,8 +137,12 @@ function copyFixture() {
   cpSync(FIXTURE, dir, { recursive: true, dereference: false });
   const cleanup = () => {
     try { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* best-effort */ }
+    // SOLO IL PROPRIETARIO SPAZZA la RADICE: se e' EREDITATA appartiene al PADRE. La
+    // rimozione della PROPRIA COPIA (sopra) resta SEMPRE attiva — guardarla anche lei
+    // trasformerebbe l'igiene in un residuo; e' guardata la SOLA rimozione della radice.
     try {
-      if (existsSync(TMP_VERIFY_ROOT) && readdirSync(TMP_VERIFY_ROOT).length === 0) {
+      if (!TMP_ROOT_INHERITED
+        && existsSync(TMP_VERIFY_ROOT) && readdirSync(TMP_VERIFY_ROOT).length === 0) {
         rmSync(TMP_VERIFY_ROOT, { recursive: true, force: true });
       }
     } catch { /* best-effort */ }
@@ -169,14 +184,88 @@ function gitleaksWtCount(dir) {
   return Array.isArray(json) ? json.length : null;
 }
 
+// RISOLUZIONE del comando `dart`. Su Windows l'entry-point dell'SDK distribuito con
+// Flutter e' un LAUNCHER `dart.bat` (in quella dir NON c'e' nessun `dart.exe`): un
+// .bat non e' un'immagine eseguibile, quindi `spawnSync('dart', …)` SENZA shell da'
+// ENOENT anche quando il tool E' installato e la sua dir E' sul PATH. Quell'ENOENT e'
+// un limite di spawn di Node, NON un fatto sull'ambiente dell'utente: tradurlo in
+// "dart non e' sul PATH" significa DICHIARARE un gap inesistente — una FRASE, non un
+// fatto d'oracolo (L-COL-002) — e spegnere la sola evidenza oracolare di FD-S4.
+// Quindi si RISOLVE davvero il comando scandendo le dir di PATH, e i launcher
+// .bat/.cmd si avviano via shell (stesso idioma gia' usato in
+// eval/harness/m3_gate_check.mjs e m5_gate_check.mjs). Solo quando NESSUN candidato
+// esiste l'assenza e' un FATTO d'ambiente.
+function resolveDart() {
+  const names = process.platform === 'win32'
+    ? ['dart.exe', 'dart.bat', 'dart.cmd']
+    : ['dart'];
+  const dirs = String(process.env.PATH || '').split(delimiter).filter(Boolean);
+  for (const d of dirs) {
+    const clean = d.replace(/^"+|"+$/g, '').trim();
+    if (!clean) continue;
+    for (const n of names) {
+      let p = null;
+      try { p = resolve(clean, n); } catch { continue; }
+      if (!existsSync(p)) continue;
+      // .bat/.cmd: avviabili SOLO tramite l'interprete di comandi.
+      return { path: p, needsShell: /\.(bat|cmd)$/i.test(p) };
+    }
+  }
+  return null;
+}
+
+const DART = resolveDart();
+
+// Esegue `dart <args>` col comando RISOLTO. Firma uniforme { status, stdout, stderr,
+// error } sia col ramo diretto sia con quello via shell, cosi' i chiamanti non devono
+// distinguere. Se `dart` non e' risolvibile ritorna un error ENOENT sintetico: l'esito
+// resta ONESTO (nessun verde silenzioso) senza far crashare il gate.
+function dartRun(args, cwd) {
+  if (!DART) {
+    return {
+      status: null, stdout: '', stderr: '',
+      error: { code: 'ENOENT', message: 'nessun eseguibile dart risolto sulle dir di PATH' },
+    };
+  }
+  const opts = { cwd, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 180_000 };
+  const res = DART.needsShell
+    // Comando in UNA stringa (idioma di m5_gate_check.psqlRun): evita il passaggio di
+    // args con shell:true e quota il path, che su Windows contiene spazi in generale.
+    ? spawnSync(`"${DART.path}" ${args.join(' ')}`, { ...opts, shell: true })
+    : spawnSync(DART.path, args, opts);
+  return { status: res.status, stdout: res.stdout || '', stderr: res.stderr || '', error: res.error };
+}
+
+// `dart` e' un tool d'AMBIENTE, non codice di questo repo: se non e' installato/non e'
+// avviabile il gate NON puo' OSSERVARE la copertura dead-code (FD-S4). L'assenza del
+// tool e' un GAP D'AMBIENTE, non un difetto del codice: farne un ROSSO sarebbe un rosso
+// SPURIO, ignorarla sarebbe un verde silenzioso su cio' che non e' stato verificato
+// (L-COL-006). Si rileva, si DICHIARA e si esce 2. Il gap si dichiara solo su MISURA
+// (`dart --version` realmente eseguito e non uscito 0), mai su deduzione: sonda unica e
+// a basso costo, cosi' il verdetto non dipende dall'errore del singolo analyze.
+function dartAvailable() {
+  if (!DART) {
+    return {
+      ok: false,
+      reason: 'nessun eseguibile dart (dart.exe/.bat/.cmd) trovato nelle dir di PATH',
+    };
+  }
+  const res = dartRun(['--version']);
+  if (res.error) {
+    return { ok: false, reason: `${DART.path} non avviabile: ${res.error.message}` };
+  }
+  if (res.status !== 0) {
+    return { ok: false, reason: `${DART.path} --version esce ${res.status} (SDK non funzionante)` };
+  }
+  const banner = `${res.stdout || ''}${res.stderr || ''}`.trim().split(/\r?\n/)[0] || 'dart';
+  return { ok: true, version: `${banner} [${posix(DART.path)}${DART.needsShell ? ', via shell' : ''}]` };
+}
+
 // Esegue `dart analyze --format=machine lib/dead.dart` sulla copia (cwd=dir).
 // Ritorna { stdout, stderr, status, error }. L'output machine-readable e' su stdout.
 // Exit 0 = nessun problema; exit 2 = warning; exit 3 = hint. NON e' un errore.
 function dartAnalyze(dir) {
-  const res = spawnSync('dart', ['analyze', '--format=machine', 'lib/dead.dart'], {
-    cwd: dir, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 60_000,
-  });
-  return { status: res.status, stdout: res.stdout || '', stderr: res.stderr || '', error: res.error };
+  return dartRun(['analyze', '--format=machine', 'lib/dead.dart'], dir);
 }
 
 // Controlla se dart analyze ha segnalato UNUSED_ELEMENT per `symbol` nello stdout
@@ -267,6 +356,9 @@ if (dir) {
 }
 
 let results = {};
+// GAP di COPERTURA dichiarato: valorizzato se un tool d'ambiente manca e una parte
+// del gate NON e' stata osservata. Determina l'esito 2 (skip parziale ONESTO).
+let coverageGap = null;
 
 if (dir) {
   // (4) Branch di lavoro autonomo sul .git INTERNO della copia (come run_loop).
@@ -337,20 +429,35 @@ if (dir) {
   const FD_S4_SYMBOL = '_unusedHelper';
   const FD_S4_FILE = 'lib/dead.dart';
 
-  // PRE-FIX: dart analyze deve rilevare UNUSED_ELEMENT per _unusedHelper.
-  const daPreFix = dartAnalyze(dir);
-  const fdS4Detected = !daPreFix.error && dartFlagsUnused(daPreFix.stdout, FD_S4_SYMBOL);
-  assert(
-    `FD-S4 PRE-FIX: dart analyze rileva UNUSED_ELEMENT per ${FD_S4_SYMBOL} in ${FD_S4_FILE}`,
-    fdS4Detected,
-    fdS4Detected
-      ? `UNUSED_ELEMENT rilevato (dart analyze exit=${daPreFix.status})`
-      : daPreFix.error
-        ? `dart analyze non avviato: ${daPreFix.error.message}`
-        : `UNUSED_ELEMENT NON trovato (stdout=${daPreFix.stdout.trim().slice(0, 120)})`,
-  );
+  // PRECONDIZIONE D'AMBIENTE: `dart` deve essere avviabile, altrimenti i due
+  // sotto-check che dipendono dall'ORACOLO (PRE-FIX/POST-FIX) NON sono eseguibili.
+  // Non li si finge verdi e non li si conta rossi: si registra il GAP e si esce 2
+  // in coda (L-COL-006). Tutto cio' che NON dipende da dart (fix testuale e
+  // contrasti) resta VALUTATO qui sotto.
+  const dartEnv = dartAvailable();
+  if (!dartEnv.ok) {
+    coverageGap = `dead-code FD-S4 via dart analyze (PRE-FIX detection + POST-FIX azzeramento UNUSED_ELEMENT su ${FD_S4_FILE}) — ${dartEnv.reason}`;
+    console.log(`  SKIP DICHIARATO — ${dartEnv.reason}`);
+    console.log(`  copertura NON osservata: UNUSED_ELEMENT su ${FD_S4_SYMBOL} (rilevazione e azzeramento).`);
+    console.log('  i check che NON dipendono da dart restano eseguiti e valutati:');
+  } else {
+    console.log(`  dart disponibile: ${dartEnv.version}`);
+    // PRE-FIX: dart analyze deve rilevare UNUSED_ELEMENT per _unusedHelper.
+    const daPreFix = dartAnalyze(dir);
+    const fdS4Detected = !daPreFix.error && dartFlagsUnused(daPreFix.stdout, FD_S4_SYMBOL);
+    assert(
+      `FD-S4 PRE-FIX: dart analyze rileva UNUSED_ELEMENT per ${FD_S4_SYMBOL} in ${FD_S4_FILE}`,
+      fdS4Detected,
+      fdS4Detected
+        ? `UNUSED_ELEMENT rilevato (dart analyze exit=${daPreFix.status})`
+        : daPreFix.error
+          ? `dart analyze non avviato: ${daPreFix.error.message}`
+          : `UNUSED_ELEMENT NON trovato (stdout=${daPreFix.stdout.trim().slice(0, 120)})`,
+    );
+  }
 
   // FIX diretto: rimuove _unusedHelper da lib/dead.dart (BIT-invariante engine).
+  // NON dipende da dart: e' una riscrittura testuale, resta valutata anche col gap.
   const fixResult = fixDartDeadcode(dir, FD_S4_FILE, FD_S4_SYMBOL);
   assert(
     `FD-S4 FIX: ${FD_S4_SYMBOL} rimosso da ${FD_S4_FILE}`,
@@ -358,30 +465,46 @@ if (dir) {
     fixResult.detail,
   );
 
-  // POST-FIX: dart analyze NON deve piu' segnalare _unusedHelper (0 UNUSED_ELEMENT).
-  const daPostFix = dartAnalyze(dir);
-  const fdS4Gone = !daPostFix.error && !dartFlagsUnused(daPostFix.stdout, FD_S4_SYMBOL);
-  assert(
-    `FD-S4 POST-FIX: dart analyze NON segnala piu' ${FD_S4_SYMBOL} (UNUSED_ELEMENT azzerato)`,
-    fdS4Gone,
-    fdS4Gone
-      ? `UNUSED_ELEMENT rimosso (dart analyze exit=${daPostFix.status})`
-      : daPostFix.error
-        ? `dart analyze non avviato: ${daPostFix.error.message}`
-        : `UNUSED_ELEMENT ANCORA presente (stdout=${daPostFix.stdout.trim().slice(0, 120)})`,
-  );
+  if (dartEnv.ok) {
+    // POST-FIX: dart analyze NON deve piu' segnalare _unusedHelper (0 UNUSED_ELEMENT).
+    const daPostFix = dartAnalyze(dir);
+    const fdS4Gone = !daPostFix.error && !dartFlagsUnused(daPostFix.stdout, FD_S4_SYMBOL);
+    assert(
+      `FD-S4 POST-FIX: dart analyze NON segnala piu' ${FD_S4_SYMBOL} (UNUSED_ELEMENT azzerato)`,
+      fdS4Gone,
+      fdS4Gone
+        ? `UNUSED_ELEMENT rimosso (dart analyze exit=${daPostFix.status})`
+        : daPostFix.error
+          ? `dart analyze non avviato: ${daPostFix.error.message}`
+          : `UNUSED_ELEMENT ANCORA presente (stdout=${daPostFix.stdout.trim().slice(0, 120)})`,
+    );
+  }
 
-  // CONTRASTO testuale: usedHelper ancora presente in dead.dart (contrasto pulito intatto).
+  // CONTRASTI testuali sulla porzione di CODICE del file (i commenti `//` sono
+  // spogliati): il fix dead-code rimuove la DICHIARAZIONE, non la prosa che la
+  // documenta. La fixture CITA `_unusedHelper` nella doc-comment del SEED (righe
+  // "SEED:FLUTTERDART-DC ..."): asserire l'assenza del simbolo dal TESTO INTERO
+  // e' un'asserzione SBAGLIATA — chiede al fix di riscrivere la documentazione
+  // della fixture, cosa che nessuna rimozione di dead-code fa. Si sostituisce con
+  // l'EQUIVALENTE SUL MERITO: la DICHIARAZIONE sparisce dal codice, il contrasto
+  // pulito `usedHelper` resta dichiarato. Stesso idioma "code-only" gia' usato dal
+  // fix-provider e dagli altri gate (spoglia commenti prima di cercare il token).
   const deadAfter = readSafe(join(dir, FD_S4_FILE));
+  const deadCodeOnly = deadAfter.split('\n')
+    .map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+  const usedDeclRe = /\busedHelper\s*\(/;
+  const unusedDeclRe = /\b_unusedHelper\s*\(/;
   assert(
-    `contrasto: ${FD_S4_FILE} contiene ancora usedHelper (contrasto pulito intatto)`,
-    /\busedHelper\b/.test(deadAfter),
-    /\busedHelper\b/.test(deadAfter) ? 'presente' : 'MANCANTE (fix ha rimosso anche il contrasto!)',
+    `contrasto: ${FD_S4_FILE} dichiara ancora usedHelper (contrasto pulito intatto)`,
+    usedDeclRe.test(deadCodeOnly),
+    usedDeclRe.test(deadCodeOnly) ? 'presente' : 'MANCANTE (fix ha rimosso anche il contrasto!)',
   );
   assert(
-    `contrasto: ${FD_S4_SYMBOL} NON compare piu' in ${FD_S4_FILE} (definizione rimossa)`,
-    !/\b_unusedHelper\b/.test(deadAfter),
-    !/\b_unusedHelper\b/.test(deadAfter) ? 'rimosso' : 'ANCORA presente (fix non applicata!)',
+    `contrasto: nessuna dichiarazione di ${FD_S4_SYMBOL} rimasta nel CODICE di ${FD_S4_FILE}`,
+    !unusedDeclRe.test(deadCodeOnly),
+    !unusedDeclRe.test(deadCodeOnly)
+      ? 'dichiarazione rimossa (le citazioni in doc-comment restano, e va bene)'
+      : 'ANCORA dichiarata (fix non applicata!)',
   );
 }
 
@@ -406,9 +529,26 @@ assert('HEAD del repo ESTERNO INVARIATO (0 contaminazione)', outerHeadAfter === 
   outerHeadAfter === outerHeadBefore ? `${outerHeadBefore.slice(0, 10)} (invariato)` : 'MUTATO (vietato!)');
 
 // --- Esito --------------------------------------------------------------------
+// TRE esiti, non due (L-COL-006):
+//   0 = tutti i check ESEGUITI e verdi, nessun gap di copertura;
+//   1 = almeno un check ESEGUITO e' ROSSO (difetto reale, il gap non lo assolve);
+//   2 = tutti i check eseguiti sono verdi MA una parte NON e' stata osservata per
+//       assenza di un tool d'ambiente: SKIP PARZIALE dichiarato, mai un verde.
 const allOk = checks.every((c) => c.ok);
 console.log('');
 console.log('------------------------------------------------------------');
-console.log(`=== GATE VERIFY (eco-F5b) flutter-dart RESULT: ${allOk ? 'PASS' : 'FAIL'} === (${checks.filter((c) => c.ok).length}/${checks.length} check)`);
+if (coverageGap) {
+  console.log(' ⚠ GAP D\'AMBIENTE — COPERTURA NON OSSERVATA (skip parziale dichiarato)');
+  console.log(`   mancante : ${coverageGap}`);
+  // Il banner riporta la CAUSA MISURATA da dartAvailable() (comando risolto sul PATH e
+  // sonda `dart --version` realmente eseguita), non una diagnosi presunta: dichiarare
+  // "tool assente" senza averlo misurato sarebbe una frase, non un fatto (L-COL-002).
+  console.log('   natura   : oracolo `dart` NON AVVIABILE qui (causa misurata sopra), NON un difetto del codice.');
+  console.log('   rimedio  : rendi `dart` avviabile (SDK installato + dir sul PATH), poi ri-lancia il gate.');
+  console.log('------------------------------------------------------------');
+}
+const verdict = allOk ? (coverageGap ? 'SKIP (exit 2)' : 'PASS') : 'FAIL';
+console.log(`=== GATE VERIFY (eco-F5b) flutter-dart RESULT: ${verdict} === (${checks.filter((c) => c.ok).length}/${checks.length} check eseguiti)`);
 console.log('------------------------------------------------------------');
-process.exit(allOk ? 0 : 1);
+if (!allOk) process.exit(1);
+process.exit(coverageGap ? 2 : 0);

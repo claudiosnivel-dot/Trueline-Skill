@@ -59,7 +59,12 @@ const GO_BIN = process.platform === 'win32' ? 'C:/Users/claud/go/bin' : '/c/User
 // (ecosystem_conformance) EREDITIAMO la radice del padre via TRUELINE_TMP_VERIFY_ROOT —
 // siamo lo STESSO run logico — mentre due run indipendenti hanno radici DIVERSE.
 // Coperta da .gitignore "eval/.tmp-*/".
-const TMP_VERIFY_ROOT = process.env.TRUELINE_TMP_VERIFY_ROOT
+// PROPRIETA' della radice: e' NOSTRA solo se l'abbiamo creata noi (env ASSENTE
+// all'avvio). Se l'abbiamo EREDITATA siamo un FIGLIO e sotto quella radice
+// vivono le copie VIVE e le prove d'igiene del PADRE: raderla e' esattamente
+// l'operazione che il pattern per-pid vuole eliminare.
+const TMP_ROOT_INHERITED = Boolean(process.env.TRUELINE_TMP_VERIFY_ROOT);
+const TMP_VERIFY_ROOT = TMP_ROOT_INHERITED
   ? resolve(process.env.TRUELINE_TMP_VERIFY_ROOT)
   : resolve(ROOT, 'eval', `.tmp-verify-spy-${process.pid}`);
 
@@ -109,8 +114,12 @@ function copyFixture() {
   cpSync(FIXTURE, dir, { recursive: true, dereference: false });
   const cleanup = () => {
     try { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* best-effort */ }
+    // SOLO IL PROPRIETARIO SPAZZA la RADICE: se e' EREDITATA appartiene al PADRE. La
+    // rimozione della PROPRIA COPIA (sopra) resta SEMPRE attiva — guardarla anche lei
+    // trasformerebbe l'igiene in un residuo; e' guardata la SOLA rimozione della radice.
     try {
-      if (existsSync(TMP_VERIFY_ROOT) && readdirSync(TMP_VERIFY_ROOT).length === 0) {
+      if (!TMP_ROOT_INHERITED
+        && existsSync(TMP_VERIFY_ROOT) && readdirSync(TMP_VERIFY_ROOT).length === 0) {
         rmSync(TMP_VERIFY_ROOT, { recursive: true, force: true });
       }
     } catch { /* best-effort */ }
@@ -271,6 +280,18 @@ if (dir) {
   assert('SPY-S6 NON e verified (mai un falso "sicuro")',
     !(results['SPY-S6'] && results['SPY-S6'].fix_state === 'verified'),
     results['SPY-S6'] ? results['SPY-S6'].fix_state : '-');
+
+  // (3a-bis) Verifica TESTUALE: la PASSWORD della connection string sparisce da
+  //   app/config.py. Il verdetto `verified` del loop guarda il FINGERPRINT del
+  //   finding seminato, non il file: senza questa riga il gate resterebbe verde
+  //   con la password del DB ancora nel sorgente ogni volta che il seme
+  //   sorteggiato e' il JWT anziche' la DSN (falso verde L-COL-006, misurato il
+  //   28 lug 2026 come intermittente). Con questa riga il rosso e'
+  //   DETERMINISTICO, qualunque sia il seme.
+  const cfgAfter = readSafe(join(dir, 'app', 'config.py'));
+  assert('secret SPY-S1: la password della DSN Postgres sparisce da app/config.py',
+    !/R3al_pw_live_8f3a9c2b1d4e5f6a/.test(cfgAfter),
+    /R3al_pw_live_8f3a9c2b1d4e5f6a/.test(cfgAfter) ? 'password DSN ANCORA presente (fix non applicata!)' : 'password DSN rimossa');
 
   // (3b) verifica INDIPENDENTE dell'azzeramento del simbolo dead-code: dopo il
   //   loop, vulture NON deve piu' segnalare _unused_helper in app/dead.py.

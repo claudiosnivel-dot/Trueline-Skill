@@ -96,11 +96,51 @@
 //       in build_discipline_check.mjs: backoff deterministico via Atomics.wait, mai un
 //       throw nudo che diventi un falso exit-1).
 //
+//   (9) static:pack-ownership-guard      — la META' MANCANTE del pattern per-pid nei
+//       pack. (4) pretende che la radice temp PORTI il pid; questo pretende che il
+//       pack sia PROPRIETARIO della radice che rade. Per ciascun pack della lista
+//       (--packs, default: tutti): se la radice e' stata EREDITATA (env
+//       TRUELINE_TMP_VERIFY_ROOT presente all'AVVIO) la rimozione della RADICE e'
+//       SALTATA, mentre la rimozione della PROPRIA COPIA resta SEMPRE attiva. E' la
+//       guardia gia' viva nei 5 harness (TMP_ROOT_INHERITED + cleanM3Tmp,
+//       m3_gate_check.mjs r.88-95/173-184). Le due meta' sono INSCINDIBILI: una
+//       guardia messa in cima al cleanup (`if (INHERITED) return`) salterebbe anche la
+//       COPIA, trasformando l'igiene in una perdita. Il predicato e' LEGATO alla call
+//       REALE — la POSIZIONE della rimozione dentro il blocco guardato — non alla mera
+//       presenza di una costante col nome giusto: la lezione (d) di H-1 e' che un
+//       predicato SLEGATO promuove codice morto a verde. Oggi: 16/16 falliscono
+//       (nessun pack ha la guardia; il cleanup rade la radice non appena si svuota).
+//
+//  (10) runtime:pack-inherited-root-survives — la stessa proprieta' PROVATA, non letta.
+//       Si pianta una radice EREDITATA e VUOTA sotto la nostra radice privata e si
+//       esegue un vero verify_fix_check con TRUELINE_TMP_VERIFY_ROOT = quella radice:
+//       la radice EREDITATA deve ESISTERE ANCORA dopo l'uscita del figlio. La radice e'
+//       VUOTA per disegno: il cleanup dei pack rade la radice SOLO SE VUOTA
+//       (`if (existsSync(root) && readdirSync(root).length === 0) rmSync(root)`), quindi
+//       piantarci dentro una dir "viva" di un finto padre — il disegno del brief del 26
+//       lug — renderebbe il sotto-test verde CON O SENZA la guardia: vacuo per
+//       costruzione. FLOOR ANTI-VACUO: il figlio deve DIMOSTRARE di aver raggiunto il
+//       cleanup — copia CREATA (sotto la radice EREDITATA: prova che l'override env e'
+//       stato onorato, senza la quale la radice sopravviverebbe per il motivo sbagliato)
+//       e copia RIMOSSA. Se non lo dimostra (tool assente, crash precoce) → exit 2
+//       ONESTO, mai verde e mai rosso (L-COL-006). Il pack della prova si sceglie DALLA
+//       LISTA, in ordine, al primo che soddisfa il floor (max 3 tentativi); la copertura
+//       effettiva e' STAMPATA.
+//
+// AMBITO: --packs=<csv> (nomi di pack, es. --packs=rails-rb,dotnet-cs) restringe (9) e
+// (10) — e SOLO loro: (4) resta sull'insieme COMPLETO, cosi' il gate integrale non
+// cambia di ampiezza. Senza --packs il default e' TUTTI i pack enumerati. Serve a
+// gatare un LOTTO mentre il resto e' ancora intatto (nel round 1 il gate era piu' largo
+// del task e ha confuso la misura). Un nome inesistente e' una PRECONDIZIONE mancante
+// (exit 2), non un verde: un typo nel lotto non deve passare per "tutto a posto".
+//
 // ESITO (mai un falso verde — "verde" = exit/output reale, L-COL-002):
 //   exit 0 — tutti i sotto-test PASS (sara' vero solo DOPO il fix, task successivo);
-//   exit 1 — un sotto-test FALLISCE (OGGI: (3)/(4)/(5) rossi = difetto reale);
+//   exit 1 — un sotto-test FALLISCE (alla nascita: (3)/(4)/(5); dopo il merge di H-1,
+//            (9)/(10) = la meta' mancante, difetto reale e misurato);
 //   exit 2 — PRECONDIZIONE/AMBIENTE (git assente, cwd non-repo, file bersaglio non
-//            leggibili, roundtrip non eseguibile): MAI un falso rosso.
+//            leggibili, roundtrip non eseguibile, --packs con un nome inesistente,
+//            floor anti-vacuo di (10) non raggiunto): MAI un falso rosso.
 //
 // FUORI SCOPE (deliberato): questo oracolo NON esegue m1..m5 / ecosystem_conformance
 // (richiedono DB live/docker e minuti di wall-clock: la loro riesecuzione SERIALE e'
@@ -269,16 +309,23 @@ function sliceExpr(src, from, stops = ';') {
   return src.slice(from);
 }
 
-// Tutte le dichiarazioni const/let/var del file: [{ name, init }].
-function declarations(code) {
+// Tutte le dichiarazioni const/let/var del file: [{ name, init, at }]. `at` (posizione
+// nel sorgente) serve a (9), che ha bisogno dell'ORDINE fra la fotografia dell'env e la
+// sua eventuale riassegnazione.
+function declarationSites(code) {
   const out = [];
   const re = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*/g;
   let m = re.exec(code);
   while (m) {
-    out.push({ name: m[1], init: sliceExpr(code, m.index + m[0].length, ';') });
+    out.push({ name: m[1], init: sliceExpr(code, m.index + m[0].length, ';'), at: m.index });
     m = re.exec(code);
   }
   return out;
+}
+
+// Tutte le dichiarazioni const/let/var del file: [{ name, init }].
+function declarations(code) {
+  return declarationSites(code).map(({ name, init }) => ({ name, init }));
 }
 
 // nome → inizializzatori (piu' d'uno se il nome e' dichiarato in scope diversi).
@@ -403,8 +450,10 @@ function removalCalleeNames(code) {
   return names;
 }
 
-// Il PRIMO argomento (il bersaglio) di ogni rimozione RICORSIVA del file.
-function recursiveRemovalTargets(code) {
+// Ogni rimozione RICORSIVA del file: il PRIMO argomento (il bersaglio) e la POSIZIONE
+// della call. La posizione serve a (9), che deve stabilire se QUELLA rimozione sta
+// dentro il blocco guardato (predicato LEGATO alla call reale, non al file intero).
+function recursiveRemovalSites(code) {
   const names = removalCalleeNames(code);
   const out = [];
   const re = /([A-Za-z_$][\w$]*)\s*\(/g;
@@ -416,11 +465,16 @@ function recursiveRemovalTargets(code) {
       const open = m.index + m[0].length - 1;
       const close = matchBalanced(code, open);
       const argsText = close > open ? code.slice(open + 1, close) : code.slice(open + 1, open + 400);
-      if (/\brecursive\s*:\s*true/.test(argsText)) out.push(sliceExpr(argsText, 0, ','));
+      if (/\brecursive\s*:\s*true/.test(argsText)) out.push({ target: sliceExpr(argsText, 0, ','), at: m.index });
     }
     m = re.exec(code);
   }
   return out;
+}
+
+// Il PRIMO argomento (il bersaglio) di ogni rimozione RICORSIVA del file.
+function recursiveRemovalTargets(code) {
+  return recursiveRemovalSites(code).map((s) => s.target);
 }
 
 // (3)(a) COMPORTAMENTALE: rm ricorsivi il cui bersaglio, risolto lungo la catena delle
@@ -509,6 +563,279 @@ function envPropagates(text, map, fileEnvPerPid) {
   const m = /TRUELINE_TMP_VERIFY_ROOT\s*:\s*/.exec(text);
   if (m) return valueIsPerPidRoot(sliceExpr(text, m.index + m[0].length, ',}'), map);
   return /\.\.\.\s*process\.env\b/.test(text) && fileEnvPerPid;
+}
+
+// ---------------------------------------------------------------------------
+// (9) GUARDIA DI PROPRIETA' della radice temp — analisi LEGATA ALLA CALL.
+//
+// La proprieta' e' quella gia' viva nei 5 harness (m3_gate_check r.88-95 + cleanM3Tmp):
+// la radice e' NOSTRA solo se l'abbiamo CREATA noi. Se l'abbiamo EREDITATA siamo un
+// FIGLIO e sotto quella radice vivono le copie VIVE del PADRE: raderla e' esattamente
+// il danno che il pattern per-pid vuole eliminare. Due meta' INSCINDIBILI: la rimozione
+// della RADICE e' SALTATA quando la radice e' ereditata; la rimozione della PROPRIA
+// COPIA resta SEMPRE attiva (se salta anche quella, l'igiene diventa una perdita).
+//
+// Perche' non basta cercare una costante col nome giusto: e' la lezione (d) di H-1 —
+// un predicato SLEGATO dalla call promuove CODICE MORTO a verde. Qui la guardia si
+// riconosce dalla POSIZIONE: la rimozione deve stare nel corpo di un `if` che NEGA il
+// flag, oppure dopo un `if (<flag>) return;` nel SUO STESSO blocco.
+// ---------------------------------------------------------------------------
+
+// Tutti i blocchi { ... } del file, come range. Le stringhe/template sono saltati per
+// intero: le graffe di `${...}` non sono blocchi.
+function blockRanges(code) {
+  const out = [];
+  for (let i = 0; i < code.length; i += 1) {
+    const c = code[i];
+    if (c === "'" || c === '"' || c === '`') {
+      let j = i + 1;
+      while (j < code.length) {
+        if (code[j] === '\\') { j += 2; continue; }
+        if (code[j] === c) break;
+        j += 1;
+      }
+      i = Math.min(j, code.length - 1);
+      continue;
+    }
+    if (c === '{') {
+      const end = matchBalanced(code, i);
+      if (end > i) out.push({ start: i, end });
+    }
+  }
+  return out;
+}
+
+// Il blocco piu' INTERNO che contiene l'indice (null se l'indice sta al top level).
+function innermostBlock(blocks, idx) {
+  let best = null;
+  for (const b of blocks) {
+    if (idx > b.start && idx < b.end && (!best || b.start > best.start)) best = b;
+  }
+  return best;
+}
+
+// Tutte le `if (COND) <corpo>` del file: condizione + estensione del CORPO (blocco o
+// singola istruzione). Il ramo `else` NON e' incluso: cio' che vi sta dentro non e'
+// guardato dalla condizione, e' guardato dalla sua NEGAZIONE.
+function ifStatements(code) {
+  const out = [];
+  const re = /\bif\s*\(/g;
+  let m = re.exec(code);
+  while (m) {
+    const open = m.index + m[0].length - 1;
+    const close = matchBalanced(code, open);
+    if (close > open) {
+      let i = close + 1;
+      while (i < code.length && /\s/.test(code[i])) i += 1;
+      let bodyEnd;
+      if (code[i] === '{') {
+        const b = matchBalanced(code, i);
+        bodyEnd = b > i ? b + 1 : code.length;
+      } else {
+        bodyEnd = i + sliceExpr(code, i, ';').length;
+      }
+      out.push({ start: m.index, cond: code.slice(open + 1, close), bodyStart: i, bodyEnd });
+    }
+    m = re.exec(code);
+  }
+  return out;
+}
+
+// La posizione della PRIMA riassegnazione di process.env.TRUELINE_TMP_VERIFY_ROOT
+// (-1 se il file non la riassegna mai).
+function firstEnvAssignmentIndex(code) {
+  const m = /process\.env\.TRUELINE_TMP_VERIFY_ROOT\s*=(?!=)/.exec(code);
+  return m ? m.index : -1;
+}
+
+// I nomi che DENOTANO una radice temp: dichiarazioni il cui inizializzatore contiene
+// DIRETTAMENTE un literal di radice ('.tmp...'). E' il bersaglio la cui rimozione va
+// guardata; `join(RADICE, '<id>')` non e' la radice ma la propria copia.
+function tempRootNames(code) {
+  const out = new Set();
+  for (const d of declarationSites(code)) {
+    if (tempRootUsages(d.init).length > 0) out.add(d.name);
+  }
+  return out;
+}
+
+// I nomi che portano il FLAG di ereditarieta': dichiarazioni che LEGGONO
+// process.env.TRUELINE_TMP_VERIFY_ROOT senza costruirci un PERCORSO (e' un booleano di
+// PRESENZA, non la radice). La radice stessa — che legge la stessa env per decidere il
+// proprio valore — e' esclusa. Il flag deve fotografare l'env ALL'AVVIO: se il file la
+// RIASSEGNA (come fanno i 5 harness), una lettura successiva direbbe SEMPRE "ereditata"
+// e la guardia diventerebbe un lasciapassare.
+function inheritedFlagNames(code, rootNames) {
+  const out = new Set();
+  const assignAt = firstEnvAssignmentIndex(code);
+  for (const d of declarationSites(code)) {
+    if (rootNames.has(d.name)) continue;
+    if (!/process\.env\.TRUELINE_TMP_VERIFY_ROOT/.test(d.init)) continue;
+    if (tempRootUsages(d.init).length > 0) continue;
+    if (/\b(?:resolve|join)\s*\(/.test(d.init)) continue;
+    if (assignAt >= 0 && d.at > assignAt) continue;
+    out.add(d.name);
+  }
+  return out;
+}
+
+// I "token" che una condizione puo' usare per nominare l'ereditarieta': i flag
+// dichiarati piu' — SOLO se il file non riassegna mai l'env — la lettura INLINE
+// dell'env, che in quel caso e' equivalente sul merito alla fotografia all'avvio.
+function inheritedTokens(code, flags) {
+  const toks = [...flags].map((f) => f.replace(/\$/g, '\\$'));
+  if (firstEnvAssignmentIndex(code) < 0) toks.push('process\\.env\\.TRUELINE_TMP_VERIFY_ROOT');
+  return toks;
+}
+
+// La condizione SALTA quando la radice e' EREDITATA (polarita': NEGA il flag)?
+function condSkipsWhenInherited(cond, toks) {
+  return toks.some((t) => new RegExp(`(?:^|[^\\w$.!])!\\s*(?:${t})\\b`).test(cond)
+    || new RegExp(`(?:^|[^\\w$.])(?:${t})\\s*===?\\s*false\\b`).test(cond));
+}
+
+// La condizione NOMINA l'ereditarieta' (in qualunque polarita')?
+function condRefersInherited(cond, toks) {
+  return toks.some((t) => new RegExp(`(?:^|[^\\w$.])(?:${t})\\b`).test(cond));
+}
+
+// Il corpo dell'`if` e' un'uscita anticipata (`return`)? E' la forma di cleanM3Tmp.
+function isEarlyReturn(code, st) {
+  return /^\{?\s*return\b/.test(code.slice(st.bodyStart, st.bodyEnd).trim());
+}
+
+// LA REGOLA POSIZIONALE: la rimozione in `at` e' guardata dall'ereditarieta' se sta nel
+// CORPO di un `if` che NEGA il flag, oppure se nel SUO STESSO blocco, PRIMA di lei, c'e'
+// un `if (<flag>) return;`. Un `if (<flag>) return` annidato in un ALTRO blocco non
+// conta: non e' sulla strada della rimozione.
+function removalIsGuarded(code, at, ifs, blocks, toks) {
+  for (const st of ifs) {
+    if (at >= st.bodyStart && at < st.bodyEnd && condSkipsWhenInherited(st.cond, toks)) return true;
+  }
+  for (const st of ifs) {
+    if (st.start >= at) continue;
+    if (!isEarlyReturn(code, st)) continue;
+    if (!condRefersInherited(st.cond, toks) || condSkipsWhenInherited(st.cond, toks)) continue;
+    const b = innermostBlock(blocks, st.start);
+    if (b && at > b.start && at < b.end) return true;
+  }
+  return false;
+}
+
+// Il bersaglio di una rimozione E' la RADICE se risolve SOLO a nomi di radice (o
+// direttamente all'env), senza segmenti aggiuntivi.
+function targetIsTempRoot(target, rootNames) {
+  const t = target.trim();
+  if (/['"`]/.test(t)) return false;
+  const bare = t.replace(/\b(?:resolve|join|normalize|String)\s*\(/g, '(');
+  const ids = identifiersIn(bare);
+  if (ids.length === 0) return /process\.env\.TRUELINE_TMP_VERIFY_ROOT/.test(t);
+  return ids.every((id) => rootNames.has(id));
+}
+
+// ...ed e' la PROPRIA COPIA se, risolto lungo la catena delle dichiarazioni, e'
+// costruito SOTTO una radice temp.
+function targetIsUnderTempRoot(target, map, rootNames) {
+  const expanded = expandExpr(target, map);
+  return identifiersIn(expanded).some((id) => rootNames.has(id)) || tempRootUsages(expanded).length > 0;
+}
+
+// Il verdetto (9) su un singolo pack.
+function packOwnershipGuard(code) {
+  const map = declMap(code);
+  const rootNames = tempRootNames(code);
+  const flags = inheritedFlagNames(code, rootNames);
+  const toks = inheritedTokens(code, flags);
+  const ifs = ifStatements(code);
+  const blocks = blockRanges(code);
+  const rootSites = [];
+  const copySites = [];
+  for (const s of recursiveRemovalSites(code)) {
+    if (targetIsTempRoot(s.target, rootNames)) rootSites.push(s);
+    else if (targetIsUnderTempRoot(s.target, map, rootNames)) copySites.push(s);
+  }
+  const rootGuarded = rootSites.filter((s) => removalIsGuarded(code, s.at, ifs, blocks, toks)).length;
+  const copyGuarded = copySites.filter((s) => removalIsGuarded(code, s.at, ifs, blocks, toks)).length;
+  const why = [];
+  if (rootSites.length === 0) {
+    why.push('nessuna rimozione della RADICE trovata: la guardia non e\' esercitabile (il pack deve rimuovere la radice PROPRIA e saltare quella EREDITATA)');
+  } else if (rootGuarded !== rootSites.length) {
+    why.push(`rimozione della RADICE NON guardata (${rootSites.length - rootGuarded}/${rootSites.length}): con radice EREDITATA il figlio rade la radice del PADRE`);
+  }
+  if (copySites.length === 0) {
+    why.push('nessuna rimozione della PROPRIA COPIA trovata (la copia va rimossa SEMPRE)');
+  } else if (copyGuarded > 0) {
+    why.push(`${copyGuarded}/${copySites.length} rimozioni della PROPRIA COPIA sono sotto la guardia: con radice EREDITATA la copia resterebbe (residuo, non igiene)`);
+  }
+  return { ok: why.length === 0, why, flags, rootSites, copySites, rootGuarded, copyGuarded };
+}
+
+// ---------------------------------------------------------------------------
+// Ambito dei pack: enumerazione + --packs=<csv>.
+// ---------------------------------------------------------------------------
+
+// Tutti i pack con un verify_fix_check.mjs, ENUMERATI a runtime (non hardcodati: un
+// pack nuovo e' coperto d'ufficio), ordinati per nome.
+function enumerateAllPacks() {
+  let entries = [];
+  try {
+    entries = readdirSync(ECOSYSTEMS_DIR, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => ({ name: e.name, file: resolve(ECOSYSTEMS_DIR, e.name, 'verify_fix_check.mjs') }))
+      .filter((p) => existsSync(p.file))
+      .sort((a, b) => (a.name < b.name ? -1 : 1));
+  } catch (e) {
+    precondAbort(`eval/ecosystems non enumerabile: ${e.message}`);
+  }
+  if (entries.length === 0) {
+    precondAbort(`nessun verify_fix_check.mjs sotto ${rel(ECOSYSTEMS_DIR)} (enumerazione vuota: gate non esercitabile)`);
+  }
+  return entries;
+}
+
+// --shipped-allow=<csv di path>: eccezioni DICHIARATE per il sotto-test (6). Path esatti,
+// mai prefissi; il default (assente) e' la bit-invarianza stretta. Vedi il commento in
+// subTestShippedBitInvariance per il perche' un path dichiarato-ma-non-modificato e' rosso.
+const ALLOW_SHIPPED = process.argv.slice(2)
+  .filter((a) => /^--shipped-allow=/.test(a))
+  .flatMap((a) => a.replace(/^--shipped-allow=/, '').split(','))
+  .map((s) => s.trim().replace(/\\/g, '/'))
+  .filter(Boolean);
+
+// --packs=<csv>: restringe (9) e (10) ai pack NOMINATI, nell'ordine dato. Senza
+// --packs il default e' l'insieme COMPLETO (nessun cambio di ampiezza del gate
+// integrale). Un nome inesistente, una lista vuota o un argomento sconosciuto sono
+// PRECONDIZIONI mancanti (exit 2): un typo nel lotto non deve mai passare per un verde.
+function resolvePackScope(argv, all) {
+  const byName = new Map(all.map((p) => [p.name, p]));
+  let requested = null;
+  for (const arg of argv) {
+    // --shipped-allow=<csv di path> e' consumato altrove (ALLOW_SHIPPED, sotto-test 6):
+    // qui va solo riconosciuto, o l'argomento cadrebbe nel ramo "non riconosciuto".
+    if (/^--shipped-allow=/.test(arg)) continue;
+    const m = /^--packs=(.*)$/.exec(arg);
+    if (!m) {
+      precondAbort(`argomento non riconosciuto: "${arg}" (ammessi: --packs=<csv di nomi di pack>, --shipped-allow=<csv di path>)`);
+      continue;
+    }
+    requested = m[1].split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+  }
+  if (requested === null) return { packs: all, label: `TUTTI i pack enumerati (${all.length})` };
+  if (requested.length === 0) {
+    precondAbort('--packs e\' vuoto: nessun pack da valutare (un ambito vuoto non e\' un verde)');
+  }
+  const unknown = requested.filter((n) => !byName.has(n));
+  if (unknown.length > 0) {
+    precondAbort(`--packs nomina pack inesistenti: ${unknown.join(', ')} (disponibili: ${all.map((p) => p.name).join(', ')})`);
+  }
+  const seen = new Set();
+  const packs = [];
+  for (const n of requested) {
+    if (seen.has(n)) continue;
+    seen.add(n);
+    packs.push(byName.get(n));
+  }
+  return { packs, label: `--packs (${packs.length}/${all.length}): ${packs.map((p) => p.name).join(', ')}` };
 }
 
 // ---------------------------------------------------------------------------
@@ -628,22 +955,12 @@ function subTestNoSharedRoot(sources) {
 // ===========================================================================
 // (4) static:per-pack-roots — i verify_fix_check.mjs dei pack, ENUMERATI a runtime.
 // ===========================================================================
-function subTestPerPackRoots() {
+function subTestPerPackRoots(allPacks) {
   console.log('');
   console.log('(4) static:per-pack-roots — eval/ecosystems/*/verify_fix_check.mjs: radice temp con process.pid:');
-  let packs = [];
-  try {
-    packs = readdirSync(ECOSYSTEMS_DIR, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .map((e) => resolve(ECOSYSTEMS_DIR, e.name, 'verify_fix_check.mjs'))
-      .filter((p) => existsSync(p))
-      .sort();
-  } catch (e) {
-    precondAbort(`eval/ecosystems non enumerabile: ${e.message}`);
-  }
-  if (packs.length === 0) {
-    precondAbort(`nessun verify_fix_check.mjs sotto ${rel(ECOSYSTEMS_DIR)} (enumerazione vuota: gate non esercitabile)`);
-  }
+  // AMBITO DELIBERATO: SEMPRE tutti i pack enumerati, anche con --packs. --packs
+  // restringe (9)/(10) — i sotto-test del LOTTO — non il gate integrale gia' verde.
+  const packs = allPacks.map((p) => p.file);
   const failing = [];
   for (const path of packs) {
     let code = '';
@@ -724,9 +1041,30 @@ function subTestShippedBitInvariance() {
     precondAbort(`git status non eseguibile su trueline/: ${d.error ? d.error.message : `exit=${d.status}`}`);
   }
   const changed = d.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
-  assert('shipped:bit-invariance', changed.length === 0,
-    changed.length === 0 ? 'albero SPEDITO trueline/ bit-invariante (status vuoto: ne modifiche ne file nuovi)'
-      : `${changed.length} voci nell'albero SPEDITO (vietato, aggiunte incluse): ${changed.join(', ')}`);
+  // ECCEZIONI DICHIARATE (--shipped-allow=<csv di path>). Il default resta STRETTO:
+  // senza il flag, qualunque voce sotto trueline/ e' una violazione. Il flag NON e' un
+  // interruttore per spegnere il controllo, e per DUE ragioni:
+  //   (a) l'eccezione e' per PATH ESATTO, mai per prefisso o glob;
+  //   (b) un path dichiarato ma NON modificato e' esso stesso un ROSSO (allowlist stale):
+  //       una dichiarazione che non corrisponde alla realta' e' la classe di difetto che
+  //       questa sessione ha appena bonificato nei registry, e non la si reintroduce qui.
+  // Cosi' una sessione che tocca il prodotto (es. A1, 28 lug 2026: la regola
+  // connection-string in trueline/scripts/oracles/gitleaks.toml) deve DICHIARARE cosa
+  // tocca sulla riga di comando, dove resta visibile nel log del gate.
+  const declared = ALLOW_SHIPPED;
+  const changedPaths = changed.map((l) => l.replace(/^\S+\s+/, '').replace(/^"|"$/g, ''));
+  const unexpected = changed.filter((l, i) => !declared.includes(changedPaths[i]));
+  const staleAllow = declared.filter((p) => !changedPaths.includes(p));
+  const ok = unexpected.length === 0 && staleAllow.length === 0;
+  const why = [];
+  if (unexpected.length > 0) why.push(`${unexpected.length} voci NON dichiarate nell'albero SPEDITO (vietato, aggiunte incluse): ${unexpected.join(', ')}`);
+  if (staleAllow.length > 0) why.push(`${staleAllow.length} eccezioni DICHIARATE ma non modificate (allowlist stale, la dichiarazione non corrisponde ai fatti): ${staleAllow.join(', ')}`);
+  assert('shipped:bit-invariance', ok,
+    ok
+      ? (declared.length === 0
+        ? 'albero SPEDITO trueline/ bit-invariante (status vuoto: ne modifiche ne file nuovi)'
+        : `albero SPEDITO invariante FUORI dalle ${declared.length} eccezioni DICHIARATE: ${declared.join(', ')}`)
+      : why.join(' | '));
 }
 
 // ===========================================================================
@@ -795,6 +1133,82 @@ function subTestRoundtrip() {
 }
 
 // ===========================================================================
+// (9) static:pack-ownership-guard — per ciascun pack della LISTA: la radice EREDITATA
+//     non si rade, la PROPRIA COPIA si rimuove sempre. Predicato LEGATO alla call.
+// ===========================================================================
+function subTestPackOwnershipGuard(packs) {
+  console.log('');
+  console.log('(9) static:pack-ownership-guard — radice EREDITATA: cleanup della RADICE saltato, copia SEMPRE rimossa:');
+  const failing = [];
+  for (const p of packs) {
+    let code = '';
+    try { code = stripComments(readFileSync(p.file, 'utf8')); }
+    catch (e) { precondAbort(`pack non leggibile: ${rel(p.file)} (${e.message})`); }
+    const r = packOwnershipGuard(code);
+    if (!r.ok) failing.push(`${p.name}: ${r.why.join('; ')}`);
+    console.log(`      ${r.ok ? 'ok  ' : 'KO  '} ${p.name} — flag=[${[...r.flags].join(', ') || 'NESSUNO'}]`
+      + ` radice: ${r.rootGuarded}/${r.rootSites.length} guardate;`
+      + ` copia: ${r.copySites.length - r.copyGuarded}/${r.copySites.length} sempre attive`);
+  }
+  assert('static:pack-ownership-guard', failing.length === 0,
+    failing.length === 0
+      ? `${packs.length}/${packs.length} pack dichiarano la guardia di proprieta' della radice`
+      : `${failing.length}/${packs.length} pack SENZA guardia di proprieta' → ${failing.join(' | ')}`);
+}
+
+// ===========================================================================
+// (10) runtime:pack-inherited-root-survives — la stessa proprieta' PROVATA: una radice
+//      EREDITATA e VUOTA deve sopravvivere all'esecuzione di un vero verify_fix_check.
+// ===========================================================================
+function subTestInheritedRootSurvives(packs) {
+  console.log('');
+  console.log('(10) runtime:pack-inherited-root-survives — radice EREDITATA (VUOTA): il figlio NON la rade:');
+  // Il floor: il figlio deve DIMOSTRARE di aver raggiunto il cleanup — copia CREATA
+  // SOTTO la radice EREDITATA (senza questo la radice potrebbe sopravvivere per il
+  // motivo SBAGLIATO: il figlio ha ignorato l'override e ha lavorato altrove) e copia
+  // RIMOSSA (e' la rimozione che SVUOTA la radice e arma il cleanup della radice).
+  // ('—' = l'em-dash con cui assert() separa il nome dal dettaglio.)
+  const CREATED_RE = /^\s*\[PASS\]\s+copia ISOLATA della fixture creata[^\n]*?\s—\s([^\n]+?)\s*$/m;
+  const REMOVED_RE = /^\s*\[PASS\]\s+nessun residuo della copia temp/m;
+  const MAX_ATTEMPTS = 3;
+  const norm = (p) => String(p).replace(/\\/g, '/').toLowerCase();
+  const tried = [];
+  for (const p of packs.slice(0, MAX_ATTEMPTS)) {
+    const stage = sceneDir(`inherited-${p.name}`);
+    const inheritedRoot = join(stage, 'inherited');   // radice del finto PADRE: VUOTA
+    mkdirSync(inheritedRoot, { recursive: true });
+    const res = spawnSync(process.execPath, [p.file], {
+      cwd: ROOT,
+      // La radice viaggia al figlio per EREDITA', esattamente come quando un harness
+      // lancia il gate di un pack: e' la scena reale, non una simulazione.
+      env: { ...process.env, TRUELINE_TMP_VERIFY_ROOT: inheritedRoot },
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    const stdout = res.stdout || '';
+    const created = CREATED_RE.exec(stdout);
+    const copyDir = created ? created[1] : '';
+    const underInherited = copyDir !== '' && norm(copyDir).startsWith(`${norm(inheritedRoot)}/`);
+    const removed = REMOVED_RE.test(stdout);
+    const floorOk = Boolean(created) && underInherited && removed;
+    console.log(`      ${p.name}: floor copia-creata=${Boolean(created)} sotto-radice-ereditata=${underInherited}`
+      + ` copia-rimossa=${removed} (exit=${res.status}${res.error ? ` ${res.error.message}` : ''})`);
+    if (!floorOk) {
+      tried.push(`${p.name} (creata=${Boolean(created)} sotto-ereditata=${underInherited} rimossa=${removed} exit=${res.status})`);
+      continue;
+    }
+    const survived = existsSync(inheritedRoot);
+    console.log(`      copertura: prova ESEGUITA su ${p.name} (tentativi: ${tried.length + 1}/${Math.min(MAX_ATTEMPTS, packs.length)}; lista: ${packs.map((x) => x.name).join(', ')})`);
+    assert('runtime:pack-inherited-root-survives', survived,
+      `pack=${p.name} copia=${rel(copyDir)} → la radice EREDITATA ${rel(inheritedRoot)} `
+      + `${survived ? 'ESISTE ANCORA (il figlio ha rispettato la proprieta\' del padre)' : 'e\' stata RASA DAL FIGLIO (radice del padre distrutta)'}`);
+    return;
+  }
+  precondAbort('floor anti-vacuo di (10) non raggiunto: nessun pack ha DIMOSTRATO di arrivare al cleanup '
+    + `(copia creata sotto la radice EREDITATA e poi rimossa) in ${Math.min(MAX_ATTEMPTS, packs.length)} tentativi → ${tried.join(' | ')}`);
+}
+
+// ===========================================================================
 // (8) hygiene:no-residue — nessun residuo sotto la NOSTRA radice temp privata.
 // ===========================================================================
 function subTestHygiene() {
@@ -824,9 +1238,11 @@ function main() {
   console.log('   (3) static:no-shared-root          — i 5 harness: no cleanup condiviso, radice temp col pid, env per-pid');
   console.log('   (4) static:per-pack-roots          — eval/ecosystems/*/verify_fix_check.mjs: il pid nel segmento-radice');
   console.log('   (5) env:child-inheritance          — gli spawn propagano ai figli una radice PER-PID');
-  console.log('   (6) shipped:bit-invariance         — trueline/ intatto, aggiunte incluse (git in sola lettura)');
+  console.log('   (6) shipped:bit-invariance         — trueline/ intatto salvo --shipped-allow (git in sola lettura)');
   console.log('   (7) runtime:private-root-roundtrip — verify_workspace SPEDITO onora la radice privata');
   console.log('   (8) hygiene:no-residue             — nessun residuo nella nostra radice temp');
+  console.log('   (9) static:pack-ownership-guard    — i pack NON radono una radice EREDITATA (copia sempre rimossa)');
+  console.log('  (10) runtime:pack-inherited-root-survives — prova ESEGUITA: la radice EREDITATA vuota sopravvive');
   console.log('============================================================');
 
   // --- PRECONDIZIONE: sweep + sorgenti bersaglio leggibili -----------------
@@ -838,17 +1254,23 @@ function main() {
     if (!existsSync(path)) precondAbort(`harness bersaglio assente: ${rel(path)}`);
     sources.set(path, stripComments(readTarget(path)));
   }
+  // Ambito dei pack: (4) resta sull'insieme COMPLETO, (9)/(10) sulla lista di --packs.
+  const allPacks = enumerateAllPacks();
+  const scope = resolvePackScope(process.argv.slice(2), allPacks);
   console.log('');
   console.log(`[PASS] precondizione: ${TARGET_HARNESSES.length} harness bersaglio leggibili; radice temp privata allestita.`);
+  console.log(`       ambito (9)/(10): ${scope.label}`);
 
   // --- I sotto-test --------------------------------------------------------
   subTestLegacyDestroys();
   subTestPrivateSurvives();
   subTestNoSharedRoot(sources);
-  subTestPerPackRoots();
+  subTestPerPackRoots(allPacks);
   subTestChildInheritance(sources);
   subTestShippedBitInvariance();
   subTestRoundtrip();
+  subTestPackOwnershipGuard(scope.packs);
+  subTestInheritedRootSurvives(scope.packs);
   subTestHygiene();
 
   // --- Esito ---------------------------------------------------------------

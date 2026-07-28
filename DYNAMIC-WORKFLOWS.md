@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Progetto** | Trueline (`COL`) — ex codename *Collaudo* |
-| **Versione** | v0.2 (Chat E; emendata 25 lug 2026 — model policy per RUOLO + effort, §5/§5.1) |
+| **Versione** | v0.3 (Chat E; emendata 28 lug 2026 — Ipotesi B di O-COL-012 CHIUSA: builder meccanico = punta a effort basso, §5/§5.2) |
 | **Data** | 14 giugno 2026 (emend. 25 luglio 2026) |
-| **Copre** | `L-COL-027` (cardine, emendato 25 lug 2026); `O-COL-010` (piano richiesto); `O-COL-012` (configurazione di orchestrazione — misura #1 in §5.1) |
+| **Copre** | `L-COL-027` (cardine, emendato 25 e 28 lug 2026); `O-COL-010` (piano richiesto); `O-COL-012` (configurazione di orchestrazione — misura #1 in §5.1, misura #2 e chiusura dell Ipotesi B in §5.2) |
 | **Dipende da** | `00-INDEX` v1.0 (manifest + ledger), `10-EVALUATION` v0.1 (l'harness che fa da gate), `11-BLUEPRINT-ENGINE` v0.1 (schema del task, `L-COL-019`), tutti i moduli per la mappa di milestone (§8) |
 
 ---
@@ -69,13 +69,13 @@ TASK
 | **Verifier** (ogni task) | modello di punta, **effort `max`** — sempre, non negoziabile: è il ruolo che paga |
 | **Orchestratore** | modello di punta, **effort `max`** (la sessione Claude Code che lancia lo strumento) |
 | **Builder — logica delicata di Trueline** | modello di punta, **effort alto** |
-| **Builder — task meccanici** | **Sonnet** *oppure* modello di punta a **effort basso** — confronto **aperto** (`O-COL-012`), non ancora deciso |
+| **Builder — task meccanici** | **modello di punta a effort basso** — deciso il 28 lug 2026 dall'A/B del round 2 (§5.2): stesso esito, stessa forma del codice, **~1,9× più economico** di Sonnet |
 
 **Builder-Opus (logica delicata di Trueline):** la macchina del verify-fix loop (`05` §3) e la sequenza segreto-in-history (`05` §7); l'**RLS checker** col parser DDL (`03` §5.4); fingerprint/baseline-delta e dedup (`04` §6, `03` §6); la **partizione guardia/impattate** dei characterization test (`06` §4); `validate_blueprint` + checklist semantica (`11` §5); il detector di deploy-coupling (`01` §5.3); la normalizzazione → finding model, inclusa la mappa OWASP `L-COL-026` (`03` §6); la risoluzione-intento/dispatch (`01` §2, `02` §5).
 
-**Builder-Sonnet (meccanico):** gli **wrapper** degli oracoli a flag fissi (`run_semgrep`/`gitleaks`/`osv`/`deadcode`); i `references/modes/*`; i 3 template di prompt (`12`); frontmatter e boilerplate; la tabella di preflight (`03` §4); l'assemblaggio di `package_skill` (`09` §3).
+**Builder meccanico — punta a effort basso** *(fino al 27 lug 2026: Sonnet; vedi §5.2)*: gli **wrapper** degli oracoli a flag fissi (`run_semgrep`/`gitleaks`/`osv`/`deadcode`); i `references/modes/*`; i 3 template di prompt (`12`); frontmatter e boilerplate; la tabella di preflight (`03` §4); l'assemblaggio di `package_skill` (`09` §3); e le modifiche **uniformi e ripetute** su molti file (il substrato dell'A/B di §5.2).
 
-> **Niente Haiku.** Per codice che deve passare un gate, **Sonnet è il pavimento**: sotto-dimensionare sposta il costo nel fix-loop. La colonna `modello` del task indica il **builder**; il **verifier è sempre il modello di punta, a effort `max`**.
+> **Niente Haiku, e ora nemmeno Sonnet come default.** Per codice che deve passare un gate il pavimento non è un *modello* più piccolo ma un **effort** più basso sullo stesso modello: a parità di esito costa meno (§5.2), e quando il task si rivela meno meccanico del previsto è l'effort a salire, non il modello a cambiare. La colonna `modello` del task indica il **builder**; il **verifier è sempre il modello di punta, a effort `max`**.
 
 ### 5.1 Misura #1 di `O-COL-012` — workflow H-1 (25 luglio 2026)
 
@@ -96,6 +96,26 @@ Prima esecuzione nella configurazione nuova (onde strette / task larghi / effort
 **Ipotesi B — non decidibile da questa misura (onestà, `L-COL-006`).** I numeri grezzi darebbero Opus-`low` a 6.725 token di output contro 36.211 di Sonnet, a parità di esito (0 blocking per entrambi dai verifier BLIND). Ma **entrambi i bracci hanno trovato il lavoro sostanziale già fatto**: un verificatore di W2 aveva emesso un blocking **fuori mandato** e il fixer aveva eseguito in anticipo il lavoro di W3, lasciando ai due lotti solo 4 righe di commento per file. Il confronto **non va usato** per chiudere `O-COL-012`.
 
 **Lezione di progettazione (causa del confondimento).** Il keystone copriva i 16 pack mentre il mandato del task non li includeva: **il gate di un task non può essere più largo del task**, o i confini d'onda perdono. Vale per i nostri workflow quanto `L-COL-019` vale per i task di un blueprint.
+
+### 5.2 Misura #2 di `O-COL-012` — workflow A1 (28 luglio 2026): **Ipotesi B CHIUSA**
+
+Secondo giro dell'A/B, sul workflow A1 (`wf_f8fa575a-78f`, 20 agenti, **0 errori d'infra**), con le sei correzioni di protocollo del brief del 26 lug applicate. **Substrato:** la guardia di proprietà della radice temp nei 16 `verify_fix_check.mjs` — modifica **uniforme e meccanica**, ~3 righe per file, divisa in **due lotti disgiunti bilanciati per righe** (A 2.825 · B 2.878, scarto 0,9 %), ciascuno gatato **solo sui propri 8 file** (`h1_perpid_check --packs=<lotto>`): è la correzione del difetto che confondò il round 1.
+
+| Metrica | Braccio A — punta, effort `low` | Braccio B — **Sonnet** |
+|---|---|---|
+| token di output (campionati attorno ai **soli builder**) | **13.225** | **25.709** |
+| verdetto del verifier BLIND (Opus, effort `max`, prompt simmetrico) | GREEN | GREEN |
+| difetti *blocking* trovati dal verifier BLIND | **0** | **0** |
+| forma del codice consegnato | `TMP_ROOT_INHERITED` + guardia sulla sola rimozione della radice | **identica** |
+| righe aggiunte per file (file non toccati da lavoro successivo) | **+12** | **+11** |
+
+**Chiusura (criterio del brief §5, «più economico a pari qualità»):** i due bracci sono **indistinguibili sull'esito e sulla forma**; il braccio A costa **1,94×** meno. Si ratifica il **modello di punta a effort basso** per i task meccanici, emendando `L-COL-027`. Lo split per *modello* è sostituito dal dial di **effort per ruolo**: un solo modello, tre effort.
+
+**Confondimento residuo, dichiarato (`L-COL-006`).** I bracci girano **in sequenza** (è l'unico modo di avere un costo per-braccio pulito), quindi il secondo — Sonnet — ha trovato **8 file già lavorati dal primo**, disponibili come esempio. È un vantaggio per B: il fatto che B costi comunque il doppio rende la conclusione **conservativa**, non gonfiata. Un A/B senza questo residuo richiederebbe due repo separati, e non vale il prezzo.
+
+**Ipotesi A — seconda osservazione, configurazione a onde strette ratificata.** Onde ≤ 3, 20 agenti, **0 interruzioni d'infrastruttura**, gate seriale finale **verde**, **CANARY = 10** difetti *blocking* colti dai verifier BLIND (controllo A2c F1: 4; H-1: 14) → il criterio di stop non scatta. Con due osservazioni concordi la configurazione a onde strette diventa **standing config**.
+
+**Lezione di progettazione nuova (costata una misura instabile).** Un task il cui gate **esegue l'intero repo** non può stare nella stessa onda di task che **mutano** il repo: la batteria dei 16 gate per-pack (T4) girava mentre altri agenti riscrivevano il fix-provider, e ha letto `rails-rb` come PASS, FAIL, PASS, FAIL sullo stesso identico codice. L'agente l'ha **riportato** invece di inseguirlo con un retry — ed è la risposta giusta. È la stessa famiglia della lezione del round 1 (*il gate di un task non può essere più largo del task*), applicata al **tempo** anziché all'**ampiezza**: **chi legge tutto va isolato da chi scrive**, e il verdetto vero lo dà comunque la riesecuzione **seriale** dell'orchestratore.
 
 ## 6. Il gate NON è "DB locale" — sono gli oracoli di Trueline
 
