@@ -867,8 +867,22 @@ function fixAppsyncS3(dir, finding) {
   // I caratteri reali agli stessi offset coincidono col mascherato (codice, non
   // stringa): la sostituzione e' sicura sul testo reale.
   const replaced = src.slice(absStart, absStart + matchLen).replace(publicRe, 'allow$1owner');
-  const after = src.slice(0, absStart) + replaced + src.slice(absStart + matchLen);
-  if (after === src) return { ok: false, detail: 'AM-S3: nessuna modifica applicata' };
+  const rewritten = src.slice(0, absStart) + replaced + src.slice(absStart + matchLen);
+  if (rewritten === src) return { ok: false, detail: 'AM-S3: nessuna modifica applicata' };
+  // MARKER di PROVENIENZA `# FIX:AM-S3` (stessa funzione di `// FIX:FB-S3` e
+  // `# FIX:HS-S3`): e' il floor ANTI-VACUO del gate. Senza marker l'asserzione
+  // "nessun allow: public rimasto" sarebbe vera anche su uno schema che il difetto
+  // non lo ha MAI avuto — passerebbe senza che la fix sia stata applicata.
+  // POSIZIONE a FINE RIGA: in GraphQL `#` commenta fino al newline, quindi
+  // infilarlo in mezzo alla riga spegnerebbe il resto della definizione del type.
+  // Il gate spoglia i commenti `#` prima di cercare `allow: public` (e l'oracolo
+  // appsync_auth_check li maschera), quindi il marker non inquina l'altra meta'
+  // dell'asserzione ne' il verdetto. CRLF: si rientra prima del `\r` per non
+  // spezzare la riga.
+  const nlIdx = rewritten.indexOf('\n', absStart);
+  let eol = nlIdx < 0 ? rewritten.length : nlIdx;
+  if (eol > 0 && rewritten[eol - 1] === '\r') eol -= 1;
+  const after = `${rewritten.slice(0, eol)}  # FIX:AM-S3${rewritten.slice(eol)}`;
   writeFileSync(p, after, 'utf8');
   return { ok: true, detail: `AM-S3: allow: public -> allow: owner su ${typeName || 'type colpito'}` };
 }
@@ -895,6 +909,43 @@ function fixAppsyncS3(dir, finding) {
 // noto del seed nella fixture e una replace che neutralizza il letterale hardcoded
 // con la lettura da env (idioma). La replace e' un NO-OP (ritorna identico) se il
 // pattern non c'e' -> applyPerLangSecretFix fallisce ONESTAMENTE (mai approssimata).
+//
+// CAMPO `dsn` (OPZIONALE, aggiunto con la regola trueline-connection-string-credentials):
+// una SECONDA replace, per le sole fixture che hanno ANCHE una connection string con
+// password in chiaro (rails-rb, phoenix-ex). E' OBBLIGATORIA quanto `fix`: se e' presente
+// nella voce, un suo NO-OP fa fallire l'intera applicazione (ok:false). Motivo: la nuova
+// regola gitleaks emette un finding sul DSN, e una fix che ne bonifica solo META' lascia
+// la password nel file mentre il loop dichiara `verified` — esattamente il falso verde
+// che la regola serviva a chiudere. La bonifica SOSTITUISCE il letterale (lettura da env),
+// non lo maschera: la password sparisce dal file, non viene offuscata.
+//
+// Le altre 3 fixture colpite dalla regola nuova (postgres-jsts src/config.ts, postgres-py
+// e supabase-py app/config.py) NON passano di qui: i loro rami dedicati (fixSecretPgS1 /
+// fixSecretSpyS1) rimuovono gia' l'INTERA riga/const DATABASE_URL, quindi il letterale
+// della password sparisce anche la'. Questo e' un fatto sul CODICE di quelle due funzioni
+// (nessuna replace duplicata da aggiungere), NON un fatto dimostrato dai loro gate.
+//
+// PERCHE' OGNI GATE HA UN'ASSERZIONE TESTUALE SULLA PASSWORD (L-COL-006, lezione (d) di
+// H-1). Il verdetto `verified` del loop e' la sparizione del FINGERPRINT del solo
+// finding-seme (trueline/scripts/loop/loop.mjs, stillPresent), NON un conteggio a 0 sul
+// file; e il seme e' il PRIMO finding secret working-tree di quel file (pickSeed del gate),
+// che puo' essere la chiave o la DSN a seconda dell'ordine in cui gitleaks li emette.
+// Il solo verde del loop, quindi, NON sarebbe evidenza della bonifica della DSN: con la
+// replace rotta il gate diventerebbe un testa-o-croce, verde quando il seme sorteggiato e'
+// la chiave — e in quella meta' il pack verrebbe timbrato `verified` con la password del DB
+// ancora nel sorgente. E' il falso verde che la regola connection-string serviva a chiudere.
+//
+// LACUNA CHIUSA IL 28 LUG 2026 (chirurgia d'orchestratore, dopo lo STOP di questo task e il
+// RED del verificatore BLIND): tutti e 5 i gate colpiti asseriscono ora ESPLICITAMENTE
+// l'assenza del letterale della password, in aggiunta al verdetto del loop —
+// phoenix-ex (gia' presente), + rails-rb, postgres-jsts, postgres-py, supabase-py (aggiunte).
+// La falsificabilita' e' cosi' DETERMINISTICA e non piu' dipendente dal seme. MISURATA
+// neutralizzando una replace alla volta, 3 esecuzioni per pack, 28 lug 2026:
+//   ramo Ruby (`dsn`)                  -> rails-rb      FAIL 3/3 (8/11)
+//   rimozione DATABASE_URL in fixSecretSpyS1 -> postgres-py FAIL 3/3 · supabase-py FAIL 3/3
+//   rimozione const DATABASE_URL in fixSecretPgS1 -> postgres-jsts FAIL 3/3
+// Il CONTEGGIO dei check varia fra le esecuzioni (dipende dal seme); la DIREZIONE — FAIL,
+// exit 1 — e' stabile, ed e' quella la proprieta' che il gate deve garantire.
 const PERLANG_SECRET_FIXES = [
   // postgres-go: const apiKey = "sk_live_..." -> var apiKey = os.Getenv("API_KEY").
   // import "os" e' gia' presente; una const Go non puo' contenere una call -> `var`.
@@ -904,10 +955,14 @@ const PERLANG_SECRET_FIXES = [
       'var apiKey = os.Getenv("API_KEY")'),
   },
   // rails-rb: STRIPE_SECRET_KEY = "sk_live_..." -> ENV.fetch("STRIPE_SECRET_KEY").
+  // DSN: RAILS_DB_URL = "postgresql://rails_user:<password>@..." -> ENV.fetch (stesso
+  // idioma Ruby della replace sopra e del contrasto PULITO gia' nel file).
   {
     lang: 'rb', ext: /\.rb$/, rel: 'config/initializers/api_keys.rb',
     fix: (s) => s.replace(/(STRIPE_SECRET_KEY\s*=\s*)"sk_live_[^"]*"/,
       '$1ENV.fetch("STRIPE_SECRET_KEY")'),
+    dsn: (s) => s.replace(/(RAILS_DB_URL\s*=\s*)"postgres(?:ql)?:\/\/[^"]*"/,
+      '$1ENV.fetch("DATABASE_URL")'),
   },
   // laravel-php: 'key' => 'sk_live_...' -> 'key' => env('API_KEY').
   {
@@ -935,9 +990,16 @@ const PERLANG_SECRET_FIXES = [
       "final String _supabaseServiceKey = Platform.environment['API_KEY'] ?? '';"),
   },
   // phoenix-ex: secret_key: "sk_live_..." -> secret_key: System.get_env("API_KEY").
+  // DSN: url: "postgres://myapp_user:<password>@..." -> System.get_env("DATABASE_URL"),
+  // l'idioma che il contrasto PULITO del pack (config/runtime.exs) usa gia'. Il match e'
+  // ancorato alla chiave `url:` DENTRO config/config.exs (spec.rel): runtime.exs, che
+  // contiene il placeholder di documentazione `postgres://user:pass@host/db`, non viene
+  // mai aperto da questa fix.
   {
     lang: 'ex', ext: /\.exs$/, rel: 'config/config.exs',
     fix: (s) => s.replace(/(secret_key:\s*)"sk_live_[^"]*"/, '$1System.get_env("API_KEY")'),
+    dsn: (s) => s.replace(/(url:\s*)"postgres(?:ql)?:\/\/[^"]*"/,
+      '$1System.get_env("DATABASE_URL")'),
   },
 ];
 
@@ -958,16 +1020,34 @@ function resolveSecretSeedInCopy(dir, finding, rel) {
 // Applica il fix secret per-lingua: legge il seed, neutralizza il letterale (replace
 // idiomatica), scrive sulla COPIA (mai il fixture canonico). Fallisce ONESTAMENTE se
 // il pattern non c'e' (replace NO-OP -> after === before).
+//
+// Le replace della voce sono TUTTE obbligatorie e verificate UNA PER UNA: `fix` sempre,
+// `dsn` se la voce la dichiara. Un controllo per-replace (e non sul solo testo finale)
+// e' cio' che rende il fallimento onesto: con un unico confronto globale basterebbe che
+// una delle due mordesse per dichiarare ok:true, lasciando l'altra credenziale nel file
+// mentre il loop promuove a `verified`. Se una replace non morde NON si scrive nulla:
+// il file resta com'era e il loop vede un fallimento, non una bonifica a meta'.
 function applyPerLangSecretFix(dir, finding, spec) {
   const p = resolveSecretSeedInCopy(dir, finding, spec.rel);
   if (!p) return { ok: false, detail: `secret-${spec.lang}: seed ${spec.rel} non risolto nella copia` };
   const before = readFileSync(p, 'utf8');
-  const after = spec.fix(before);
-  if (after === before) {
-    return { ok: false, detail: `secret-${spec.lang}: letterale hardcoded non trovato in ${spec.rel} (pattern cambiato?)` };
+  // Ogni passo: etichetta (per il messaggio d'errore) + replace idiomatica.
+  const steps = [{ label: 'letterale hardcoded', fn: spec.fix }];
+  if (spec.dsn) steps.push({ label: 'connection string con password', fn: spec.dsn });
+  let src = before;
+  for (const step of steps) {
+    const next = step.fn(src);
+    if (next === src) {
+      return {
+        ok: false,
+        detail: `secret-${spec.lang}: ${step.label} non trovato in ${spec.rel} (pattern cambiato?)`,
+      };
+    }
+    src = next;
   }
-  writeFileSync(p, after, 'utf8');
-  return { ok: true, detail: `secret-${spec.lang}: letterale in ${spec.rel} -> lettura da env (idioma ${spec.lang})` };
+  writeFileSync(p, src, 'utf8');
+  const what = spec.dsn ? 'letterale + connection string' : 'letterale';
+  return { ok: true, detail: `secret-${spec.lang}: ${what} in ${spec.rel} -> lettura da env (idioma ${spec.lang})` };
 }
 
 // Seleziona il fix per-lingua per `file` (per ESTENSIONE del seed). null se nessuno.
