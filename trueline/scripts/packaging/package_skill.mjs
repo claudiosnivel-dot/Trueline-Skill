@@ -48,6 +48,7 @@ import {
 import { join, dirname, resolve, relative, sep, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
+import { createHash } from 'node:crypto';
 import { validateEcosystem } from '../ecosystem/validate_ecosystem.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -60,6 +61,9 @@ const args = process.argv.slice(2);
 const jsonMode = args.includes('--json');
 const noArchive = args.includes('--no-archive');
 const injectMissingRef = args.includes('--inject-missing-ref');
+// Registra <versione, digest> nel record di release. Atto ESPLICITO per release:
+// senza, una versione mai registrata non si emette (vedi releaseGuard).
+const recordRelease = args.includes('--record-release');
 function flagValue(name) {
   const i = args.indexOf(name);
   return i >= 0 && i + 1 < args.length && !args[i + 1].startsWith('--') ? args[i + 1] : null;
@@ -507,6 +511,94 @@ function buildTar(treeRoot, archiveRootName) {
   return Buffer.concat(chunks);
 }
 
+// --- CONTROLLO DI RELEASE (L-COL-035 applicato alla distribuzione) -----------
+// Un artefatto che nessuno puo' RICEVERE non e' spedito, come un gate che nessuno
+// esegue non e' un verde. `claude plugin update` e' VERSION-gated: se l'albero
+// spedito cambia e la versione no, l'update risponde «already at the latest
+// version» e NON copia nulla — l'utente resta con detection vecchia, dichiarata
+// aggiornata. Difetto MISURATO il 28 lug 2026 (il plugin globale era indietro di
+// un'intera sessione). Qui si rende impossibile ri-emettere contenuto diverso
+// sotto la stessa versione.
+const RELEASE_RECORD = process.env.TRUELINE_RELEASE_DIGESTS
+  ? resolve(process.env.TRUELINE_RELEASE_DIGESTS)
+  : resolve(SKILL_SRC, '..', 'RELEASE-DIGESTS.json');
+
+// Digest deterministico dell'albero ASSEMBLATO: path POSIX ordinati + sha256 del
+// contenuto. Niente mtime, niente ordine di FS -> stesso albero, stesso digest.
+//
+// FINE-RIGA NORMALIZZATI (CRLF -> LF) sui file di TESTO. Il repo gira con
+// core.autocrlf=true e senza .gitattributes: lo stesso commit produce CRLF su
+// Windows e LF altrove, quindi un digest sui byte grezzi cambierebbe fra macchine
+// e a ogni checkout — un ROSSO senza che nessuno abbia toccato il contenuto. La
+// conversione di git non e' una modifica d'autore, ed e' l'unica cosa che qui si
+// normalizza: ogni altra differenza di byte resta una differenza. I file BINARI
+// (rilevati dal byte NUL) sono hashati grezzi, senza toccarli.
+function shippedDigest(treeRoot) {
+  const files = walk(treeRoot, treeRoot, []).sort();
+  const h = createHash('sha256');
+  for (const rel of files) {
+    const abs = join(treeRoot, rel.split('/').join(sep));
+    let buf = readFileSync(abs);
+    if (!buf.includes(0)) buf = Buffer.from(buf.toString('utf8').replace(/\r\n/g, '\n'), 'utf8');
+    h.update(rel);
+    h.update('\0');
+    h.update(createHash('sha256').update(buf).digest('hex'));
+    h.update('\n');
+  }
+  return h.digest('hex');
+}
+
+// LIMITE DICHIARATO (L-COL-006): il record NON sa se una versione sia gia' stata
+// DISTRIBUITA. Ri-registrare con --record-release una versione non ancora uscita
+// e' legittimo (nessuno ha ricevuto il digest vecchio); farlo su una versione gia'
+// in mano agli utenti aggirerebbe il controllo. `--record-release` e' l'atto UMANO
+// esplicito che se ne assume la responsabilita': lo strumento rende visibile il
+// cambiamento, non decide al posto di chi rilascia.
+// Ritorna { ok, lines, error } — `error` non vuoto = emissione VIETATA.
+function releaseGuard(treeRoot, version) {
+  const lines = [];
+  if (!existsSync(RELEASE_RECORD)) {
+    // Caso legittimo: chi ri-pacchettizza dal proprio install non ha il record
+    // del NOSTRO repo. Si dichiara, non si tace (L-COL-006: mai un verde muto).
+    lines.push(`[--] controllo di release NON APPLICABILE — record assente (${RELEASE_RECORD})`);
+    lines.push('     Copertura mancante DICHIARATA: nessuna garanzia che il contenuto sia cambiato insieme alla versione.');
+    return { ok: true, lines, error: null };
+  }
+  let record;
+  try { record = JSON.parse(readFileSync(RELEASE_RECORD, 'utf8')); }
+  catch (e) { return { ok: false, lines, error: `record di release illeggibile (${RELEASE_RECORD}): ${e.message}` }; }
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    return { ok: false, lines, error: `record di release malformato (${RELEASE_RECORD}): atteso un oggetto <versione> -> <digest>` };
+  }
+  const digest = shippedDigest(treeRoot);
+  const known = record[version];
+  if (typeof known !== 'string') {
+    if (!recordRelease) {
+      return {
+        ok: false,
+        lines,
+        error: `versione ${version} mai registrata in ${RELEASE_RECORD}. Se e' una release NUOVA, rilancia con --record-release per registrarne il digest; se invece hai cambiato l'albero spedito, bumpa prima "skill_version" in trueline/package.json.`,
+      };
+    }
+    record[version] = digest;
+    try { writeFileSync(RELEASE_RECORD, `${JSON.stringify(record, null, 2)}\n`, 'utf8'); }
+    catch (e) { return { ok: false, lines, error: `record di release non scrivibile (${RELEASE_RECORD}): ${e.message}` }; }
+    lines.push(`[OK] release ${version} REGISTRATA — digest ${digest.slice(0, 16)}…`);
+    return { ok: true, lines, error: null };
+  }
+  if (known !== digest) {
+    return {
+      ok: false,
+      lines,
+      error: `l'albero SPEDITO e' cambiato ma la versione e' ancora ${version} (registrato ${known.slice(0, 16)}…, calcolato ${digest.slice(0, 16)}…). `
+        + 'Un update version-gated NON consegnerebbe questo contenuto e riporterebbe "already at the latest version": '
+        + 'bumpa "skill_version" in trueline/package.json e ri-registra con --record-release.',
+    };
+  }
+  lines.push(`[OK] release ${version} invariata — digest ${digest.slice(0, 16)}… coincide col registrato`);
+  return { ok: true, lines, error: null };
+}
+
 // --- MAIN --------------------------------------------------------------------
 function fail(msg, code = 2) {
   if (jsonMode) console.log(JSON.stringify({ ok: false, error: msg }, null, 2));
@@ -564,6 +656,19 @@ const lint = structuralLint(stagingDir, { injectedMissing });
 
 // 3) MANIFEST (calcolato dall'albero assemblato + sorgenti)
 const manifest = buildManifest(stagingDir);
+
+// 3b) CONTROLLO DI RELEASE — prima di QUALUNQUE emissione (.skill e plugin).
+//     Un contenuto nuovo sotto una versione gia' registrata non esce di qui.
+//     SOLO a lint VERDE: il controllo gata l'EMISSIONE, e a lint rosso non si
+//     emette comunque nulla. Farlo girare lo stesso MASCHEREREBBE il fallimento
+//     del lint (exit 2 del release-guard al posto di exit 1 del lint) — proprio
+//     cio' che il gate m5 verifica con --inject-missing-ref, dove l'albero e'
+//     mutato APPOSTA e un digest diverso e' l'esito atteso, non una violazione.
+let release = { ok: true, lines: ['[--] controllo di release SALTATO — lint rosso: nessuna emissione da gatare'], error: null };
+if (lint.ok) {
+  release = releaseGuard(stagingDir, skillSemver());
+  if (!release.ok) fail(release.error, 2);
+}
 
 // 4) ARCHIVIO (solo se lint verde e non --no-archive)
 let archiveEmitted = null;
@@ -661,6 +766,9 @@ if (jsonMode) {
     console.log('   [FAIL] lint ROSSO:');
     for (const e of lint.errors) console.log(`     - ${e}`);
   }
+  console.log('');
+  console.log('2b) CONTROLLO DI RELEASE (un update version-gated deve poter consegnare):');
+  for (const l of release.lines) console.log(`   ${l}`);
   console.log('');
   console.log('3) MANIFEST di versioni (09 §4):');
   console.log(`   skill:        ${manifest.name} v${manifest.skill_version} (SemVer)`);
