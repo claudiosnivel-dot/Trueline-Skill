@@ -85,7 +85,12 @@ const GO_BIN = process.platform === 'win32' ? 'C:/Users/claud/go/bin' : '/c/User
 // (ecosystem_conformance) EREDITIAMO la radice del padre via TRUELINE_TMP_VERIFY_ROOT —
 // siamo lo STESSO run logico — mentre due run indipendenti hanno radici DIVERSE.
 // Coperta da .gitignore "eval/.tmp-*/".
-const TMP_VERIFY_ROOT = process.env.TRUELINE_TMP_VERIFY_ROOT
+// PROPRIETA' della radice: e' NOSTRA solo se l'abbiamo creata noi (env ASSENTE
+// all'avvio). Se l'abbiamo EREDITATA siamo un FIGLIO e sotto quella radice
+// vivono le copie VIVE e le prove d'igiene del PADRE: raderla e' esattamente
+// l'operazione che il pattern per-pid vuole eliminare.
+const TMP_ROOT_INHERITED = Boolean(process.env.TRUELINE_TMP_VERIFY_ROOT);
+const TMP_VERIFY_ROOT = TMP_ROOT_INHERITED
   ? resolve(process.env.TRUELINE_TMP_VERIFY_ROOT)
   : resolve(ROOT, 'eval', `.tmp-verify-aw-${process.pid}`);
 
@@ -133,8 +138,12 @@ function copyFixture() {
   cpSync(FIXTURE, dir, { recursive: true, dereference: false });
   const cleanup = () => {
     try { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* best-effort */ }
+    // SOLO IL PROPRIETARIO SPAZZA la RADICE: se e' EREDITATA appartiene al PADRE. La
+    // rimozione della PROPRIA COPIA (sopra) resta SEMPRE attiva — guardarla anche lei
+    // trasformerebbe l'igiene in un residuo; e' guardata la SOLA rimozione della radice.
     try {
-      if (existsSync(TMP_VERIFY_ROOT) && readdirSync(TMP_VERIFY_ROOT).length === 0) {
+      if (!TMP_ROOT_INHERITED
+        && existsSync(TMP_VERIFY_ROOT) && readdirSync(TMP_VERIFY_ROOT).length === 0) {
         rmSync(TMP_VERIFY_ROOT, { recursive: true, force: true });
       }
     } catch { /* best-effort */ }
@@ -212,6 +221,38 @@ function gitleaksWtCount(dir) {
   const g = nodeRun(RUN_GITLEAKS, [dir, 'working-tree'], dir);
   let json = null; try { json = JSON.parse(g.stdout); } catch { return null; }
   return Array.isArray(json) ? json.length : null;
+}
+
+// Legge e parsa un JSON; null se assente/illeggibile/non parsabile.
+function readJsonSafe(p) { try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; } }
+
+// Raccoglie le collection di un config Appwrite nelle DUE forme accettate
+// dall'oracolo: `collections[]` top-level e `databases[].collections[]`.
+function appwriteCollections(config) {
+  const out = [];
+  if (config && Array.isArray(config.collections)) out.push(...config.collections);
+  if (config && Array.isArray(config.databases)) {
+    for (const db of config.databases) {
+      if (db && Array.isArray(db.collections)) out.push(...db.collections);
+    }
+  }
+  return out;
+}
+
+// Trova la collection per id ($id, con fallback su name) fra le due forme.
+function appwriteFindCollection(config, id) {
+  if (!id) return null;
+  return appwriteCollections(config).find((c) => c && typeof c === 'object'
+    && ((typeof c.$id === 'string' && c.$id === id)
+      || (typeof c.name === 'string' && c.name === id))) || null;
+}
+
+// Permessi di una collection: `$permissions` (forma canonica) o `permissions`.
+function appwritePerms(coll) {
+  if (!coll || typeof coll !== 'object') return [];
+  if (Array.isArray(coll.$permissions)) return coll.$permissions;
+  if (Array.isArray(coll.permissions)) return coll.permissions;
+  return [];
 }
 
 // Riesegue appwrite_perms_check sulla copia e ritorna il numero di finding
@@ -370,9 +411,41 @@ if (dir) {
   const awCodeOnly = awAfter.split('\n')
     .map((l) => l.replace(/\/\/.*$/, '')).join('\n');
   const codeStillPublic = /read\s*\(\s*["']any["']\s*\)/.test(awCodeOnly);
-  assert('authz AW-S3: nessuna permission read("any") rimasta in appwrite.json (scope ristretto)',
-    !codeStillPublic && /FIX:AW-S3/.test(awAfter),
-    codeStillPublic ? 'read("any") ANCORA presente' : (/FIX:AW-S3/.test(awAfter) ? 'scope ristretto (FIX:AW-S3)' : 'marker FIX:AW-S3 assente'));
+  // ⚠ NIENTE MARKER DI PROVENIENZA `FIX:AW-S3` — e' IMPOSSIBILE PER COSTRUZIONE.
+  // Il fix-provider riscrive appwrite.json con `JSON.stringify`: il documento viene
+  // RIGENERATO dall'oggetto parsato, e JSON non ammette commenti — nessun marker
+  // testuale puo' sopravvivere (infilarlo come chiave finta inquinerebbe la config
+  // che l'oracolo ri-parsa). Un'asserzione impossibile e' PERMANENTEMENTE ROSSA:
+  // non la si cancella, la si SOSTITUISCE con una EQUIVALENTE SUL MERITO.
+  // Il floor ANTI-VACUO qui non e' il marker ma cio' che SOLO il provider scrive
+  // sulla collection colpita, e che una fixture gia' sana non avrebbe:
+  //   (a) la permission `read` ristretta al ruolo "users" e NESSUN ruolo "any";
+  //   (b) documentSecurity TRUE, mentre nella fixture PRISTINA quella collection
+  //       lo ha FALSE (isolamento per-documento acceso dal fix).
+  // Il solo `!codeStillPublic` sarebbe VACUO (vero anche su un appwrite.json che il
+  // difetto non lo ha mai avuto); (b) e' FALSO su qualunque copia non passata dal fix,
+  // e il confronto con la fixture pristina impedisce che la prova diventi vacua se un
+  // domani il seed venisse "sanato" a monte.
+  const awCollId = String((seeds['AW-S3'] && seeds['AW-S3'].location
+    && seeds['AW-S3'].location.symbol) || '').split('#')[0];
+  const awCollAfter = appwriteFindCollection(readJsonSafe(join(dir, 'appwrite.json')), awCollId);
+  const awPermsAfter = appwritePerms(awCollAfter);
+  const anyRoleRe = /\b(?:read|create|update|delete|write)\s*\(\s*["']any["']\s*\)/;
+  const permsHaveAnyRole = awPermsAfter.some((p) => typeof p === 'string' && anyRoleRe.test(p));
+  const readRestrictedToUsers = awPermsAfter.some((p) => typeof p === 'string'
+    && /^\s*read\s*\(\s*["']users["']\s*\)\s*$/.test(p));
+  const docSecurityNow = Boolean(awCollAfter && awCollAfter.documentSecurity === true);
+  // Stato PRISTINO: la fixture ORIGINALE non e' mai mutata (sola lettura).
+  const awCollPristine = appwriteFindCollection(readJsonSafe(join(FIXTURE, 'appwrite.json')), awCollId);
+  const docSecurityWasFalse = Boolean(awCollPristine && awCollPristine.documentSecurity === false);
+  const awS3Ok = Boolean(awCollAfter) && !codeStillPublic && !permsHaveAnyRole
+    && readRestrictedToUsers && docSecurityNow && docSecurityWasFalse;
+  assert('authz AW-S3: permission ristretta a "users" + documentSecurity:true sulla collection colpita (equivalente non-vacuo del marker, impossibile in JSON)',
+    awS3Ok,
+    !awCollAfter
+      ? `collection colpita NON risolta (match_path=${awCollId || 'ASSENTE'})`
+      : (codeStillPublic ? 'read("any") ANCORA presente nel file'
+        : `perms=[${awPermsAfter.join(' ')}] documentSecurity=${String(awCollAfter.documentSecurity)} (pristina=${awCollPristine ? String(awCollPristine.documentSecurity) : 'NON risolta'})`));
 
   // (9c) GUARD: la suite node:test di caratterizzazione resta VERDE post-fix.
   console.log('');

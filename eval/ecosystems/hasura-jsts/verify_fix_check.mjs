@@ -71,7 +71,12 @@ const GO_BIN = process.platform === 'win32' ? 'C:/Users/claud/go/bin' : '/c/User
 // (ecosystem_conformance) EREDITIAMO la radice del padre via TRUELINE_TMP_VERIFY_ROOT —
 // siamo lo STESSO run logico — mentre due run indipendenti hanno radici DIVERSE.
 // Coperta da .gitignore "eval/.tmp-*/".
-const TMP_VERIFY_ROOT = process.env.TRUELINE_TMP_VERIFY_ROOT
+// PROPRIETA' della radice: e' NOSTRA solo se l'abbiamo creata noi (env ASSENTE
+// all'avvio). Se l'abbiamo EREDITATA siamo un FIGLIO e sotto quella radice
+// vivono le copie VIVE e le prove d'igiene del PADRE: raderla e' esattamente
+// l'operazione che il pattern per-pid vuole eliminare.
+const TMP_ROOT_INHERITED = Boolean(process.env.TRUELINE_TMP_VERIFY_ROOT);
+const TMP_VERIFY_ROOT = TMP_ROOT_INHERITED
   ? resolve(process.env.TRUELINE_TMP_VERIFY_ROOT)
   : resolve(ROOT, 'eval', `.tmp-verify-hs-${process.pid}`);
 
@@ -116,8 +121,12 @@ function copyFixture() {
   cpSync(FIXTURE, dir, { recursive: true, dereference: false });
   const cleanup = () => {
     try { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* best-effort */ }
+    // SOLO IL PROPRIETARIO SPAZZA la RADICE: se e' EREDITATA appartiene al PADRE. La
+    // rimozione della PROPRIA COPIA (sopra) resta SEMPRE attiva — guardarla anche lei
+    // trasformerebbe l'igiene in un residuo; e' guardata la SOLA rimozione della radice.
     try {
-      if (existsSync(TMP_VERIFY_ROOT) && readdirSync(TMP_VERIFY_ROOT).length === 0) {
+      if (!TMP_ROOT_INHERITED
+        && existsSync(TMP_VERIFY_ROOT) && readdirSync(TMP_VERIFY_ROOT).length === 0) {
         rmSync(TMP_VERIFY_ROOT, { recursive: true, force: true });
       }
     } catch { /* best-effort */ }

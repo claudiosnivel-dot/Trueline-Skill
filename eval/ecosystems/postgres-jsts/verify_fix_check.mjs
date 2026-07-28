@@ -70,7 +70,12 @@ const GO_BIN = process.platform === 'win32' ? 'C:/Users/claud/go/bin' : '/c/User
 // (ecosystem_conformance) EREDITIAMO la radice del padre via TRUELINE_TMP_VERIFY_ROOT —
 // siamo lo STESSO run logico — mentre due run indipendenti hanno radici DIVERSE.
 // Coperta da .gitignore "eval/.tmp-*/".
-const TMP_VERIFY_ROOT = process.env.TRUELINE_TMP_VERIFY_ROOT
+// PROPRIETA' della radice: e' NOSTRA solo se l'abbiamo creata noi (env ASSENTE
+// all'avvio). Se l'abbiamo EREDITATA siamo un FIGLIO e sotto quella radice
+// vivono le copie VIVE e le prove d'igiene del PADRE: raderla e' esattamente
+// l'operazione che il pattern per-pid vuole eliminare.
+const TMP_ROOT_INHERITED = Boolean(process.env.TRUELINE_TMP_VERIFY_ROOT);
+const TMP_VERIFY_ROOT = TMP_ROOT_INHERITED
   ? resolve(process.env.TRUELINE_TMP_VERIFY_ROOT)
   : resolve(ROOT, 'eval', `.tmp-verify-jsts-${process.pid}`);
 
@@ -119,8 +124,12 @@ function copyFixture() {
   cpSync(FIXTURE, dir, { recursive: true, dereference: false });
   const cleanup = () => {
     try { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* best-effort */ }
+    // SOLO IL PROPRIETARIO SPAZZA la RADICE: se e' EREDITATA appartiene al PADRE. La
+    // rimozione della PROPRIA COPIA (sopra) resta SEMPRE attiva — guardarla anche lei
+    // trasformerebbe l'igiene in un residuo; e' guardata la SOLA rimozione della radice.
     try {
-      if (existsSync(TMP_VERIFY_ROOT) && readdirSync(TMP_VERIFY_ROOT).length === 0) {
+      if (!TMP_ROOT_INHERITED
+        && existsSync(TMP_VERIFY_ROOT) && readdirSync(TMP_VERIFY_ROOT).length === 0) {
         rmSync(TMP_VERIFY_ROOT, { recursive: true, force: true });
       }
     } catch { /* best-effort */ }
@@ -288,6 +297,16 @@ if (dir) {
   assert('secret PG-S1: il literal hardcoded sparisce da src/config.ts (legge da process.env)',
     !/sk_live_PGS1/.test(cfgAfter),
     /sk_live_PGS1/.test(cfgAfter) ? 'literal ANCORA presente (fix non applicata!)' : 'literal rimosso');
+  // (3d) La PASSWORD della connection string sparisce anch'essa. Il commento di
+  //   (3c) prometteva gia' "nessun sk_live_/postgres:// con password", ma
+  //   l'asserzione copriva solo `sk_live_`: la promessa era piu' larga della
+  //   prova. Serve una riga separata perche' il verdetto `verified` del loop
+  //   guarda il FINGERPRINT del finding seminato, non il file — senza, il gate
+  //   resterebbe verde con la password del DB nel sorgente ogni volta che il seme
+  //   sorteggiato e' il token anziche' la DSN (falso verde L-COL-006).
+  assert('secret PG-S1: la password della DSN Postgres sparisce da src/config.ts',
+    !/R3al_pw_live_8f3a9c2b1d4e5f60718293a4b5c6d7e8/.test(cfgAfter),
+    /R3al_pw_live_8f3a9c2b1d4e5f60718293a4b5c6d7e8/.test(cfgAfter) ? 'password DSN ANCORA presente (fix non applicata!)' : 'password DSN rimossa');
 
   // (4) GUARD: la suite node:test di caratterizzazione resta VERDE post-fix.
   console.log('');
