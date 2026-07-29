@@ -43,6 +43,7 @@ import {
 } from './thresholds.mjs';
 import { classify, loadManifest } from '../ecosystem/resolve.mjs';
 import { AUTHZ_ORACLES, AUTHZ_TOOL_NAMES, runAuthzOracle } from '../oracles/authz_oracles.mjs';
+import { scanScopeFor, applyScanScope, scanScopeCoverage } from '../oracles/scan_scope.mjs';
 import { loadTasks } from '../blueprint/blueprint_tasks.mjs';
 import { runTargetFile } from './run_file.mjs';
 import { assertionTrace } from '../blueprint/ac_assertion_trace_check.mjs';
@@ -330,6 +331,12 @@ export function control2Security(referenceApp, { baseline = new Set(), runOpts, 
   const sub = [];
   const notes = [];
   const bindingByTool = new Map(); // tool authz -> binding del manifest (per lo scan)
+  // SCAN-SCOPE (PLAN 2026-07-28 §3.5): coverage dell'esclusione, riempita dal ramo
+  // gitleaks. Resta null se il ramo non gira o se non c'e' NESSUNA dichiarazione
+  // (BIT-invarianza: senza dichiarazioni l'esito del checkpoint e' quello di prima,
+  // campo compreso). Non e' un dettaglio cosmetico: e' la contropartita
+  // dell'esclusione — cio' che non si guarda si DICHIARA (L-COL-006).
+  let scanScopeCov = null;
 
   // --- Per-tool runner (un oracolo nominato) ---------------------------------
   // Ogni tool sa come invocare il proprio wrapper, con quale `oracle`/`scope`
@@ -356,9 +363,49 @@ export function control2Security(referenceApp, { baseline = new Set(), runOpts, 
       case 'gitleaks': {
         const g = runOracle(RUN_GITLEAKS, [referenceApp, 'working-tree'], referenceApp);
         if (!g.ok) return { fatal: secErr('gitleaks', g.detail) };
-        const n = normFindings('gitleaks', g.json, { ...runOpts, scope: 'working-tree' });
+        // --- SCAN-SCOPE (PLAN §3.5): confine dello scope PRIMA della normalizzazione.
+        // Si filtra il JSON NATIVO (il wrapper resta BIT-invariante: continua a
+        // stampare l'output nativo di gitleaks) e SOLO QUI, cosi' i fingerprint che
+        // arrivano al baseline-delta sono gia' quelli dell'insieme scansionato.
+        //
+        // SIMMETRIA (il bug piu' probabile di questo innesto): lo scope si risolve
+        // con scanScopeFor(referenceApp, { manifest }) — la STESSA funzione, con lo
+        // STESSO projectDir, che usano baseline.mjs::capture e run_loop::collectFindings.
+        // Se i due divergessero, la baseline congelerebbe fingerprint che il
+        // checkpoint non produce piu' (o, peggio, il checkpoint produrrebbe
+        // fingerprint assenti dalla baseline -> 'new' -> ROSSO FANTASMA a ogni giro).
+        //
+        // Una dichiarazione di progetto ROTTA (JSON invalido, `reason` mancante) fa
+        // LANCIARE resolveScanScope: qui diventa un ERRORE del controllo 2, non un
+        // "nessuna esclusione" silenzioso. Chi l'ha scritta la crede attiva
+        // (L-COL-006): ignorarla sarebbe una copertura creduta e non presente.
+        // `manifest ? {manifest} : {}` e non `{manifest}`: un chiamante LEGACY passa
+        // manifest=null (ramo cablato v1) e un null ESPLICITO significherebbe "nessun
+        // manifest" QUI mentre baseline.mjs lo risolverebbe da disco -> due scope
+        // diversi sullo stesso progetto, cioe' il delta fantasma. Con l'omissione,
+        // ogni sito converge sulla stessa auto-risoluzione da projectDir.
+        let scope;
+        try { scope = scanScopeFor(referenceApp, manifest ? { manifest } : {}); }
+        catch (e) { return { fatal: secErr('scan-scope', e.message) }; }
+        // Guardia sul TIPO: applyScanScope su un non-array tornerebbe kept=[] —
+        // cioe' "nessun segreto", un falso verde da input malformato. Se il JSON non
+        // e' un array lo passiamo INTATTO a normalize, che lo rifiuta a voce alta.
+        const applied = Array.isArray(g.json)
+          ? applyScanScope(g.json, scope, referenceApp)
+          : { kept: g.json, excluded: [] };
+        // La coverage esce SOLO se c'e' almeno un pattern dichiarato: senza
+        // dichiarazioni l'esito del checkpoint resta quello di prima, campo compreso
+        // (BIT-invarianza). Con dichiarazioni esce SEMPRE, anche a excluded_total=0:
+        // un pattern che non ha soppresso niente e' un'informazione, non un silenzio.
+        scanScopeCov = scope.patterns.length > 0
+          ? scanScopeCoverage(scope, applied.excluded)
+          : null;
+        const n = normFindings('gitleaks', applied.kept, { ...runOpts, scope: 'working-tree' });
         if (!n.ok) return { fatal: secErr('gitleaks normalize', n.detail) };
         all.push(...n.findings); sub.push(`gitleaks:${n.findings.length}`);
+        // Nessuna esclusione e' silenziosa: se qualcosa e' stato escluso, lo si legge
+        // nel detail del controllo, non solo nella coverage strutturata.
+        if (applied.excluded.length > 0) sub.push(`scan-scope-escl:${applied.excluded.length}`);
         return {};
       }
       // rls_check (DDL; S3/S4/S5 vivono qui). HARD.
@@ -488,7 +535,7 @@ export function control2Security(referenceApp, { baseline = new Set(), runOpts, 
     return {
       id: 2, name: 'security', status: 'degraded', green: false,
       detail: `oracolo di floor non eseguito: ${floorMiss} — controllo DEGRADATO, NON verde${noteStr}`,
-      findings: all, blockers: [],
+      findings: all, blockers: [], scan_scope: scanScopeCov,
     };
   }
   const green = blockers.length === 0;
@@ -497,11 +544,14 @@ export function control2Security(referenceApp, { baseline = new Set(), runOpts, 
     detail: green
       ? `nessun finding di sicurezza NUOVO >= ${GATE_SEVERITY} [${sub.join(' ')}]${noteStr}`
       : `${blockers.length} finding NUOVO >= ${GATE_SEVERITY} [${sub.join(' ')}]${noteStr}`,
-    findings: all, blockers,
+    findings: all, blockers, scan_scope: scanScopeCov,
   };
 
   function secErr(where, d) {
-    return { id: 2, name: 'security', status: 'error', green: false, detail: `${where}: ${d}`, findings: all, blockers: [] };
+    return {
+      id: 2, name: 'security', status: 'error', green: false, detail: `${where}: ${d}`,
+      findings: all, blockers: [], scan_scope: scanScopeCov,
+    };
   }
 }
 
@@ -862,5 +912,11 @@ export function runCheckpoint(referenceApp, opts = {}) {
       `checkpoint=${green ? 'VERDE' : 'NON-VERDE'} | `
       + controls.map((c) => `${c.id}:${c.name}=${c.status}`).join(' '),
     degraded,
+    // SCAN-SCOPE (PLAN §3.5): la coverage dell'esclusione risale in cima all'esito
+    // del checkpoint, cosi' il chiamante (report REMEDIATE) non deve rovistare nei
+    // controlli per dichiarare cio' che non e' stato guardato. null quando non c'e'
+    // NESSUNA dichiarazione: senza esclusioni non c'e' niente da dichiarare, e la
+    // forma dell'esito resta quella di prima (BIT-invarianza).
+    scan_scope: (c2 && c2.scan_scope) || null,
   };
 }

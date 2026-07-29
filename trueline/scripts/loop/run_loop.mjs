@@ -49,6 +49,7 @@ import {
 } from '../git/layered_git.mjs';
 import { classify, loadManifest } from '../ecosystem/resolve.mjs';
 import { AUTHZ_ORACLES, runAuthzOracle } from '../oracles/authz_oracles.mjs';
+import { scanScopeFor, applyScanScope, scanScopeCoverage } from '../oracles/scan_scope.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -133,15 +134,43 @@ function norm(oracle, json, scope) {
 // docker): se l'oracolo non gira, i suoi finding semplicemente non entrano nella
 // baseline e il checkpoint li tratterebbe come nuovi — ma quello stesso checkpoint
 // dichiarerebbe semgrep DEGRADATO (oracolo assente), coerente con L-COL-006.
-function collectFindings(dir, manifest = null) {
+// out (opzionale, ADDITIVO): raccoglitore per la coverage dello scan-scope. La
+// firma di ritorno resta l'ARRAY dei finding (i chiamanti storici non cambiano).
+function collectFindings(dir, manifest = null, out = {}) {
   const findings = [];
   const migrations = resolve(dir, 'supabase', 'migrations');
 
-  const gwt = runOracle(RUN_GITLEAKS, [dir, 'working-tree'], dir);
-  if (gwt.ok) findings.push(...norm('gitleaks', gwt.json, 'working-tree'));
+  // --- SCAN-SCOPE (PLAN 2026-07-28 §3.5) --------------------------------------
+  // Questa raccolta e' DUE cose insieme: l'input del loop E la BASELINE del
+  // checkpoint finale (`new Set(all.map(f => f.fingerprint))` in main). Percio' il
+  // confine dev'essere lo STESSO di control2Security, o si apre il delta fantasma:
+  // un finding che il checkpoint produce e la baseline non contiene risulta 'new'
+  // e blocca il gate senza che nessuno abbia introdotto niente.
+  // Stessa funzione, stesso projectDir, stesso manifest attivo -> stesso scope.
+  // Una dichiarazione rotta qui NON viene assorbita in silenzio: si propaga e
+  // run_loop la registra come errore di sessione (report.ok=false).
+  // `manifest ? {manifest} : {}`: un null ESPLICITO qui significherebbe "nessun
+  // manifest" mentre il checkpoint lo risolverebbe da disco -> due scope diversi.
+  // Con l'omissione entrambi cadono sulla stessa auto-risoluzione da projectDir.
+  const scope = scanScopeFor(dir, manifest ? { manifest } : {});
+  const scopeExcluded = [];
+  // Filtra il JSON NATIVO di gitleaks prima della normalizzazione. Guardia sul
+  // TIPO: un non-array passa intatto (norm lo rifiuta), non diventa "zero segreti".
+  const scoped = (json) => {
+    if (!Array.isArray(json) || scope.patterns.length === 0) return json;
+    const applied = applyScanScope(json, scope, dir);
+    scopeExcluded.push(...applied.excluded);
+    return applied.kept;
+  };
 
+  const gwt = runOracle(RUN_GITLEAKS, [dir, 'working-tree'], dir);
+  if (gwt.ok) findings.push(...norm('gitleaks', scoped(gwt.json), 'working-tree'));
+
+  // Lo scope vale anche per la history: il confine "generato vs d'autore" e' una
+  // proprieta' del FILE, non dello scope di scansione. Il file sotto fix resta
+  // comunque intoccabile nel re-run del loop (loop.mjs, REGOLA DEL SEME).
   const gh = runOracle(RUN_GITLEAKS, [dir, 'history'], dir);
-  if (gh.ok) findings.push(...norm('gitleaks', gh.json, 'history'));
+  if (gh.ok) findings.push(...norm('gitleaks', scoped(gh.json), 'history'));
 
   const rls = runOracle(RLS_CHECK, [migrations], dir);
   if (rls.ok) findings.push(...norm('rls-check', rls.json, 'static-ddl'));
@@ -174,6 +203,11 @@ function collectFindings(dir, manifest = null) {
   if (sg.ok && sg.json && Array.isArray(sg.json.results)) {
     findings.push(...norm('semgrep', sg.json, 'working-tree'));
   }
+
+  // Coverage dello scan-scope: presente SOLO se c'e' almeno un pattern dichiarato
+  // (senza dichiarazioni non c'e' nulla da dichiarare, e la forma del report resta
+  // quella di oggi — BIT-invarianza).
+  out.scanScope = scope.patterns.length > 0 ? scanScopeCoverage(scope, scopeExcluded) : null;
 
   return findings;
 }
@@ -387,7 +421,8 @@ async function main() {
     const activeId = classify(ws.dir);
     const manifest = activeId ? loadManifest(activeId) : null;
     report.ecosystem = activeId;
-    const all = collectFindings(ws.dir, manifest);
+    const scanScopeOut = {};
+    const all = collectFindings(ws.dir, manifest, scanScopeOut);
 
     // BUILD-DISCIPLINE (BD-1, EVAL-ONLY): col fixture-app la copia E' l'artefatto
     // POST-COSTRUZIONE da GIUDICARE, non un repo da bonificare. Quindi:
@@ -448,6 +483,20 @@ async function main() {
       green: cp.green, summary: cp.summary, degraded: cp.degraded,
       controls: cp.controls.map((c) => ({ id: c.id, name: c.name, status: c.status, green: c.green, detail: c.detail })),
     };
+
+    // SCAN-SCOPE nel REPORT REMEDIATE (PLAN §3.5 / §3.4): cio' che NON e' stato
+    // scansionato si dichiara, con pattern, PROVENIENZA, `reason` di progetto e
+    // numero di finding soppressi. E' l'unica cosa che rende legittima la leva 3:
+    // un'esclusione riscritta nero su bianco a ogni giro non e' un bypass; una
+    // taciuta lo sarebbe (L-COL-006). Non scansionare qualcosa NON e' un verde.
+    // Sorgente preferita: la coverage del CHECKPOINT (lo stato finale, post-fix);
+    // fallback alla raccolta pre-fix se il controllo 2 non ha eseguito gitleaks.
+    // Assente => nessuna dichiarazione => nessun campo (BIT-invarianza della shape).
+    const scanScopeCov = (cp && cp.scan_scope) || scanScopeOut.scanScope || null;
+    if (scanScopeCov) {
+      if (!report.coverage) report.coverage = { characterized: [], declared_uncovered: [] };
+      report.coverage.scan_scope = scanScopeCov;
+    }
 
     // A2c/F3 — debito strutturale (report REMEDIATE) dai finding d'igiene GIA'
     // calcolati dal controllo 1 (nessun re-run). Guardia sul manifest -> BIT-invariante

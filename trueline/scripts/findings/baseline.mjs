@@ -58,6 +58,7 @@ import { fileURLToPath } from 'node:url';
 
 import { normalizeAll } from './normalize.mjs';
 import { validateMany } from './validate_finding.mjs';
+import { scanScopeFor, applyScanScope, scanScopeCoverage } from '../oracles/scan_scope.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -215,6 +216,32 @@ export function capture(projectDir, oracles = DEFAULT_ORACLES, opts = {}) {
   const usedOracles = [];
   const pairs = []; // { oracle, native } per normalizeAll (dedup fra oracoli)
 
+  // --- SCAN-SCOPE (PLAN 2026-07-28 §3.5) --------------------------------------
+  // LA SIMMETRIA COL CHECKPOINT E' IL PUNTO. La baseline e' l'insieme dei
+  // fingerprint "gia' noti": se congelasse finding che il checkpoint ESCLUDE (o
+  // se ne perdesse di quelli che il checkpoint TIENE) nascerebbe un DELTA
+  // FANTASMA a ogni giro. La direzione pericolosa e' la seconda: un finding che
+  // il checkpoint produce e la baseline non contiene risulta 'new' e BLOCCA il
+  // gate, per sempre, senza che nessuno abbia introdotto niente.
+  //
+  // Percio' qui NON si reimplementa nulla: si chiama la STESSA scanScopeFor col
+  // MEDESIMO projectDir che usa control2Security (che risolve il manifest allo
+  // stesso modo, da `dir`). Stesso input, stessa funzione, stesso scope.
+  //
+  // `opts.manifest` e' rispettato se il chiamante l'ha gia' risolto (undefined =>
+  // lo risolve scanScopeFor). Una dichiarazione di progetto ROTTA fa fallire la
+  // capture: una baseline costruita ignorando in silenzio un'esclusione che il
+  // progetto crede attiva sarebbe una memoria falsa (L-COL-006).
+  let scope;
+  try {
+    scope = scanScopeFor(dir, opts.manifest ? { manifest: opts.manifest } : {});
+  } catch (e) {
+    return {
+      ok: false, snapshot: null, findings: [], errors: [`scan-scope: ${e.message}`], detail: 'scope di scansione non risolvibile',
+    };
+  }
+  const scopeExcluded = [];
+
   for (const canon of canonOracles) {
     const inv = oracleInvocation(canon, dir, Number(opts.minTokens) || 50);
     if (!inv) { errors.push(`oracolo sconosciuto: ${canon}`); continue; }
@@ -230,7 +257,20 @@ export function capture(projectDir, oracles = DEFAULT_ORACLES, opts = {}) {
       errors.push(`${canon}: ${r.detail}`);
       continue;
     }
-    pairs.push({ oracle: inv.normOracle, native: r.json });
+    // Lo scope vale per l'oracolo dei SEGRETI (la leva vive in
+    // manifest.oracles.secret.exclude): gitleaks e' l'unico ramo filtrato, gli
+    // altri oracoli passano intatti (BIT-invarianza per rls/knip/osv/igiene).
+    // Il filtro sta PRIMA della normalizzazione, come nel checkpoint, cosi' i
+    // fingerprint della baseline sono quelli dell'insieme davvero scansionato.
+    // Guardia sul TIPO identica al checkpoint: un JSON non-array passa INTATTO a
+    // normalizeAll (che lo rifiuta), non diventa "zero segreti".
+    let native = r.json;
+    if (inv.normOracle === 'gitleaks' && Array.isArray(native) && scope.patterns.length > 0) {
+      const applied = applyScanScope(native, scope, dir);
+      scopeExcluded.push(...applied.excluded);
+      native = applied.kept;
+    }
+    pairs.push({ oracle: inv.normOracle, native });
     usedOracles.push(canon);
   }
 
@@ -273,12 +313,24 @@ export function capture(projectDir, oracles = DEFAULT_ORACLES, opts = {}) {
     findings: byFp,
   };
 
+  // Cio' che la baseline NON ha guardato si scrive NELLO snapshot: chi legge un
+  // baseline.json deve poter vedere con quale confine e' stato costruito, o due
+  // baseline con lo stesso `count` sembrerebbero la stessa cosa. Il campo compare
+  // SOLO se c'e' almeno un pattern dichiarato: senza dichiarazioni lo snapshot
+  // resta byte-identico a quello di prima (BIT-invarianza, e la capture deve
+  // restare ricalcolabile bit-per-bit).
+  const scanScope = scope.patterns.length > 0 ? scanScopeCoverage(scope, scopeExcluded) : null;
+  if (scanScope) snapshot.scan_scope = scanScope;
+
   return {
     ok: true,
     snapshot,
     findings: sorted,
     errors,
-    detail: `${sorted.length} finding catturati da [${usedOracles.join(', ')}]`,
+    scanScope,
+    detail: `${sorted.length} finding catturati da [${usedOracles.join(', ')}]`
+      + (scanScope && scanScope.excluded_total > 0
+        ? `; ${scanScope.excluded_total} esclusi dallo scope di scansione` : ''),
   };
 }
 
