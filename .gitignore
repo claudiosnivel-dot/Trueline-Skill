@@ -35,3 +35,11 @@ eval/ecosystems/_a2c-fixtures/**/.git/
 eval/ecosystems/_a2c-fixtures/**/node_modules/
 eval/ecosystems/_a2c-fixtures/**/.trueline/
 eval/ecosystems/_a2c-fixtures/**/package-lock.json
+
+# SCAN-SCOPE: fixture del keystone scan_scope_check. Cio' che e' TRACCIATO e' `seed/`
+# (materiale di gate), dove i dot-file sono scritti `dot.<nome>`; cio' che GIRA e'
+# `project/`, materializzato da provision_fixtures.sh e interamente DERIVATO dal seed.
+# La mappatura esiste perche' questa fixture ha bisogno, COME MATERIALE DI GATE, proprio
+# dei path che ogni repo ignora (`.env`, `.next/`, `.trueline/`) e di un `.gitignore`
+# ANNIDATO — che varrebbe anche per QUESTO repo e nasconderebbe la fixture a se stessa.
+eval/scan-scope/*/project/

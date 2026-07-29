@@ -1,0 +1,6 @@
+{
+  "exclude": [
+    "backups/**"
+  ],
+  "reason": "dump di dati remoti (27 file, in crescita di ~5 finding al giorno): righe di INSERT con il letterale 'password', non codice d'autore"
+}
