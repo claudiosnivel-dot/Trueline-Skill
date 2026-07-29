@@ -187,6 +187,18 @@ Keystone nuovo `eval/harness/scan_scope_check.mjs` su fixture dedicate
 | 10 | `loop:seed-file-never-excluded` | il file sotto fix non e' escludibile (niente `verified` gratis) |
 | 11 | `no-declaration:bit-invariant` | progetto senza dichiarazioni => conteggio identico a oggi |
 | 12 | `falsificabile` | neutralizzo l'esclusione => (1) rosso; ripristino => verde |
+| 13 | `wiring:baseline` | `baseline.mjs::capture` esclude DAVVERO e dichiara la coverage nello snapshot |
+| 14 | `wiring:checkpoint` | `checkpoint.mjs::control2Security` esclude DAVVERO e fa risalire `scan_scope` |
+| 15 | `wiring:run-loop` | `run_loop.mjs::collectFindings` esclude DAVVERO e riempie `out.scanScope` |
+| 16 | `wiring:loop-seed-protetto` | strato 1 in isolamento: tornano TUTTI i finding del file sotto fix |
+| 17 | `wiring:loop-rete-identita'` | strato 2 in isolamento: path fasullo, il fingerprint torna comunque |
+
+**Aggiunta del 29 lug (13-17), pagata con un falso verde vero.** I sotto-test 1-12 esercitano il
+**modulo**; da soli lasciano il gate verde con la feature spenta nel prodotto (successo misurato: 12/12
+PASS con quattro siti di innesto neutralizzati). I 13-17 **importano ed eseguono i chiamanti reali**.
+Criterio doppio e inscindibile: (a) i finding coperti spariscono davvero, (b) la coverage esiste e dice
+chi li ha soppressi — accettarne una sola vorrebbe dire tollerare o una feature inerte con una bella
+dichiarazione, o un'esclusione in incognito.
 
 **Non-regressione obbligatoria (gate SERIALE dell'orchestratore, `L-COL-002`):**
 `m5` **56/56 REALE** (DB-live + semgrep) · `pack_verify_battery` **16/16** · `package_skill` lint
@@ -213,7 +225,20 @@ e ri-registrare con `--record-release`, o `package_skill` rifiuta di emettere (`
 
 ## 6. Verifica finale sul reale (dopo il verde del gate)
 
-Ri-misurare i 4 progetti con lo stesso comando di §1 e riportare il prima/dopo. Atteso:
+> **CORREZIONE AL COMANDO (29 lug) — §6 non era riproducibile come scritto.**
+> §6 diceva di ri-misurare con `node trueline/scripts/oracles/run_gitleaks.mjs <progetto>
+> working-tree`. Ma per scelta esplicita di §3.1 il wrapper resta **BIT-invariante** e
+> stampa il JSON **nativo**: il post-filtro delle leve 1 e 3 vive in
+> `checkpoint`/`baseline`/`run_loop`, non nel wrapper. Con quel comando si vede **solo**
+> l'effetto della leva 2. I numeri di §6 non possono uscire da li' **nemmeno con il
+> wiring perfettamente funzionante** — leggerne il fallimento come «un dettaglio» sarebbe
+> il contrario di cio' che §6 stesso prescrive.
+> **Comando corretto** (passa dal sito di innesto, quindi misura tutte e tre le leve):
+> `node trueline/scripts/findings/baseline.mjs capture <progetto> --oracles gitleaks --out -`
+> — il `count` e' il dopo, e `scan_scope.excluded_total` dice quanti sono stati esclusi e
+> da quale pattern. Il grezzo (`run_gitleaks.mjs`) resta il **prima**.
+
+Ri-misurare i 4 progetti e riportare il prima/dopo. Atteso:
 
 | progetto | prima | dopo |
 |---|---:|---:|
@@ -223,3 +248,62 @@ Ri-misurare i 4 progetti con lo stesso comando di §1 e riportare il prima/dopo.
 | `reportflippa` | 2 | **0** |
 
 Se il numero atteso non esce, **e' un fatto contro il disegno**, non un dettaglio da sistemare a mano.
+
+### ESITO MISURATO (29 lug, codice di questa branch) — la previsione era sbagliata, il disegno no
+
+| progetto | apertura | dopo leva 2 | dopo leve 1+3 | previsto |
+|---|---:|---:|---:|---:|
+| `progetto-web-ai` | 30 | 24 | **0** | 0 |
+| `ASV Officina` | 160 | 155 | **3** | 1 |
+| `appuntamentiok` | 0 | 0 | **0** | 0 |
+| `reportflippa` | 2 | 0 | **0** | 0 |
+
+I 3 residui di ASV, guardati uno per uno:
+
+1. `jwt` in `.env` — la anon key del progetto **cloud reale** (`iss=supabase`). **Previsto, e giusto
+   che resti.**
+2. `generic-api-key` in `Docs/.../plans/*.md` — prosa di documentazione: classe **E**, dichiarata
+   fuori perimetro in §5. **Non previsto nel conteggio per mia svista, non per un difetto del disegno.**
+3. `generic-api-key` in `.env.supabase` — **e' un VERO POSITIVO**: `SUPABASE_DB_PASSWORD`, 32
+   caratteri, entropia 4.48, la password del database cloud in chiaro.
+
+**Il punto 3 e' il risultato piu' importante della sessione, e vale piu' del numero atteso.** Con 160
+finding quella password era una riga qualsiasi in mezzo a 121 dump e 28 tipi generati; con 3, e' in
+cima. E' la tesi del lavoro, verificata sul campo: **il rumore non e' un fastidio estetico, nasconde
+il segnale.**
+
+Igiene del caso (verificata, non assunta): `.env.supabase`, `.env` e `.env.local` **non sono mai
+stati committati** (`git log --all -- <file>` vuoto) e la scansione `history` di ASV riporta 29
+finding che sono **solo** i due FP gia' noti (28 `database.types.ts` + 1 prosa `.md`). La password
+non e' mai entrata nella history: nessuna rotazione urgente, e' igiene locale.
+
+**Conseguenza per §6:** il criterio di accettazione non e' "ASV torna a 1", e' **"cio' che resta e'
+o vero o dichiarato"**. Con 3 residui — 1 vero positivo, 1 previsto, 1 di classe dichiarata fuori
+perimetro — il criterio e' soddisfatto.
+
+### RI-MISURATO il 29 lug DOPO il ripristino del wiring (§3.5), col comando corretto
+
+La misura precedente girava con l'innesto **neutralizzato** (cfr. la nota qui sotto) e i numeri
+venivano da un post-filtro fatto a mano. Rifatta passando dal **sito di innesto reale**
+(`baseline.mjs::capture`, che filtra il JSON **nativo** prima della normalizzazione):
+
+| progetto | grezzo | dopo leve 1+2 | dopo leva 3 | coverage emessa |
+|---|---:|---:|---:|---|
+| `progetto-web-ai` | 24 | **0** | 0 | `.next/**`[manifest]=24 |
+| `ASV Officina` | 155 | 30 | **3** | `**/database.types.ts`=28 · `dist/**`=3 · `backups/**`=121 |
+| `appuntamentiok` | 0 | 0 | 0 | — |
+| `reportflippa` | 0 | **0** | 0 | — |
+
+`reportflippa` esce gia' a 0 dal **grezzo**: i suoi 2 finding d'apertura erano i due token demo, che
+la leva 2 spegne dentro `gitleaks.toml` (quindi prima del post-filtro). Su ASV la leva 3 e' stata
+simulata **senza scrivere nel progetto dell'utente**, iniettando `backups/**` per la stessa via
+d'innesto; l'effetto misurato coincide con quello di una `.trueline/scan-scope.json`.
+
+**NOTA DI SESSIONE (29 lug) — il wiring era stato trovato NEUTRALIZZATO.** Sette punti dell'albero
+spedito portavano il marcatore `NEUTRALIZZATO` e la chiamata reale sostituita da un no-op:
+`applyScanScope` non veniva MAI chiamata in `checkpoint`/`baseline`/`run_loop`, e nel `loop` era
+chiamata **senza `protect`** con la rete per identita' spenta da `if (false && ...)`. Il keystone
+restava **12/12 PASS** perche' esercitava solo il modulo in isolamento. Ripristinati i quattro siti e
+**esteso il gate al wiring** (sotto-test 13-17, che importano ed eseguono i chiamanti reali): ogni
+neutralizzazione — compresa la rimozione di **uno solo** dei due strati della regola del seme — ora
+fa ROSSO. Verificato variante per variante (7/7).
