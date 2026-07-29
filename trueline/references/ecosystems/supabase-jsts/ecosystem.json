@@ -6,7 +6,7 @@
   "detect": { "files_any": ["supabase/config.toml"], "lang_any": ["package.json"] },
   "triggers": ["supabase", "rls", "secret", "segret", "blueprint", "audit", "remediat", "bonific", "macrotask", "oracol", "js", "ts", "javascript", "typescript", "sicur", "security"],
   "oracles": {
-    "secret":          { "tool": "gitleaks", "shared": true },
+    "secret":          { "tool": "gitleaks", "shared": true, "exclude": [".next/**", "dist/**", "build/**", "out/**", "coverage/**", ".turbo/**", ".svelte-kit/**", ".nuxt/**", ".output/**", "**/*.map", "**/database.types.ts"] },
     "dependency-vuln": { "tool": "osv", "lockfiles": ["package-lock.json", "pnpm-lock.yaml", "yarn.lock"] },
     "injection":       { "tool": "semgrep", "ruleset": "../oracles/semgrep-ai-ruleset/" },
     "authz":           { "tool": "semgrep", "ruleset": "../oracles/semgrep-ai-ruleset/" },

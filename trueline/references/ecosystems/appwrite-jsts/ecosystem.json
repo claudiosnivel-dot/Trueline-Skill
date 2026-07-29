@@ -7,7 +7,7 @@
   "detect": { "files_any": ["appwrite.json"], "lang_any": ["package.json"] },
   "triggers": ["appwrite", "node-appwrite", "appwrite-sdk", "appwrite.json", "appwrite collection", "appwrite permission", "authz", "permission", "js", "ts", "javascript", "typescript", "blueprint", "audit", "remediat", "bonific", "macrotask", "oracol", "sicur", "security", "secret", "segret"],
   "oracles": {
-    "secret":          { "tool": "gitleaks", "shared": true },
+    "secret":          { "tool": "gitleaks", "shared": true, "exclude": [".next/**", "dist/**", "build/**", "out/**", "coverage/**", ".turbo/**", ".svelte-kit/**", ".nuxt/**", ".output/**", "**/*.map", "**/database.types.ts"] },
     "dependency-vuln": { "tool": "osv", "lockfiles": ["package-lock.json", "pnpm-lock.yaml", "yarn.lock"] },
     "authz":           { "tool": "appwrite_perms_check", "kind": "appwrite-perms", "scan": ["."], "role": "authz-surface" },
     "injection":       { "tool": "semgrep", "ruleset": "ruleset/" },

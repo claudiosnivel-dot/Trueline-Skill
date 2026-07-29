@@ -1,0 +1,7 @@
+{
+  "name": "scan-scope-declared-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Fixture del keystone scan_scope_check: progetto CON dichiarazioni (manifest d'ecosistema + .trueline/scan-scope.json). Nessuna dipendenza: l'oracolo secret non installa nulla."
+}

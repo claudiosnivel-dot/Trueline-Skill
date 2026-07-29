@@ -35,6 +35,7 @@ import { LOOP_BUDGET } from '../checkpoint/thresholds.mjs';
 import { loadCharacterization, characterizationInvariance } from '../checkpoint/checkpoint.mjs';
 import { commitOnBranch, revertToRef, headSha } from '../git/layered_git.mjs';
 import { resolveRlsMigrationsDir } from './rls_scan.mjs';
+import { scanScopeFor, applyScanScope } from '../oracles/scan_scope.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ORACLES = resolve(__dirname, '..', 'oracles');
@@ -53,6 +54,49 @@ const POCKETBASE_RULES_CHECK = resolve(ORACLES, 'pocketbase_rules_check.mjs');
 const HASURA_METADATA_CHECK = resolve(ORACLES, 'hasura_metadata_check.mjs');
 const APPSYNC_AUTH_CHECK = resolve(ORACLES, 'appsync_auth_check.mjs');
 const GO_BIN = process.platform === 'win32' ? 'C:/Users/claud/go/bin' : '/c/Users/claud/go/bin';
+
+// =============================================================================
+// REGOLA DEL SEME (PLAN 2026-07-28 §3.5, ultimo punto) — IL FILE SOTTO FIX NON
+// E' ESCLUDIBILE. Il falso verde della classe peggiore vive qui.
+// =============================================================================
+//
+// IL RISCHIO, detto per esteso: il loop promuove a `verified` quando il
+// FINGERPRINT del finding-seme SPARISCE dal re-run dell'oracolo (stillPresent()
+// -> false). "Sparito" e "corretto" sono due cose diverse. Se lo scope di
+// scansione potesse escludere il file sotto fix, il finding sparirebbe SENZA CHE
+// NULLA SIA STATO FIXATO e il loop timbrerebbe `verified`: un difetto reale,
+// ancora nel codice, marchiato come risolto da un oracolo che non l'ha mai
+// riguardato. Peggio del difetto: la CERTIFICAZIONE del difetto.
+// Vale identico per il PRE-CHECK ("gia' azzerato da una fix sorella"), che
+// promuove a verified SENZA nemmeno applicare una patch.
+//
+// LA REGOLA: nel re-run del loop lo scope si applica, ma MAI al file sotto fix.
+// Difesa a DUE strati, di proposito — il primo dichiara l'intento, il secondo lo
+// garantisce anche se il primo sbaglia il path:
+//
+//   1) PROTEZIONE PER PATH (qui sotto): tutti i suffissi del path del seme
+//      finiscono in `protect`. E' deliberatamente SOVRA-protettivo: il path
+//      normalizzato del finding (repo-relativo, es. "eval/reference-app/src/x.ts")
+//      NON coincide con quello nativo di gitleaks (relativo al progetto), e
+//      indovinare male significherebbe protezione INATTIVA — cioe' un falso verde
+//      silenzioso. Proteggere qualche path in piu' puo' solo TENERE finding: la
+//      direzione conservativa. Proteggerne uno in meno li NASCONDE.
+//   2) RETE PER IDENTITA' (in fondo a rerunOracleFor): se un finding escluso
+//      dallo scope ha lo STESSO FINGERPRINT del seme, viene RIMESSO nel risultato.
+//      Non dipende da come e' scritto un path: e' l'identita' del finding.
+//
+// Chi tocca questo codice: togliere uno dei due strati non "semplifica", riapre
+// esattamente il buco descritto sopra.
+function seedProtectedPaths(finding) {
+  const raw = String((finding && finding.location && finding.location.file) || '')
+    .replace(/\\/g, '/')
+    .replace(/^\.\//, '');
+  if (raw === '') return [];
+  const out = [raw];
+  const segs = raw.split('/').filter(Boolean);
+  for (let i = 1; i < segs.length; i += 1) out.push(segs.slice(i).join('/'));
+  return out;
+}
 
 // --- Re-run dell'oracolo per-categoria (stesso oracolo, stesso rule_id) ------
 //
@@ -79,6 +123,9 @@ export function rerunOracleFor(finding, dir, runOpts) {
   const isDart = /\.dart$/.test(fpath);
 
   let oracle; let res; let scope;
+  // Finding nativi SOPPRESSI dallo scope in questo re-run (solo ramo secret).
+  // Servono alla RETE PER IDENTITA' in fondo: null finche' lo scope non gira.
+  let scopeSuppressedNative = null;
   switch (finding.category) {
     case 'secret':
       oracle = 'gitleaks';
@@ -90,6 +137,31 @@ export function rerunOracleFor(finding, dir, runOpts) {
       scope = (/legacy\/credentials\.ts$/.test(fpath) || /legacy_credentials\.py$/.test(fpath))
         ? 'history' : 'working-tree';
       res = run(RUN_GITLEAKS, [dir, scope]);
+      // --- SCAN-SCOPE nel re-run + REGOLA DEL SEME (PLAN §3.5) ---------------
+      // Lo scope si applica anche qui, o il loop lavorerebbe su un insieme di
+      // finding DIVERSO da quello del checkpoint e della baseline (asimmetria).
+      // Ma il file sotto fix e' PROTETTO: vedi il blocco `seedProtectedPaths`.
+      if (res.ok && Array.isArray(res.json)) {
+        let sc = null;
+        try {
+          // Omettere `manifest` quando non c'e' (invece di passarlo null) fa cadere
+          // il loop sulla STESSA auto-risoluzione da projectDir di checkpoint e
+          // baseline: un solo scope per un solo progetto.
+          sc = scanScopeFor(dir, runOpts && runOpts.manifest ? { manifest: runOpts.manifest } : {});
+        } catch {
+          // Scope non risolvibile (dichiarazione di progetto rotta): NON si
+          // esclude niente. "Guarda tutto" puo' solo rendere il loop piu'
+          // severo (al massimo un verification-failed di troppo); assumere
+          // un'esclusione che non sappiamo leggere sarebbe un verified gratis.
+          // Il rosso della dichiarazione rotta lo dichiara il checkpoint.
+          sc = null;
+        }
+        if (sc && sc.patterns.length > 0) {
+          const applied = applyScanScope(res.json, sc, dir, { protect: seedProtectedPaths(finding) });
+          scopeSuppressedNative = applied.excluded.map((e) => e.finding);
+          res = { ok: true, json: applied.kept };
+        }
+      }
       break;
     case 'rls':
       oracle = 'rls-check'; scope = 'static-ddl';
@@ -158,6 +230,24 @@ export function rerunOracleFor(finding, dir, runOpts) {
   let findings;
   try { findings = normalize(oracle, res.json, { ...runOpts, scope }); }
   catch (e) { return { ok: false, findings: [], detail: `normalize: ${e.message}` }; }
+
+  // --- RETE PER IDENTITA' (strato 2 della REGOLA DEL SEME) --------------------
+  // Il finding sotto fix non puo' sparire perche' e' stato ESCLUSO: se e' fra i
+  // soppressi, torna dentro. Il confronto e' per FINGERPRINT — l'identita' del
+  // finding — e non dipende da come e' scritto un path, che e' il punto in cui la
+  // protezione per path potrebbe silenziosamente non agganciare.
+  // Se la normalizzazione dei soppressi non riesce, NON concludiamo "pulito":
+  // dichiariamo il re-run non riuscito (-> verification-failed, mai `verified`).
+  if (scopeSuppressedNative && scopeSuppressedNative.length > 0) {
+    let suppressed;
+    try { suppressed = normalize(oracle, scopeSuppressedNative, { ...runOpts, scope }); }
+    catch (e) {
+      return { ok: false, findings: [], detail: `normalize(esclusi dallo scope): ${e.message}` };
+    }
+    const back = suppressed.filter((f) => f.fingerprint === finding.fingerprint);
+    if (back.length > 0) findings = findings.concat(back);
+  }
+
   const v = validateMany(findings);
   if (!v.ok) return { ok: false, findings, detail: `schema KO: ${v.errors[0]}` };
   return { ok: true, findings, detail: `${findings.length} finding`, scope };

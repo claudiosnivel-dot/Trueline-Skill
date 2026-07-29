@@ -7,7 +7,7 @@
   "detect": { "files_any": ["pb_schema.json"], "lang_any": ["package.json"] },
   "triggers": ["pocketbase", "pb_schema", "pb_schema.json", "pocketbase-js-sdk", "pocketbase sdk", "js", "ts", "javascript", "typescript", "blueprint", "audit", "remediat", "bonific", "macrotask", "oracol", "sicur", "security", "secret", "segret"],
   "oracles": {
-    "secret":          { "tool": "gitleaks", "shared": true },
+    "secret":          { "tool": "gitleaks", "shared": true, "exclude": [".next/**", "dist/**", "build/**", "out/**", "coverage/**", ".turbo/**", ".svelte-kit/**", ".nuxt/**", ".output/**", "**/*.map", "**/database.types.ts"] },
     "dependency-vuln": { "tool": "osv", "lockfiles": ["package-lock.json", "pnpm-lock.yaml", "yarn.lock"] },
     "authz":           { "tool": "pocketbase_rules_check", "kind": "pocketbase-rules", "scan": ["."], "role": "authz-surface" },
     "injection":       { "tool": "semgrep", "ruleset": "ruleset/" },

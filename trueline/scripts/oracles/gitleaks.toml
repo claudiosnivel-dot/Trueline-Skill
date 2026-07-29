@@ -93,3 +93,61 @@ keywords = ["glpat"]
 # description = "Segreti di esempio nella documentazione"
 # regexTarget = "match"
 # regexes = ['''AKIAIOSFODNN7EXAMPLE''']
+
+[[allowlists]]
+description = "Token demo dello stack Supabase LOCALE (claim iss=\"supabase-demo\"): costanti pubbliche, non segreti"
+# AMBITO RISTRETTO ALLA SOLA REGOLA `jwt` — e' la differenza fra un'allowlist e un
+# interruttore. Senza `targetRules`, l'allowlist e' GLOBALE e filtra il MATCH di
+# QUALUNQUE regola: un segreto VERO basta che finisca nello stesso span di match
+# dell'ago demo per sparire. MISURATO (2026-07-29), allowlist globale:
+#   a.env: STRIPE_SECRET_KEY=sk_live_2Wd7Hq3Nx8Cm5Bt1Vy6Zr                       -> 2 finding
+#   b.env: la STESSA riga con `c3MiOiJzdXBhYmFzZS1kZW1v` appeso al valore        -> 0 finding
+# perche' la regex di `sk_live_...` assorbe i caratteri alfanumerici contigui e si
+# porta l'ago dentro il match. Con `targetRules = ["jwt"]` b.env torna a 2 finding e
+# il token demo resta soppresso: l'allowlist parla SOLO dei JWT, che e' l'unica cosa
+# di cui la misura di §2 le da' titolo di parlare.
+targetRules = ["jwt"]
+regexTarget = "match"
+# PERCHE E SICURO (misurato, non assunto)
+#  I due JWT (role=anon e role=service_role) che `supabase start` genera sono
+#  COSTANTI PUBBLICHE: lo stesso identico token compare, byte per byte, in
+#  progetti indipendenti fra loro (verificato per hash su 3 progetti reali).
+#  Un valore identico in progetti che non si conoscono non e un segreto di
+#  progetto: e una costante d'ecosistema. Stesso precedente gia tarato per la
+#  DSN `postgres://postgres:postgres@127.0.0.1:54322/postgres`, che la regola
+#  `trueline-connection-string-credentials` non accende per soglia d'entropia.
+#
+# PERCHE PER FORMA E NON PER VALORE ESATTO
+#  Allowlistare i due literal richiederebbe di incollare qui il token di un
+#  progetto dell'utente. La forma e piu stretta e piu onesta: quel che rende
+#  demo un token e il claim `iss`, non la sua stringa.
+#
+# COME FUNZIONA
+#  gitleaks non decodifica base64. Ma il payload di un JWT e base64url del JSON,
+#  e la sottostringa `"iss":"supabase-demo"` produce una codifica COSTANTE una
+#  volta fissato l'allineamento del byte iniziale (3 casi, uno per residuo
+#  mod 3). Le tre alternative qui sotto sono esattamente quei 3 casi, ricavate
+#  e verificate empiricamente su prefissi casuali:
+#    residuo 0 -> ImlzcyI6InN1cGFiYXNlLWRlbW8i
+#    residuo 1 -> c3MiOiJzdXBhYmFzZS1kZW1v      (caso reale: payload `{"iss":...`)
+#    residuo 2 -> aXNzIjoic3VwYWJhc2UtZGVt
+#
+# COSA NON COPRE (deliberato, L-COL-006)
+#  - Un JWT con `iss` DIVERSO resta ROSSO. In particolare la anon key di un
+#    progetto Supabase CLOUD reale (`iss=supabase`) NON e allowlistata: decidere
+#    che una chiave di produzione non vada segnalata non e una decisione da
+#    prendere dentro un'allowlist.
+#  - Non si allowlista per `role=anon`: spegnerebbe anche le anon key cloud.
+#  - Un vero segreto scritto accanto a un token demo resta rilevato: l'allowlist
+#    filtra il match, non il file, e per di piu' solo i match della regola `jwt`
+#    (targetRules). Un `sk_live_...` non e un JWT: nessun allineamento base64 di
+#    questo ago puo spegnerlo. Verificato sopra col caso b.env.
+#  - COPERTURA MANCANTE NOTA: un JWT VERO che contenesse, nel proprio payload
+#    base64, una di queste tre sottostringhe verrebbe soppresso. Richiede un claim
+#    che codifichi `"iss":"supabase-demo"`, cioe' esattamente il caso demo: la
+#    coincidenza non e costruibile per caso, ma va detta invece che taciuta.
+regexes = [
+  '''ImlzcyI6InN1cGFiYXNlLWRlbW8i''',
+  '''c3MiOiJzdXBhYmFzZS1kZW1v''',
+  '''aXNzIjoic3VwYWJhc2UtZGVt''',
+]

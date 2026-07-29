@@ -6,7 +6,7 @@
   "detect": { "lang_any": ["package.json"] },
   "triggers": ["postgres", "pg", "prisma", "drizzle", "next", "nextjs", "express", "node", "secret", "segret", "authz", "authorization", "autorizzazione", "route", "rotta", "endpoint", "blueprint", "audit", "remediat", "bonific", "macrotask", "oracol", "js", "ts", "javascript", "typescript", "sicur", "security"],
   "oracles": {
-    "secret":          { "tool": "gitleaks", "shared": true },
+    "secret":          { "tool": "gitleaks", "shared": true, "exclude": [".next/**", "dist/**", "build/**", "out/**", "coverage/**", ".turbo/**", ".svelte-kit/**", ".nuxt/**", ".output/**", "**/*.map", "**/database.types.ts"] },
     "dependency-vuln": { "tool": "osv", "lockfiles": ["package-lock.json", "pnpm-lock.yaml", "yarn.lock"] },
     "authz":           { "tool": "semgrep", "ruleset": "ruleset/", "role": "authz-surface" },
     "injection":       { "tool": "semgrep", "ruleset": "ruleset/" },

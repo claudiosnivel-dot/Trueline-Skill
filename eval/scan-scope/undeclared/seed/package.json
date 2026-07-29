@@ -1,0 +1,7 @@
+{
+  "name": "scan-scope-undeclared-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Fixture del keystone scan_scope_check: progetto SENZA alcuna dichiarazione. Prova la BIT-invarianza (DEFAULT_SCAN_EXCLUDE = [])."
+}

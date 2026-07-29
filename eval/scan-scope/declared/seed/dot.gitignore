@@ -1,0 +1,15 @@
+# FIXTURE `declared` — materializzato come `.gitignore` dell'inner-repo.
+#
+# NON e' tracciato nel repo ESTERNO col suo nome vero: un `.gitignore` annidato vale
+# anche per il repo esterno, e nasconderebbe il materiale di gate della fixture. Il
+# provisioning lo rinomina (`dot.gitignore` -> `.gitignore`) dentro `project/`, che il
+# repo esterno ignora in blocco.
+#
+# La ripartizione TRACCIATO / GITIGNORATO e' essa stessa materiale di gate:
+#   - `.env` e `backups/` GITIGNORATI  -> sotto-test (4) e (7) non sono vacui;
+#   - `src/lib/database.types.ts` TRACCIATO -> sotto-test (2) non e' vacuo.
+.env
+backups/
+build/
+.next/
+node_modules/

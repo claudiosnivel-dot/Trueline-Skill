@@ -1,0 +1,7 @@
+# FIXTURE `undeclared` — materializzato come `.gitignore` dell'inner-repo.
+# Qui NON c'e' nessuna dichiarazione di scope: il `.gitignore` esiste solo perche' un
+# progetto reale ce l'ha, e per tenere `build/` fuori dai file tracciati esattamente
+# come nel gemello `declared` (la sola variabile fra le due fixture dev'essere la
+# DICHIARAZIONE, non la forma del repo).
+build/
+node_modules/
