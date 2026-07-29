@@ -17,7 +17,7 @@
     "bonific", "macrotask", "oracol", "sicur", "security", "secret", "segret"
   ],
   "oracles": {
-    "secret":          { "tool": "gitleaks", "shared": true },
+    "secret":          { "tool": "gitleaks", "shared": true, "exclude": [".next/**", "dist/**", "build/**", "out/**", "coverage/**", ".turbo/**", ".svelte-kit/**", ".nuxt/**", ".output/**", "**/*.map", "**/database.types.ts"] },
     "dependency-vuln": { "tool": "osv", "lockfiles": ["package-lock.json", "pnpm-lock.yaml", "yarn.lock"] },
     "authz":           { "tool": "hasura_metadata_check", "kind": "hasura-metadata", "scan": ["metadata", "."], "role": "authz-surface" },
     "injection":       { "tool": "semgrep", "ruleset": "ruleset/" },

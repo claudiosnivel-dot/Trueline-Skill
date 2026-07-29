@@ -18,7 +18,8 @@
   "oracles": {
     "secret": {
       "tool": "gitleaks",
-      "shared": true
+      "shared": true,
+      "exclude": [".next/**", "dist/**", "build/**", "out/**", "coverage/**", ".turbo/**", ".svelte-kit/**", ".nuxt/**", ".output/**", "**/*.map", "**/database.types.ts"]
     },
     "dependency-vuln": {
       "tool": "osv",
