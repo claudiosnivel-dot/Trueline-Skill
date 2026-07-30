@@ -777,9 +777,20 @@ export function control4Conformance(referenceApp, { mode = 'remediate', characte
         power,
       };
     }
+    // BIT-INVARIANZA, clausola 2: su un progetto SENZA candidati l'output del controllo 4
+    // dev'essere BYTE-IDENTICO a prima dell'innesto. Il suffisso compare percio' solo dove
+    // una misura c'e' stata davvero: a zero candidati non c'e' nulla da riferire, e
+    // appenderlo comunque cambierebbe la riga di riepilogo di OGNI progetto che non ha
+    // ancora un'asserzione analizzabile. Non e' un verde muto (L-COL-006): la dichiarazione
+    // vive in `power.coverage` (scanned/candidates/adjudicated/unresolved), che il JSON del
+    // checkpoint porta comunque — stesso precedente di scan_scope, dove la coverage sta in
+    // un campo STRUTTURATO e non in una stringa di prosa.
+    const measured = power.coverage && power.coverage.candidates > 0;
     return {
       id: 4, name: 'conformance', status: 'green', green: true,
-      detail: `accettazione AC: ${inScope.length} target_test verdi; ${power.detail}`,
+      detail: measured
+        ? `accettazione AC: ${inScope.length} target_test verdi; ${power.detail}`
+        : `accettazione AC: ${inScope.length} target_test verdi`,
       power,
     };
   }

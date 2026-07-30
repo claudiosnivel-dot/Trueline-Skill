@@ -79,7 +79,7 @@
 //      treeHash qui sotto.
 //
 // ---------------------------------------------------------------------------
-// I 13 SOTTO-TEST (nomi ESATTI: sono il contratto col verificatore)
+// I 15 SOTTO-TEST (nomi ESATTI: sono il contratto col verificatore)
 // ---------------------------------------------------------------------------
 //  (1) inert:detected              inert-identity => ok:false + tests/tokens.test.mjs
 //  (2) honest-parallel:not-flagged LOAD-BEARING — costanti indipendenti che si
@@ -115,6 +115,20 @@
 //                                  di scan-scope (keystone 12/12 verde sopra un wiring
 //                                  neutralizzato). Innesto del task 4: rosso fino ad allora
 // (13) bit-invariance:legacy       senza blueprintDir il ramo legacy resta invariato
+// (14) wiring:control4-degraded    L'ALTRO ESITO dell'innesto. La (12) guarda solo red e
+//                                  green, quindi `status: power.status` — l'unica espressione
+//                                  CALCOLATA del controllo 4 — sarebbe verde anche scritta
+//                                  'red' fisso. E `degraded` non e' sinonimo di red a valle:
+//                                  checkpoint.mjs:936 stampa `4:conformance=degraded`, ed e'
+//                                  la sola riga per cui la decisione sui due kind raggiunge
+//                                  l'utente. La (7) non copre questo: legge l'oracolo NUDO
+// (15) bit-invariance:zero-candidates
+//                                  LA CLAUSOLA 2, che prima dei fix era solo una frase in un
+//                                  documento: a ZERO candidati il detail del controllo 4 e'
+//                                  BYTE-IDENTICO a prima dell'innesto (confronto della stringa
+//                                  INTERA, non una regex). Asserisce ANCHE coverage.candidates
+//                                  === 0, o sarebbe verde pure se l'innesto sopprimesse `power`
+//                                  a zero candidati — l'altro modo, opposto, di sbagliare
 //
 // ESITO: exit 0 = tutti e 11 i sotto-test ESEGUITI e verdi (solo DOPO i task 2/3/4);
 // exit 1 = almeno un rosso, o meno di 11 sotto-test eseguiti (alla nascita: tutti rossi
@@ -208,7 +222,7 @@ function stage(name) {
 // `checks.length`: un run interrotto a meta' non puo' riportare PASS avendo eseguito
 // meno controlli di quanti ne promette — sarebbe la stessa vacuita' che il gate
 // sorveglia nelle fixture, spostata nell'harness.
-const TOTAL_SUBTESTS = 13;
+const TOTAL_SUBTESTS = 15;
 
 // RIEPILOGO CHE ESCE SEMPRE — anche su eccezione. Un harness che muore prima di qui
 // nasconde lo stato di TUTTI i sotto-test, e si perde il cleanup della temp dir.
@@ -335,9 +349,42 @@ async function main() {
   assert('wiring:control4', c4Inert.status === 'red' && c4Inert.green === false && c4Healthy.green === true,
     `inert->${c4Inert.status}, healthy->${c4Healthy.status}: l'innesto in control4 non c'e' o non regge`);
 
+  // L'ALTRO ESITO CHE L'INNESTO PUO' EMETTERE. `wiring:control4` guarda solo red e green,
+  // quindi `status: power.status` sarebbe verde anche scritta `status: 'red'` fisso: e'
+  // l'UNICA espressione calcolata del controllo 4 e nessun test committato la osservava.
+  // Non e' un dettaglio di forma: `degraded` non e' sinonimo di `red` a valle —
+  // checkpoint.mjs:928 costruisce `degraded[]` filtrando su status === 'degraded' e :936
+  // stampa `4:conformance=degraded` nel riepilogo. La decisione sui due kind arriva
+  // all'utente SOLO per quella riga, e un mutante che la fissa a 'red' trasforma «l'oracolo
+  // non e' riuscito a giudicare» in «ho trovato un'asserzione inerte»: un progetto sano
+  // etichettato difettoso. `failure-unresolved:degraded` non copre questo, perche' legge
+  // `fail.r` — l'oracolo NUDO, mai control4Conformance.
+  const c4Fail = callControl4(control4Conformance, fail.app, { mode: 'build', blueprintDir: fail.bp, manifest: MANIFEST }, 'unresolved-failure (via control4)');
+  assert('wiring:control4-degraded',
+    c4Fail.status === 'degraded' && c4Fail.green === false
+      && c4Fail.power && c4Fail.power.status === 'degraded'
+      && c4Fail.power.coverage.unresolved_failure === 1,
+    `un failure deve arrivare all'utente come DEGRADED, non come red, visto ${JSON.stringify(c4Fail)}`);
+
   const c4Legacy = callControl4(control4Conformance, none.app, { mode: 'build', manifest: MANIFEST }, 'no-candidates (ramo legacy)');
   assert('bit-invariance:legacy', c4Legacy.status === 'degraded' && c4Legacy.green === false,
     `senza blueprintDir il ramo legacy deve restare invariato, visto ${JSON.stringify(c4Legacy)}`);
+
+  // CLAUSOLA 2 DELLA BIT-INVARIANZA, che finora era una frase in un documento e nient'altro:
+  // su un progetto SENZA candidati l'output del controllo 4 dev'essere BYTE-IDENTICO a prima
+  // dell'innesto. Si confronta la stringa INTERA, non una regex: un `match` lascerebbe
+  // passare qualunque suffisso, cioe' esattamente cio' che la clausola vieta.
+  // La seconda meta' dell'asserzione e' L-COL-006 e non e' ridondante: senza di essa il
+  // sotto-test sarebbe verde anche se l'innesto sopprimesse `power` del tutto a zero
+  // candidati, che e' l'altro modo — opposto e altrettanto sbagliato — di ottenere la
+  // stringa giusta. Invarianza E dichiarazione, o non e' passato.
+  const c4None = callControl4(control4Conformance, none.app, { mode: 'build', blueprintDir: none.bp, manifest: MANIFEST }, 'no-candidates (ramo AC, zero candidati)');
+  assert('bit-invariance:zero-candidates',
+    c4None.status === 'green' && c4None.green === true
+      && c4None.detail === 'accettazione AC: 1 target_test verdi'
+      && c4None.power && c4None.power.coverage.candidates === 0
+      && c4None.power.coverage.scanned === 1,
+    `a zero candidati il detail dev'essere byte-identico E la coverage dichiarata, visto ${JSON.stringify(c4None)}`);
 
   finish(null);
 }
