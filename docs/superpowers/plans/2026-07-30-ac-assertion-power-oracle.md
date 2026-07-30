@@ -270,7 +270,7 @@ test('add somma', () => { assert.equal(add(1, 2), 3); });
 
 Ogni fixture ha il suo `blueprint/01.md` sulla forma di Step 1, con il proprio `file:`.
 
-- [ ] **Step 4: scrivere il keystone con i 10 sotto-test**
+- [ ] **Step 4: scrivere il keystone con gli 11 sotto-test**
 
 `eval/harness/assertion_power_check.mjs` — struttura identica a `eval/harness/scan_scope_check.mjs` (radice temp privata per-pid con guardia di proprietà, `assert(name, ok, detail)`, riepilogo finale, `process.exit(allOk ? 0 : 1)`). Sotto-test, nell'ordine:
 
