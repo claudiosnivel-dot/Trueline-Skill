@@ -79,7 +79,7 @@
 //      treeHash qui sotto.
 //
 // ---------------------------------------------------------------------------
-// I 15 SOTTO-TEST (nomi ESATTI: sono il contratto col verificatore)
+// I 16 SOTTO-TEST (nomi ESATTI: sono il contratto col verificatore)
 // ---------------------------------------------------------------------------
 //  (1) inert:detected              inert-identity => ok:false + tests/tokens.test.mjs
 //  (2) honest-parallel:not-flagged LOAD-BEARING — costanti indipendenti che si
@@ -129,6 +129,16 @@
 //                                  INTERA, non una regex). Asserisce ANCHE coverage.candidates
 //                                  === 0, o sarebbe verde pure se l'innesto sopprimesse `power`
 //                                  a zero candidati — l'altro modo, opposto, di sbagliare
+// (16) report:zero-candidates-declared
+//                                  LA (15) SUL PRODOTTO, NON IN MEMORIA. La (15) ispeziona
+//                                  il ritorno di control4Conformance, e da sola certifica
+//                                  «una proprieta' che il prodotto non ha»: shapeControl e la
+//                                  proiezione del loop tengono una whitelist e scartano
+//                                  `power`, quindi l'utente riceveva un verde MUTO mentre la
+//                                  (15) era verde. Qui si ESEGUE run_checkpoint.mjs e si
+//                                  legge il JSON che stampa. E' la differenza che il round di
+//                                  fix precedente non catturava, ed e' il motivo per cui il
+//                                  keystone deve guardare l'output emesso almeno una volta
 //
 // ESITO: exit 0 = tutti e 11 i sotto-test ESEGUITI e verdi (solo DOPO i task 2/3/4);
 // exit 1 = almeno un rosso, o meno di 11 sotto-test eseguiti (alla nascita: tutti rossi
@@ -136,7 +146,8 @@
 // rotto, e chiamante reale che lancia degradano tutti a rosso MOTIVATO — un crash non e'
 // un verdetto (L-COL-002), e un harness che muore prima del riepilogo nasconde lo stato
 // di tutti i sotto-test proprio quando serve leggerlo.
-import { cpSync, rmSync, mkdirSync, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { cpSync, rmSync, mkdirSync, existsSync, readdirSync, readFileSync, writeFileSync, statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { join, resolve, dirname, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -211,18 +222,62 @@ function treeHash(dir) {
   return h.digest('hex');
 }
 
-function stage(name) {
-  const dst = join(TMP_ROOT, name);
+function stage(name, alias = name) {
+  const dst = join(TMP_ROOT, alias);
   mkdirSync(dst, { recursive: true });
   cpSync(join(FX, name), dst, { recursive: true });
   return { app: join(dst, 'app'), bp: join(dst, 'blueprint') };
+}
+
+// ---------------------------------------------------------------------------
+// DRIVE DEL BINARIO SPEDITO — l'unico modo di guardare cio' che l'utente riceve.
+// ---------------------------------------------------------------------------
+// Ispezionare il ritorno di control4Conformance in-process NON basta: `power` esiste
+// sull'oggetto ma shapeControl (run_checkpoint) e la proiezione dei controlli (run_loop)
+// tengono una WHITELIST di campi e lo scartano. Un sotto-test in-process certificherebbe
+// «una proprieta' che il prodotto non ha» — ed e' esattamente cio' che e' successo al
+// round di fix precedente, dentro il keystone che esiste per impedirlo.
+const RUN_CHECKPOINT = join(ROOT, 'trueline', 'scripts', 'checkpoint', 'run_checkpoint.mjs');
+// Marcatori d'ecosistema. Solo `supabase-jsts` dichiara test_runner.run_file, senza il
+// quale il ramo AC non si attiva e il controllo 4 cade al legacy. Stesso setup di fixture
+// di anti_tamper_check::copyFixture, e legittimo per la stessa ragione: la fixture E'
+// concettualmente un'app supabase-jsts, il suo target_test gira con quel run_file.
+// SERVONO ENTRAMBI, e la scoperta e' costata un rosso: con il solo config.toml la
+// classificazione resta AMBIGUA fra supabase-jsts e supabase-py (manca il segnale JS/TS)
+// e `run_file` esce null — cioe' di nuovo il ramo legacy. Le fixture di anti_tamper hanno
+// gia' il package.json nel repo; queste no, quindi si scrive qui, sulla COPIA.
+const SUPABASE_CONFIG_TOML = 'project_id = "assertion-power-fixture"\n';
+const FIXTURE_PKG_JSON = `${JSON.stringify({
+  name: 'assertion-power-fixture', version: '1.0.0', private: true, type: 'module',
+}, null, 2)}\n`;
+
+function driveCheckpoint(app, bp) {
+  const r = spawnSync(process.execPath,
+    [RUN_CHECKPOINT, app, '--in-place', '--mode', 'build', '--no-osv', '--blueprint', bp],
+    { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  let report = null;
+  try { report = JSON.parse(r.stdout); } catch { /* il chiamante lo tratta come non-formato */ }
+  return { report, c4: report && Array.isArray(report.controls) ? report.controls[3] : null, stderr: r.stderr };
+}
+
+// Retry SOLO su indicatori AMBIENTALI (niente JSON / controls[3] assente), mai su un
+// verdetto reale: lezione BD-1 (k=2) gia' scritta in anti_tamper_check — su Windows un
+// handle ancora aperto da un oracolo appena terminato puo' degradare la lettura. Un
+// esito persistente resta tale: l'oracolo e' il giudice, non il numero di tentativi.
+function driveCheckpointStable(app, bp, K = 2) {
+  let last = null;
+  for (let attempt = 1; attempt <= K; attempt += 1) {
+    last = driveCheckpoint(app, bp);
+    if (last.report && last.c4) return last;
+  }
+  return last;
 }
 
 // I sotto-test che questo keystone DICHIARA di eseguire. Il conto e' asserito contro
 // `checks.length`: un run interrotto a meta' non puo' riportare PASS avendo eseguito
 // meno controlli di quanti ne promette — sarebbe la stessa vacuita' che il gate
 // sorveglia nelle fixture, spostata nell'harness.
-const TOTAL_SUBTESTS = 15;
+const TOTAL_SUBTESTS = 16;
 
 // RIEPILOGO CHE ESCE SEMPRE — anche su eccezione. Un harness che muore prima di qui
 // nasconde lo stato di TUTTI i sotto-test, e si perde il cleanup della temp dir.
@@ -385,6 +440,26 @@ async function main() {
       && c4None.power && c4None.power.coverage.candidates === 0
       && c4None.power.coverage.scanned === 1,
     `a zero candidati il detail dev'essere byte-identico E la coverage dichiarata, visto ${JSON.stringify(c4None)}`);
+
+  // LO STESSO CONTROLLO, MA SUL REPORT EMESSO DAL BINARIO SPEDITO.
+  // Il sotto-test (15) qui sopra guarda l'oggetto IN-PROCESS, e da solo e' insufficiente:
+  // resta verde anche quando `power` non raggiunge alcun output: cioe' certifica una
+  // proprieta' che il PRODOTTO non ha. E' successo davvero — shapeControl e la proiezione
+  // del loop scartano `power`, e a zero candidati l'utente riceveva un verde MUTO. Qui si
+  // esegue run_checkpoint.mjs come processo e si legge il JOSN che STAMPA.
+  // Due meta', e servono entrambe: la clausola 2 (detail byte-identico) e L-COL-006 (la
+  // dichiarazione ESISTE nell'output, non solo in memoria).
+  const emitted = stage('no-candidates', 'no-candidates-emitted');
+  mkdirSync(join(emitted.app, 'supabase'), { recursive: true });
+  writeFileSync(join(emitted.app, 'supabase', 'config.toml'), SUPABASE_CONFIG_TOML);
+  writeFileSync(join(emitted.app, 'package.json'), FIXTURE_PKG_JSON);
+  const drv = driveCheckpointStable(emitted.app, emitted.bp);
+  const ap = drv.report && drv.report.assertion_power;
+  assert('report:zero-candidates-declared',
+    Boolean(drv.c4) && drv.c4.status === 'green' && drv.c4.green === true
+      && drv.c4.detail === 'accettazione AC: 1 target_test verdi'
+      && Boolean(ap) && ap.candidates === 0 && ap.scanned === 1 && ap.status === 'green',
+    `il REPORT EMESSO deve portare la dichiarazione a zero candidati, visto c4=${JSON.stringify(drv.c4)} assertion_power=${JSON.stringify(ap)}${drv.report ? '' : ` (nessun JSON; stderr: ${String(drv.stderr).slice(0, 300)})`}`);
 
   finish(null);
 }

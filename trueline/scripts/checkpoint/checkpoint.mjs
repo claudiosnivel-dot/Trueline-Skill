@@ -781,10 +781,12 @@ export function control4Conformance(referenceApp, { mode = 'remediate', characte
     // dev'essere BYTE-IDENTICO a prima dell'innesto. Il suffisso compare percio' solo dove
     // una misura c'e' stata davvero: a zero candidati non c'e' nulla da riferire, e
     // appenderlo comunque cambierebbe la riga di riepilogo di OGNI progetto che non ha
-    // ancora un'asserzione analizzabile. Non e' un verde muto (L-COL-006): la dichiarazione
-    // vive in `power.coverage` (scanned/candidates/adjudicated/unresolved), che il JSON del
-    // checkpoint porta comunque — stesso precedente di scan_scope, dove la coverage sta in
-    // un campo STRUTTURATO e non in una stringa di prosa.
+    // ancora un'asserzione analizzabile.
+    // NON e' un verde muto (L-COL-006), ma SOLO grazie alla risalita di `assertion_power`
+    // in cima all'esito di runCheckpoint (vedi powerSummary): il campo `power` che si
+    // ritorna qui NON raggiunge da solo alcun output emesso — shapeControl e la proiezione
+    // del loop lo scartano. Se quella risalita venisse tolta, questo ramo tornerebbe a
+    // tacere e la clausola 2 diventerebbe una violazione: le due cose stanno insieme.
     const measured = power.coverage && power.coverage.candidates > 0;
     return {
       id: 4, name: 'conformance', status: 'green', green: true,
@@ -952,5 +954,33 @@ export function runCheckpoint(referenceApp, opts = {}) {
     // NESSUNA dichiarazione: senza esclusioni non c'e' niente da dichiarare, e la
     // forma dell'esito resta quella di prima (BIT-invarianza).
     scan_scope: (c2 && c2.scan_scope) || null,
+    // POTERE DELL'ASSERZIONE (AT-1 Fase C): stessa risalita di scan_scope, e per la
+    // stessa ragione. `c4.power` da solo NON raggiunge nessun output emesso —
+    // shapeControl (run_checkpoint) e la proiezione dei controlli (run_loop) tengono
+    // una WHITELIST di campi e lo scartano. Senza questa risalita la dichiarazione
+    // muore in-process: a zero candidati il controllo 4 uscirebbe VERDE e MUTO, che e'
+    // esattamente cio' che L-COL-006 vieta.
+    // SINTESI, non l'oggetto intero: il report e' cio' che una persona legge, non un
+    // dump. I conteggi bastano a dire quanto e' stato guardato e quanto no; i MOTIVI
+    // per esteso restano nel `detail` del controllo, che li porta gia' quando c'e'
+    // qualcosa da riferire. null quando il ramo AC non ha girato -> forma invariata.
+    assertion_power: powerSummary(c4 && c4.power),
+  };
+}
+
+// Sintesi del potere dell'asserzione per il report. Fuori da runCheckpoint perche' la
+// forma e' un contratto verso due emettitori diversi, e duplicarla li farebbe divergere.
+function powerSummary(power) {
+  if (!power || !power.coverage) return null;
+  const cov = power.coverage;
+  return {
+    status: power.status,
+    scanned: cov.scanned,
+    candidates: cov.candidates,
+    adjudicated: cov.adjudicated,
+    inert: Array.isArray(power.inert) ? power.inert.length : 0,
+    unresolved: cov.unresolved,
+    unresolved_structural: cov.unresolved_structural,
+    unresolved_failure: cov.unresolved_failure,
   };
 }
