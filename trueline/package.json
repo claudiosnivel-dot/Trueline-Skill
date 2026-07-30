@@ -1,7 +1,7 @@
 {
   "name": "trueline",
   "version": "0.0.0",
-  "skill_version": "0.4.0",
+  "skill_version": "0.4.1",
   "private": true,
   "type": "module",
   "description": "Trueline — Agent Skill blueprint-first build-e-verifica oracle-first (scripts/oracoli)",
