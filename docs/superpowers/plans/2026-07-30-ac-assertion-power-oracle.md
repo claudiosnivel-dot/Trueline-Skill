@@ -70,6 +70,24 @@ export function neutralizeExport(source, name)
 export function assertionPower(tasks, appDir, inScope, { runFileTpl })
 ```
 
+**Tre comportamenti PORTANTI, che le fixture assumono in silenzio e che vanno onorati alla
+lettera** (emersi in review del Task 1: ciascuno, da solo, produce un sotto-test bloccato sul
+rosso, indistinguibile da un oracolo non finito):
+
+1. **Si neutralizza SEMPRE il lato atteso — il secondo argomento (`rootB`) — mai «quello che
+   si riesce a risolvere».** Sotto la regola alternativa, `unresolved/app/mirror.mjs`
+   (`export const mirror = thing;`, un initializer che è un identificatore) diventerebbe
+   plausibilmente neutralizzabile, il candidato verrebbe aggiudicato, `unresolved` resterebbe
+   vuoto e i sotto-test 5 e 6 sarebbero rossi per sempre. È l'assunzione portante dell'intero
+   set di fixture.
+2. **`assertionPower` è SINCRONA.** Il keystone la chiama senza `await` e il suo `try/catch`
+   non cattura il reject di una promise: una versione `async` restituirebbe un `Promise` in
+   `r`, tutti i sotto-test rossi con dettagli senza senso, più un unhandled rejection.
+3. **`testFile` usa SEMPRE separatori `/`, mai `\`.** Il sotto-test 1 confronta
+   `i.testFile === 'tests/tokens.test.mjs'`: su Windows un `join()` non normalizzato darebbe
+   `tests\tokens.test.mjs` e quel sotto-test non diventerebbe verde mai. Normalizzare con
+   `.replace(/\\/g, '/')`, come già fa `treeHash` nel keystone.
+
 ---
 
 ### Task 1: Keystone e fixture — scritti PRIMA dell'oracolo
@@ -385,11 +403,19 @@ async function main() {
     && none.r.coverage.scanned === 1 && none.r.status === 'green',
     `zero candidati va SCRITTO, visto ${JSON.stringify(none.r)}`);
 
-  assert('restore:bit-exact', [inert, honest, healthy, unres, none].every((x) => x.before === x.after),
+  // `mod &&` NON e' difensivo: senza oracolo nessuna mutazione avviene, quindi
+  // before === after e' vero PER COSTRUZIONE e il sotto-test sarebbe un verde che
+  // non asserisce nulla — esattamente cio' che L-COL-006 vieta, dentro il keystone
+  // che lo fa rispettare. (Difetto dello scheletro originale, colto in review.)
+  assert('restore:bit-exact', mod && [inert, honest, healthy, unres, none].every((x) => x.before === x.after),
     'un albero non ripristinato bit-esatto invalida ogni verdetto');
 
+  // `inScope.length >= 1` per la stessa ragione: [].every(...) e' true, quindi un
+  // blueprint il cui `file:` smettesse di corrispondere al disco (typo, rename,
+  // fence YAML che non parsa) renderebbe questo sotto-test verde avendo confrontato
+  // ZERO file, e existsSync lo scarterebbe in silenzio.
   assert('coverage:declared', [inert, honest, healthy, unres, none].every(
-    (x) => x.r && x.inScope.every((f) => x.r.coverage.files.some((cf) => cf.file === f))),
+    (x) => x.r && x.inScope.length >= 1 && x.inScope.every((f) => x.r.coverage.files.some((cf) => cf.file === f))),
     'ogni target_test in-scope deve comparire in coverage.files[]');
 
   // WIRING REALE — la lezione di scan-scope: il keystone deve guardare l'innesto.
