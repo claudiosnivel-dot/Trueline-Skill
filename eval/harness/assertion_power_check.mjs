@@ -33,6 +33,28 @@
 // file. Se il test resta VERDE, l'asserzione e' inerte. L'albero dell'app va
 // RIPRISTINATO bit-esatto (sotto-test 8): un albero sporco invalida ogni verdetto.
 //
+// TRE COMPORTAMENTI PORTANTI, che le fixture assumono in SILENZIO e che vanno onorati
+// alla lettera. Ciascuno, da solo, produce un sotto-test BLOCCATO SUL ROSSO — e uno
+// bloccato sul rosso e' indistinguibile da un oracolo non finito, quindi nessuno se ne
+// accorge finche' non e' tardi (emersi in review del Task 1):
+//
+//   1. Si neutralizza SEMPRE il lato ATTESO — il secondo argomento (`rootB`) — mai
+//      «quello che si riesce a risolvere». Sotto la regola alternativa,
+//      unresolved/app/mirror.mjs (`export const mirror = thing;`, un initializer che e'
+//      un identificatore) diventerebbe plausibilmente neutralizzabile, il candidato
+//      verrebbe aggiudicato, `unresolved` resterebbe vuoto e i sotto-test 5 e 6
+//      sarebbero rossi PER SEMPRE. E' l'assunzione portante dell'intero set di fixture.
+//   2. `assertionPower` e' SINCRONA. Il keystone la chiama senza `await` e il suo
+//      try/catch non cattura il reject di una promise: una versione `async` metterebbe
+//      un Promise in `r`, tutti i sotto-test rossi con dettagli senza senso, piu' un
+//      unhandled rejection. callOracle() lo RILEVA e lo dichiara, ma il contratto resta
+//      questo: sincrona.
+//   3. `testFile` (e `coverage.files[].file`) usano SEMPRE separatori `/`, mai `\`. Il
+//      sotto-test 1 confronta `i.testFile === 'tests/tokens.test.mjs'`: su Windows un
+//      join() non normalizzato darebbe `tests\tokens.test.mjs` e quel sotto-test non
+//      diventerebbe verde mai. Normalizzare con .replace(/\\/g, '/'), come gia' fa
+//      treeHash qui sotto.
+//
 // ---------------------------------------------------------------------------
 // GLI 11 SOTTO-TEST (nomi ESATTI: sono il contratto col verificatore)
 // ---------------------------------------------------------------------------
@@ -58,9 +80,12 @@
 //                                  neutralizzato). Innesto del task 4: rosso fino ad allora
 // (11) bit-invariance:legacy       senza blueprintDir il ramo legacy resta invariato
 //
-// ESITO: exit 0 = tutti verdi (solo DOPO i task 2/3/4); exit 1 = almeno un rosso
-// (alla nascita: tutti). Nessun crash: l'oracolo si importa DINAMICAMENTE, la sua
-// assenza degrada a rosso motivato — un crash non e' un verdetto.
+// ESITO: exit 0 = tutti e 11 i sotto-test ESEGUITI e verdi (solo DOPO i task 2/3/4);
+// exit 1 = almeno un rosso, o meno di 11 sotto-test eseguiti (alla nascita: tutti rossi
+// tranne due). Il riepilogo esce SEMPRE, anche su eccezione: oracolo assente, oracolo
+// rotto, e chiamante reale che lancia degradano tutti a rosso MOTIVATO — un crash non e'
+// un verdetto (L-COL-002), e un harness che muore prima del riepilogo nasconde lo stato
+// di tutti i sotto-test proprio quando serve leggerlo.
 import { cpSync, rmSync, mkdirSync, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, resolve, dirname, relative } from 'node:path';
@@ -93,8 +118,33 @@ function callOracle(mod, tasks, app, inScope) {
     oracleErrors.push("l'oracolo esiste ma non esporta assertionPower()");
     return null;
   }
-  try { return mod.assertionPower(tasks, app, inScope, { runFileTpl: MANIFEST.test_runner.run_file }); }
+  let r;
+  try { r = mod.assertionPower(tasks, app, inScope, { runFileTpl: MANIFEST.test_runner.run_file }); }
   catch (e) { oracleErrors.push(`assertionPower ha lanciato: ${String((e && e.message) || e)}`); return null; }
+  // Contratto 2: SINCRONA. Un oracolo async restituirebbe un Promise, e ogni sotto-test
+  // sarebbe rosso con dettagli senza senso ("visto {}") piu' un unhandled rejection al
+  // termine. Lo nominiamo invece di subirlo, e assorbiamo il reject: la rete anti-crash
+  // deve coprire anche il caso per cui e' stata costruita.
+  if (r && typeof r.then === 'function') {
+    oracleErrors.push("assertionPower e' ASYNC: il contratto la vuole SINCRONA (il keystone la chiama senza await)");
+    Promise.resolve(r).catch(() => { /* gia' riportato come oracolo rotto */ });
+    return null;
+  }
+  return r;
+}
+
+// Stesso idioma per i CHIAMANTI REALI. Il task 4 innesta l'oracolo DENTRO control 4:
+// mentre quell'innesto e' scritto a meta', un throw li' ucciderebbe l'harness prima del
+// riepilogo — lo stesso difetto che callOracle chiude, un task piu' in la'. Il sentinel
+// tiene leggibili `.status`/`.green` a valle, cosi' il sotto-test diventa un rosso
+// MOTIVATO invece di uno stack trace.
+function callControl4(fn, app, opts, label) {
+  try { return fn(app, opts); }
+  catch (e) {
+    const msg = String((e && e.message) || e);
+    oracleErrors.push(`control4Conformance ha lanciato su ${label}: ${msg}`);
+    return { status: `ECCEZIONE(${msg})`, green: false };
+  }
 }
 
 // sha256 ricorsivo dell'albero: prova del ripristino, calcolata DAL KEYSTONE.
@@ -116,6 +166,41 @@ function stage(name) {
   mkdirSync(dst, { recursive: true });
   cpSync(join(FX, name), dst, { recursive: true });
   return { app: join(dst, 'app'), bp: join(dst, 'blueprint') };
+}
+
+// I sotto-test che questo keystone DICHIARA di eseguire. Il conto e' asserito contro
+// `checks.length`: un run interrotto a meta' non puo' riportare PASS avendo eseguito
+// meno controlli di quanti ne promette — sarebbe la stessa vacuita' che il gate
+// sorveglia nelle fixture, spostata nell'harness.
+const TOTAL_SUBTESTS = 11;
+
+// RIEPILOGO CHE ESCE SEMPRE — anche su eccezione. Un harness che muore prima di qui
+// nasconde lo stato di TUTTI i sotto-test, e si perde il cleanup della temp dir.
+function finish(fatal) {
+  if (OWNED) { try { rmSync(TMP_ROOT, { recursive: true, force: true }); } catch { /* never-throw */ } }
+
+  const passed = checks.filter((c) => c.ok).length;
+  const red = checks.filter((c) => !c.ok).map((c) => c.name);
+  const complete = checks.length === TOTAL_SUBTESTS;
+  const allOk = !fatal && complete && red.length === 0;
+  console.log('');
+  console.log('------------------------------------------------------------');
+  console.log(`=== ORACOLO ASSERTION-POWER RESULT: ${allOk ? 'PASS' : 'FAIL'} ===`);
+  if (fatal) console.log(`    INTERROTTO da un'eccezione: ${fatal}`);
+  if (!complete) {
+    console.log(`    sotto-test ESEGUITI: ${checks.length}/${TOTAL_SUBTESTS} — un run incompleto non e' un PASS.`);
+  }
+  if (red.length) {
+    console.log(`    sotto-test ROSSI (${red.length}/${TOTAL_SUBTESTS}): ${red.join(', ')}`);
+  }
+  for (const e of [...new Set(oracleErrors)]) console.log(`    ORACOLO ROTTO: ${e}`);
+  if (red.length || !complete) {
+    console.log("    (fino a che trueline/scripts/blueprint/ac_assertion_power_check.mjs non esiste, il rosso e' l'ESITO ATTESO.)");
+    for (const c of checks.filter((x) => !x.ok)) console.log(`      - ${c.name}: ${c.detail}`);
+  }
+  console.log(`assertion_power_check: ${passed}/${TOTAL_SUBTESTS} PASS`);
+  console.log('------------------------------------------------------------');
+  process.exit(allOk ? 0 : 1);
 }
 
 async function main() {
@@ -163,40 +248,34 @@ async function main() {
     && none.r.coverage.scanned === 1 && none.r.status === 'green',
     `zero candidati va SCRITTO, visto ${JSON.stringify(none.r)}`);
 
-  assert('restore:bit-exact', [inert, honest, healthy, unres, none].every((x) => x.before === x.after),
+  // `mod &&` NON e' difensivo: senza oracolo nessuna mutazione avviene, quindi
+  // before === after e' vero PER COSTRUZIONE e il sotto-test sarebbe un verde che non
+  // asserisce nulla — esattamente cio' che L-COL-006 vieta, dentro il keystone che lo fa
+  // rispettare. (Difetto dello scheletro originale, colto in review.)
+  assert('restore:bit-exact', mod && [inert, honest, healthy, unres, none].every((x) => x.before === x.after),
     'un albero non ripristinato bit-esatto invalida ogni verdetto');
 
+  // `inScope.length >= 1` per la stessa ragione: [].every(...) e' true, quindi un
+  // blueprint il cui `file:` smettesse di corrispondere al disco (typo, rename della
+  // fixture, fence YAML che non parsa) renderebbe questo sotto-test verde avendo
+  // confrontato ZERO file, ed existsSync lo scarterebbe in silenzio. E' calcolato dal
+  // keystone, quindi non costa fiducia nell'oracolo.
   assert('coverage:declared', [inert, honest, healthy, unres, none].every(
-    (x) => x.r && x.inScope.every((f) => x.r.coverage.files.some((cf) => cf.file === f))),
+    (x) => x.r && x.inScope.length >= 1 && x.inScope.every((f) => x.r.coverage.files.some((cf) => cf.file === f))),
     'ogni target_test in-scope deve comparire in coverage.files[]');
 
   // WIRING REALE — la lezione di scan-scope: il keystone deve guardare l'innesto.
   const { control4Conformance } = await import(pathToFileURL(join(ROOT, 'trueline', 'scripts', 'checkpoint', 'checkpoint.mjs')).href);
-  const c4Inert = control4Conformance(inert.app, { mode: 'build', blueprintDir: inert.bp, manifest: MANIFEST });
-  const c4Healthy = control4Conformance(healthy.app, { mode: 'build', blueprintDir: healthy.bp, manifest: MANIFEST });
+  const c4Inert = callControl4(control4Conformance, inert.app, { mode: 'build', blueprintDir: inert.bp, manifest: MANIFEST }, 'inert-identity');
+  const c4Healthy = callControl4(control4Conformance, healthy.app, { mode: 'build', blueprintDir: healthy.bp, manifest: MANIFEST }, 'healthy');
   assert('wiring:control4', c4Inert.status === 'red' && c4Inert.green === false && c4Healthy.green === true,
     `inert->${c4Inert.status}, healthy->${c4Healthy.status}: l'innesto in control4 non c'e' o non regge`);
 
-  const c4Legacy = control4Conformance(none.app, { mode: 'build', manifest: MANIFEST });
+  const c4Legacy = callControl4(control4Conformance, none.app, { mode: 'build', manifest: MANIFEST }, 'no-candidates (ramo legacy)');
   assert('bit-invariance:legacy', c4Legacy.status === 'degraded' && c4Legacy.green === false,
     `senza blueprintDir il ramo legacy deve restare invariato, visto ${JSON.stringify(c4Legacy)}`);
 
-  if (OWNED) { try { rmSync(TMP_ROOT, { recursive: true, force: true }); } catch { /* never-throw */ } }
-
-  const passed = checks.filter((c) => c.ok).length;
-  const red = checks.filter((c) => !c.ok).map((c) => c.name);
-  console.log('');
-  console.log('------------------------------------------------------------');
-  console.log(`=== ORACOLO ASSERTION-POWER RESULT: ${red.length === 0 ? 'PASS' : 'FAIL'} ===`);
-  if (red.length) {
-    console.log(`    sotto-test ROSSI (${red.length}/${checks.length}): ${red.join(', ')}`);
-    for (const e of [...new Set(oracleErrors)]) console.log(`    ORACOLO ROTTO: ${e}`);
-    console.log("    (fino a che trueline/scripts/blueprint/ac_assertion_power_check.mjs non esiste, il rosso e' l'ESITO ATTESO.)");
-    for (const c of checks.filter((x) => !x.ok)) console.log(`      - ${c.name}: ${c.detail}`);
-  }
-  console.log(`assertion_power_check: ${passed}/${checks.length} PASS`);
-  console.log('------------------------------------------------------------');
-  process.exit(red.length === 0 ? 0 : 1);
+  finish(null);
 }
 
-main();
+main().catch((e) => finish(String((e && e.stack) || e)));
