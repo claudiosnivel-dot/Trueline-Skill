@@ -86,7 +86,25 @@ rosso, indistinguibile da un oracolo non finito):
 3. **`testFile` usa SEMPRE separatori `/`, mai `\`.** Il sotto-test 1 confronta
    `i.testFile === 'tests/tokens.test.mjs'`: su Windows un `join()` non normalizzato darebbe
    `tests\tokens.test.mjs` e quel sotto-test non diventerebbe verde mai. Normalizzare con
-   `.replace(/\\/g, '/')`, come già fa `treeHash` nel keystone.
+   `.replace(/\\/g, '/')`, come già fa `treeHash` nel keystone. Vale anche per
+   `coverage.files[].file`, e la normalizzazione va **prima** del `join`, non dopo: dopo è un
+   no-op su POSIX, cioè un commento che promette più di quanto il codice faccia.
+
+**I DUE TIPI DI IRRISOLTO** *(deciso dall'utente il 30 lug 2026, su misura del reviewer del
+Task 3)*. «Irrisolto» copriva due situazioni opposte, e trattarle uguali produceva un **falso
+blocco**: un progetto sano il cui unico `target_test` in scope usa `import * as ns` finiva
+`degraded` → controllo 4 **rosso**, pur non avendo nulla che non va. E la regola era una soglia
+senza principio (*se ho aggiudicato qualcosa in un file qualunque, ogni irrisolto è perdonato*).
+
+| `kind` | Quando | Verdetto |
+|---|---|---|
+| **`structural`** | L'oracolo **non può** giudicare per costruzione: binding di namespace (`import * as ns` — non esiste alcun `export const ns`), initializer non riconosciuto (`= make()`), dichiarazione **solo commentata**, binding fuori da `appDir`. Il progetto non ha nulla che non va: è l'oracolo che non arriva lì. | **Non degrada mai.** Esce nella coverage col suo motivo; il gate resta verde. |
+| **`failure`** | L'oracolo **doveva** farcela e qualcosa è andato storto: `runTargetFile` ritorna `error`, oppure il run esegue **zero test** (`testCount < 1`), oppure il runner non è configurato. | **Degrada sempre**, anche se è l'unico e anche se altri candidati sono stati aggiudicati. |
+
+Regola di verdetto, nell'ordine: `inert.length > 0` → **red** · un solo `failure` → **degraded** ·
+altrimenti → **green**, con `coverage` che dichiara sempre candidati, aggiudicati e irrisolti
+per tipo. `L-COL-006` è rispettato dalla **dichiarazione**, non dal rosso: è il precedente di
+`scan_scope` (`L-COL-036`), dove non guardare qualcosa si scrive, non si trasforma in blocco.
 
 ---
 
@@ -841,7 +859,7 @@ export function assertionPower(tasks, appDir, inScope, { runFileTpl } = {}) {
 - [ ] **Step 3: eseguire il keystone**
 
 Run: `node eval/harness/assertion_power_check.mjs`
-Expected: sotto-test 1–9 VERDI; 10 (`wiring:control4`) e 11 (`bit-invariance:legacy`) ancora ROSSI — l'innesto non esiste.
+Expected: sotto-test 1–9 VERDI; 10 (`wiring:control4`) ancora ROSSO — l'innesto non esiste. NOTA: 11 (`bit-invariance:legacy`) e' gia' verde dal Task 1 e NON dipende da `assertionPower` — il Task 4 non lo tratti come un rosso da chiudere.
 
 - [ ] **Step 4: commit**
 
