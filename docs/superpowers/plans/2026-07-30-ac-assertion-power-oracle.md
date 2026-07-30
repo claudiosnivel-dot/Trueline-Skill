@@ -726,7 +726,34 @@ git commit -m "feat(power): stadio 1 e neutralizzatore — lo statico propone, n
 - [ ] **Step 1: eseguire il keystone per fissare il punto di partenza**
 
 Run: `node eval/harness/assertion_power_check.mjs`
-Expected: FAIL, i sotto-test 1–9 rossi (l'oracolo non esiste ancora).
+Expected: FAIL. **Attenzione al numero:** dopo il Task 2 il keystone è a **2/11**, non 1/11,
+e il verde in più è `restore:bit-exact` — verde **per la ragione sbagliata**, che lo Step 1bis
+chiude prima di ogni altra cosa.
+
+- [ ] **Step 1bis: chiudere `restore:bit-exact`, che è tornato verde senza asserire nulla**
+
+Rilievo parcheggiato nella review del Task 1, ora **materializzato**: la guardia `mod &&` copre
+solo l'oracolo *assente*. Dal Task 2 il modulo **esiste** (`mod` è truthy) ma `assertionPower`
+non c'è ancora, quindi `callOracle` ritorna `null`, nessuna mutazione avviene, `before === after`
+è di nuovo vero per costruzione e il sotto-test riporta PASS avendo osservato **zero mutazioni**.
+Per tutto il Task 3 quel verde mascherebbe se il ripristino funziona davvero — cioè proprio
+mentre il ripristino comincia a esistere.
+
+In `eval/harness/assertion_power_check.mjs`, sostituire la guardia con la forma che la sussume:
+
+```js
+assert('restore:bit-exact', [inert, honest, healthy, unres, none].every((x) => x.r && x.before === x.after),
+  'un albero non ripristinato bit-esatto invalida ogni verdetto');
+```
+
+`x.r &&` copre entrambi i casi (oracolo assente **e** oracolo presente ma rotto): senza un
+risultato vero da quella fixture, non c'è stata mutazione e non c'è niente da asserire.
+
+*Gate di questo step, e non è opzionale:* il keystone torna a **1/11** subito dopo la modifica
+(prima di implementare `assertionPower`), e a fine task il sotto-test è verde **perché le
+mutazioni sono avvenute davvero**. Provalo neutralizzando il `writeFileSync` di ripristino:
+`restore:bit-exact` deve diventare ROSSO. Un sotto-test che non sai far diventare rosso non
+stai gatando niente.
 
 - [ ] **Step 2: implementare `assertionPower`**
 
@@ -753,7 +780,10 @@ export function assertionPower(tasks, appDir, inScope, { runFileTpl } = {}) {
 
   for (const rel of inScope) {
     const cands = findCandidates(appDir, rel).map((c) => ({ ...c, acIds: acsOf.get(rel) || [] }));
-    files.push({ file: rel, candidates: cands.length });
+    // Separatori `/` anche qui, non solo in testFile: `inScope` porta la stringa YAML grezza
+    // (`tests/theme.test.mjs`) e `coverage:declared` confronta `cf.file === f`. Un `\` su
+    // Windows bloccherebbe sul rosso il sotto-test 9 oltre all'1.
+    files.push({ file: rel.replace(/\\/g, '/'), candidates: cands.length });
     for (const c of cands) {
       const src = readFileSync(c.bindingModule, 'utf8');
       const mutated = neutralizeExport(src, c.bindingName);
