@@ -1018,17 +1018,31 @@ L'albero **SPEDITO** è cambiato (`trueline/scripts/blueprint/*`, `trueline/scri
 - Modify: `RELEASE-DIGESTS.json` (via `--record-release`)
 - Modify: l'invocazione di `h1_perpid_check` nel runbook di sessione (`--shipped-allow`)
 
-- [ ] **Step 1: dichiarare i path spediti toccati**
+- [ ] **Step 1: bumpare `skill_version`** (prima della dichiarazione, vedi Step 2)
+
+In `trueline/package.json`: `"skill_version": "0.3.0"` → `"skill_version": "0.4.0"`.
+
+- [ ] **Step 2: dichiarare i path spediti toccati**
+
+**Il flag dichiara il WORKING TREE, non il diff di branch.** Il sotto-test (6) legge
+`git status --porcelain --untracked-files=all -- trueline/`: vede ciò che è **non
+committato adesso**, non ciò che il branch ha cambiato rispetto a `main`. I file spediti
+dei Task 1–5 sono **già committati**, quindi non compaiono in `status` e dichiararli
+sarebbe ROSSO per *allowlist stale*. Al Task 6 l'unica voce non committata sotto
+`trueline/` è il bump stesso — da cui l'ordine bump-prima-di-dichiarare.
+
+**Misura, non copiare:** la lista è l'output di
+`git status --porcelain --untracked-files=all -- trueline/` **al momento in cui lanci il
+gate**. (`RELEASE-DIGESTS.json` e `dist/` stanno fuori da `trueline/` e non entrano nella
+lista.)
 
 Run:
 ```bash
-node eval/harness/h1_perpid_check.mjs --shipped-allow=trueline/references/build-discipline.md,trueline/scripts/blueprint/ac_assertion_power_check.mjs,trueline/scripts/blueprint/ac_assertion_power_check.test.mjs,trueline/scripts/checkpoint/checkpoint.mjs,trueline/scripts/checkpoint/run_checkpoint.mjs,trueline/scripts/loop/run_loop.mjs,trueline/package.json
+node eval/harness/h1_perpid_check.mjs --shipped-allow=trueline/package.json
 ```
-Expected: **10/10 PASS**. Un path dichiarato ma **non** modificato è ROSSO (allowlist stale): se accade, correggere la lista, non il gate.
-
-- [ ] **Step 2: bumpare `skill_version`**
-
-In `trueline/package.json`: `"skill_version": "0.3.0"` → `"skill_version": "0.4.0"`.
+Expected: **10/10 PASS**. Un path dichiarato ma **non** modificato è ROSSO (allowlist
+stale); un path modificato ma **non** dichiarato è ROSSO (bit-invarianza dello spedito
+violata). In entrambi i casi si corregge la lista, mai il gate.
 
 - [ ] **Step 3: registrare la release**
 
@@ -1061,10 +1075,14 @@ Se DB-live o docker/semgrep mancano: `m5` **non** è ri-gateabile qui → **gap 
 - [ ] **Step 2: gate seriale**
 
 ```bash
-node eval/harness/assertion_power_check.mjs        # atteso 13/13
+node eval/harness/assertion_power_check.mjs        # atteso 16/16 (misurato ai Task 4/5)
 node eval/harness/anti_tamper_check.mjs            # atteso 49/49
 node eval/harness/build_discipline_check.mjs       # atteso 21/21
-node eval/harness/h1_perpid_check.mjs --shipped-allow=...   # atteso 10/10
+# SENZA flag: dopo il commit del Task 6 il working tree sotto trueline/ è pulito, e il
+# sotto-test (6) legge `git status`, non il diff di branch. Dichiarare qualcosa qui
+# sarebbe ROSSO per allowlist stale. Se hai modifiche non committate sotto trueline/,
+# dichiara ESATTAMENTE quelle (`git status --porcelain -uall -- trueline/`).
+node eval/harness/h1_perpid_check.mjs              # atteso 10/10
 node eval/harness/scan_scope_check.mjs             # atteso 17/17
 node eval/harness/release_bump_check.mjs           # atteso 8/8
 node eval/harness/pack_verify_battery.mjs          # atteso 16/16, 0 SKIP
