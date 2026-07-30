@@ -315,3 +315,39 @@ test('assertionPower: coverage.files[].file usa sempre i separatori /', () => {
     assert.equal(r.coverage.files[0].file, 'tests/t.test.mjs');
   });
 });
+
+test('assertionPower: un binding fuori da appDir si dichiara e NON si muta', () => {
+  // In un monorepo `import '../../packages/design/tokens.mjs'` da' un bindingModule fuori
+  // dall'app. Il ripristino resterebbe corretto, ma il rilevatore INDIPENDENTE del keystone
+  // e' treeHash(app), rootato sulla dir dell'app: li' e' CIECO. Sarebbe l'unico punto in cui
+  // il gate non puo' controllare l'oracolo, ed e' proprio quello che l'oracolo raggiunge in
+  // silenzio. Nessuna fixture lo esercita: senza questo test la guardia era cancellabile.
+  withTempApp({
+    'src/a.mjs': 'export const A = { k: 1 };\n',
+    '../outside/b.mjs': 'export const B = { k: 1 };\n',
+    'tests/t.test.mjs': [
+      "import { A } from '../src/a.mjs';",
+      "import { B } from '../../outside/b.mjs';",
+      'assert.deepEqual(A, B);',
+      '',
+    ].join('\n'),
+  }, (app) => {
+    const outside = join(app, '..', 'outside', 'b.mjs');
+    const before = readFileSync(outside, 'utf8');
+    const r = assertionPower([], app, ['tests/t.test.mjs'], { runFileTpl: 'node --test {file}' });
+    assert.equal(r.unresolved.length, 1);
+    assert.equal(r.unresolved[0].kind, 'structural'); // il progetto non ha nulla che non va
+    assert.match(r.unresolved[0].reason, /FUORI da appDir/);
+    assert.equal(r.status, 'green');                  // structural non degrada
+    assert.equal(readFileSync(outside, 'utf8'), before); // e soprattutto: NON e' stato toccato
+  });
+});
+
+test('neutralizeExport: un binding con $ nel nome non e\' un buco silenzioso', () => {
+  // `$` e' legale in un identificatore JS ed e' l'ancora di fine riga con il flag `m`:
+  // senza escape il match non avviene MAI, e neutralizeFailureReason direbbe «nessun
+  // export const $el nel modulo» mentre la dichiarazione e' li'. E' il motivo che manda
+  // l'utente a cercare il difetto dove non e'.
+  assert.equal(neutralizeExport('export const $el = { a: 1 };\n', '$el'), 'export const $el = {};\n');
+  assert.match(neutralizeFailureReason('export const $el = make();\n', '$el'), /initializer/);
+});

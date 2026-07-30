@@ -20,7 +20,7 @@
 // Node ESM, solo built-in.
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { join, dirname, resolve as presolve } from 'node:path';
+import { join, dirname, resolve as presolve, relative, isAbsolute } from 'node:path';
 
 const NEUTRAL_STRING = "'\\u0000TRUELINE_NEUTRALIZED'";
 const NEUTRAL_NUMBER = '-987654321';
@@ -48,7 +48,15 @@ function matchBalanced(src, start) {
 // Una sola definizione della forma cercata, usata sia da chi neutralizza sia da chi spiega
 // perche' non ci e' riuscito: due copie divergerebbero, e la spiegazione finirebbe per
 // descrivere una ricerca diversa da quella davvero fatta.
-const declRe = (name) => new RegExp(`export\\s+const\\s+${name}\\b([^=]*)=\\s*`, 'm');
+//
+// `name` va ESCAPATO, e il caso che lo impone non e' teorico: `$` e' un carattere legale
+// in un identificatore JS, e con il flag `m` e' l'ancora di FINE RIGA. Per un binding
+// `$el` il match non avverrebbe mai, e neutralizeFailureReason emetterebbe «nessun
+// `export const $el` nel modulo» — che e' FALSO, la dichiarazione c'e'. Sarebbe proprio il
+// motivo che manda l'utente a cercare il difetto dove non e', cioe' il difetto che la
+// distinzione dei motivi qui sotto esiste per chiudere.
+const reEscape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const declRe = (name) => new RegExp(`export\\s+const\\s+${reEscape(name)}\\b([^=]*)=\\s*`, 'm');
 
 // Si CERCA sulla copia mascherata e si RISCRIVE sull'originale: maskComments preserva le
 // lunghezze apposta, quindi ogni indice vale su entrambe.
@@ -238,7 +246,10 @@ export function findCandidates(appDir, testRelPath) {
     out.push({
       testFile,
       line: src.slice(0, m.index).split('\n').length,
-      kind: m[1] ? 'expect' : 'assert',
+      // `assertionForm`, non `kind`: lo stadio 2 mette un `kind` sugli irrisolti
+      // (structural | failure) che E' il contratto col chiamante, e uno spread
+      // `{ ...c, kind }` cancellerebbe in silenzio la forma dell'asserzione.
+      assertionForm: m[1] ? 'expect' : 'assert',
       actualRoot: rootA, expectedRoot: rootB,
       bindingName: rootB, bindingModule: modB,
     });
@@ -251,7 +262,72 @@ export function findCandidates(appDir, testRelPath) {
 // -----------------------------------------------------------------------------
 import { runTargetFile } from '../checkpoint/run_file.mjs';
 
-const sha = (p) => createHash('sha256').update(readFileSync(p)).digest('hex');
+const sha = (buf) => createHash('sha256').update(buf).digest('hex');
+
+// I DUE TIPI DI IRRISOLTO (deciso il 30/07/2026). «Irrisolto» copriva due situazioni
+// OPPOSTE, e trattarle uguali produceva un FALSO BLOCCO: un progetto sano il cui unico
+// target_test usa `import * as ns` finiva degraded -> controllo 4 rosso, pur non avendo
+// nulla che non va.
+//   structural — l'oracolo NON PUO' giudicare per costruzione (namespace, initializer non
+//     riconosciuto, dichiarazione solo commentata, binding fuori da appDir). Non degrada
+//     MAI: si DICHIARA. L-COL-006 e' rispettato dalla dichiarazione, non dal rosso — e' il
+//     precedente di scan_scope (L-COL-036).
+//   failure — l'oracolo DOVEVA farcela e qualcosa e' andato storto (run in errore, zero
+//     test eseguiti, runner non configurato). Degrada SEMPRE, anche se e' l'unico e anche
+//     se altri candidati sono stati aggiudicati.
+const STRUCTURAL = 'structural';
+const FAILURE = 'failure';
+
+// Contenimento in appDir. `resolveSpec` risolve gli specificatori relativi senza alcun
+// test di contenimento, quindi in un monorepo `import '../../packages/design/tokens.mjs'`
+// da' un bindingModule FUORI dall'app — che lo stadio 2 riscriverebbe.
+//
+// Il ripristino resterebbe corretto (la guardia sha lo copre), ma il rilevatore
+// INDIPENDENTE del keystone e' treeHash(app), rootato sulla dir dell'app: li' e' CIECO.
+// Sarebbe l'unico caso in cui il gate non puo' controllare l'oracolo, ed e' esattamente
+// quello che l'oracolo raggiungerebbe in silenzio. Si dichiara structural e non si scrive.
+function insideDir(dir, p) {
+  const rp = relative(presolve(dir), presolve(p));
+  return rp !== '' && !rp.startsWith('..') && !isAbsolute(rp);
+}
+
+// RETE DI RIPRISTINO A LIVELLO DI PROCESSO.
+//
+// Lo stadio 2 scrive nell'albero di lavoro VERO dell'utente: control4Conformance riceve la
+// stessa dir su cui girano gli altri oracoli, non una copia. Il `finally` copre il caso
+// normale, ma non due:
+//   - il write di ripristino che LANCIA (EBUSY, read-only, un antivirus che tiene il file
+//     aperto — su Windows, che e' la piattaforma bersaglio): l'eccezione uscirebbe da
+//     assertionPower lasciando il file NEUTRALIZZATO;
+//   - un Ctrl-C dentro lo spawn (run_file.mjs non ha timeout: un test appeso resta li'):
+//     il processo muore senza eseguire alcun `finally`, e nel sorgente dell'utente resta
+//     `{}` o la sentinella, senza marcatore e senza traccia.
+// Qui si tengono i byte ORIGINALI dei file in volo e si riscrivono su exit e sui segnali.
+// I byte sono GREZZI, mai una stringa: un file non-utf8 valido non sopravviverebbe al
+// giro decode/encode, e il ripristino corromperebbe cio' che dice di salvare.
+const PENDING = new Map();
+let netInstalled = false;
+
+function rememberOriginal(path, bytes) {
+  if (!netInstalled) {
+    netInstalled = true;
+    const restoreAll = () => {
+      for (const [p, b] of PENDING) { try { writeFileSync(p, b); } catch { /* never-throw */ } }
+      PENDING.clear();
+    };
+    process.on('exit', restoreAll);
+    // SIGBREAK esiste solo su Windows e SIGHUP solo su POSIX: registrare un segnale
+    // sconosciuto LANCIA, e la rete anti-danno non puo' essere lei stessa un crash.
+    const signals = process.platform === 'win32'
+      ? ['SIGINT', 'SIGTERM', 'SIGBREAK']
+      : ['SIGINT', 'SIGTERM', 'SIGHUP'];
+    for (const s of signals) {
+      try { process.on(s, () => { restoreAll(); process.exit(130); }); }
+      catch { /* segnale non supportato qui: gli altri bastano */ }
+    }
+  }
+  PENDING.set(path, bytes);
+}
 
 // SINCRONA, e non e' un dettaglio di stile: il chiamante (il keystone, e control 4 dal
 // task 4) la invoca senza `await`, quindi una versione async restituirebbe un Promise
@@ -263,6 +339,26 @@ export function assertionPower(tasks, appDir, inScope, { runFileTpl } = {}) {
   const unresolved = [];
   let adjudicated = 0;
   const countCandidates = () => files.reduce((a, f) => a + f.candidates, 0);
+  const declare = (c, kind, reason) => unresolved.push({ ...c, kind, reason });
+  const ofKind = (k) => unresolved.filter((u) => u.kind === k);
+  // La coverage si ricalcola a ogni uscita, anche su quella d'errore: un ritorno che tace
+  // quanto aveva gia' esaminato costringe chi legge a indovinarlo.
+  const coverageNow = () => ({
+    scanned: files.length,
+    files,
+    candidates: countCandidates(),
+    adjudicated,
+    unresolved: unresolved.length,
+    unresolved_structural: ofKind(STRUCTURAL).length,
+    unresolved_failure: ofKind(FAILURE).length,
+    // CIO' CHE NON SI E' GUARDATO SI SCRIVE, ognuno col suo motivo — stessa forma di
+    // coverage.excluded_patterns in scan_scope (L-COL-036), ed e' il precedente su cui
+    // poggia la decisione: uno structural non degrada, quindi se non comparisse QUI
+    // sparirebbe del tutto, e «non degrada» diventerebbe «non si sa».
+    declared: unresolved.map((u) => ({
+      file: u.testFile, line: u.line, binding: u.bindingName, kind: u.kind, reason: u.reason,
+    })),
+  });
 
   // `tasks` serve a dire QUALE AC e' guardato da una tautologia: un messaggio che
   // nomina solo il file lascia all'utente il lavoro di capire cosa non e' piu' provato.
@@ -288,37 +384,59 @@ export function assertionPower(tasks, appDir, inScope, { runFileTpl } = {}) {
       // verdetto. Si dichiara irrisolto invece di lanciare — un crash non e' un verdetto
       // (L-COL-002) — e senza mutare un file che poi non si potrebbe comunque provare.
       if (!runFileTpl) {
-        unresolved.push({ ...c, reason: "nessun template d'esecuzione (test_runner.run_file): niente runner, niente verdetto" });
+        declare(c, FAILURE, "nessun template d'esecuzione (test_runner.run_file): niente runner, niente verdetto");
         continue;
       }
-      const src = readFileSync(c.bindingModule, 'utf8');
+      // Fuori da appDir non si scrive: vedi insideDir. Prima di leggere, non solo di
+      // scrivere, cosi' il percorso che porta al write non esiste proprio.
+      if (!insideDir(appDir, c.bindingModule)) {
+        declare(c, STRUCTURAL, `il modulo di '${c.bindingName}' sta FUORI da appDir (${c.bindingModule}): l'oracolo non muta cio' che il gate non sorveglia`);
+        continue;
+      }
+      // Byte GREZZI: `src` serve come stringa solo per cercare e riscrivere, ma cio' che
+      // si rimette al posto suo sono i byte letti, non il loro giro per utf8.
+      const bytes = readFileSync(c.bindingModule);
+      const src = bytes.toString('utf8');
       const mutated = neutralizeExport(src, c.bindingName);
       if (mutated === null) {
-        unresolved.push({ ...c, reason: neutralizeFailureReason(src, c.bindingName) });
+        declare(c, STRUCTURAL, neutralizeFailureReason(src, c.bindingName));
         continue;
       }
       if (mutated === src) {
-        unresolved.push({ ...c, reason: `neutralizzazione no-op per '${c.bindingName}'` });
+        declare(c, STRUCTURAL, `neutralizzazione no-op per '${c.bindingName}': l'initializer e' gia' nella forma inerte, non c'e' mutazione che lo renda piu' inerte`);
         continue;
       }
-      const h0 = sha(c.bindingModule);
+      const h0 = sha(bytes);
+      rememberOriginal(c.bindingModule, bytes);
       writeFileSync(c.bindingModule, mutated);
       let r;
+      let restoreErr = null;
       try { r = runTargetFile(appDir, rel, runFileTpl); }
-      finally { writeFileSync(c.bindingModule, src); }
-      if (sha(c.bindingModule) !== h0) {
+      finally {
+        // Il ripristino che lancia NON deve propagare: l'eccezione uscirebbe da qui
+        // lasciando il file dell'utente neutralizzato, e un crash non e' un verdetto
+        // (L-COL-002). Si cattura e si esce in 'error', dicendo che il file e' sporco.
+        try { writeFileSync(c.bindingModule, bytes); PENDING.delete(c.bindingModule); }
+        catch (e) { restoreErr = e; }
+      }
+      if (restoreErr) {
         return {
-          ok: false, status: 'error', inert, unresolved,
-          coverage: { scanned: files.length, files, candidates: countCandidates(), adjudicated, unresolved: unresolved.length },
+          ok: false, status: 'error', inert, unresolved, coverage: coverageNow(),
+          detail: `RIPRISTINO FALLITO di ${c.bindingModule} (${String((restoreErr && restoreErr.message) || restoreErr)}): il file e' rimasto NEUTRALIZZATO, nessun verdetto — la rete su exit provera' a rimetterlo a posto`,
+        };
+      }
+      if (sha(readFileSync(c.bindingModule)) !== h0) {
+        return {
+          ok: false, status: 'error', inert, unresolved, coverage: coverageNow(),
           detail: `ripristino NON bit-esatto di ${c.bindingModule}: l'albero e' sporco, nessun verdetto`,
         };
       }
-      if (r.error) { unresolved.push({ ...c, reason: `errore d'esecuzione: ${r.detail}` }); continue; }
+      if (r.error) { declare(c, FAILURE, `errore d'esecuzione: ${r.detail}`); continue; }
       // Zero test eseguiti NON e' un'aggiudicazione: l'exit code descrive un file che non
-      // ha provato niente, e contarlo tra gli aggiudicati gonfierebbe la copertura fino a
-      // disinnescare il floor anti-vacuo qui sotto. Si dichiara, con il motivo.
+      // ha provato niente, e contarlo tra gli aggiudicati produrrebbe un verde che dichiara
+      // «1/1 aggiudicati» senza una prova sotto. E' un guasto, non un limite: FAILURE.
       if (r.testCount < 1) {
-        unresolved.push({ ...c, reason: `dopo la neutralizzazione il file non esegue alcun test (${r.detail}): nessuna prova` });
+        declare(c, FAILURE, `dopo la neutralizzazione il file non esegue alcun test (${r.detail}): nessuna prova`);
         continue;
       }
       adjudicated++;
@@ -327,28 +445,34 @@ export function assertionPower(tasks, appDir, inScope, { runFileTpl } = {}) {
     }
   }
 
-  const candidates = countCandidates();
-  const coverage = { scanned: files.length, files, candidates, adjudicated, unresolved: unresolved.length };
+  const coverage = coverageNow();
+  const where = (u) => `${u.testFile}:${u.line} su '${u.bindingName}' — ${u.reason}`;
 
+  // ORDINE DEL VERDETTO: inerte -> red; un solo failure -> degraded; altrimenti green.
   if (inert.length > 0) {
     return {
       ok: false, status: 'red', inert, unresolved, coverage,
       detail: `asserzione INERTE (non puo' fallire): ${inert.map((i) => `${i.testFile}:${i.line} su '${i.bindingName}' [${i.acIds.join(', ') || 'AC ignoto'}]`).join('; ')}`,
     };
   }
-  // FLOOR ANTI-VACUO: candidati trovati ma nessuno aggiudicato = copertura mancante,
-  // non un verde (L-COL-006).
-  if (candidates > 0 && adjudicated === 0) {
+  // UN SOLO failure degrada, anche se altri candidati sono stati aggiudicati. La regola
+  // precedente — verde se ho aggiudicato almeno qualcosa — era una soglia SENZA PRINCIPIO:
+  // due candidati identici in due file diversi finivano trattati in modo opposto a seconda
+  // di cosa era successo nell'altro file.
+  const failures = ofKind(FAILURE);
+  if (failures.length > 0) {
     return {
       ok: false, status: 'degraded', inert, unresolved, coverage,
-      detail: `${candidates} candidati, NESSUNO aggiudicato: potere dell'asserzione NON verificato`,
+      detail: `${failures.length} candidati NON aggiudicati per un guasto dell'oracolo: ${failures.map(where).join('; ')}`,
     };
   }
+  const structural = ofKind(STRUCTURAL);
   return {
     ok: true, status: 'green', inert, unresolved, coverage,
-    // Anche il verde dice quanto NON ha guardato: `2/3 aggiudicati` con i motivi accanto
-    // e' un verde onesto, `verificato` da solo sarebbe una promessa piu' larga della prova.
-    detail: `potere verificato: ${adjudicated}/${candidates} candidati aggiudicati su ${files.length} target_test`
-      + (unresolved.length ? `; ${unresolved.length} NON aggiudicati: ${unresolved.map((u) => u.reason).join('; ')}` : ''),
+    // Il verde dice sempre quanto NON ha guardato. Gli structural NON degradano, ma
+    // tacerli sarebbe la meta' sbagliata della decisione: si dichiarano qui, dove chi
+    // legge il riepilogo li vede senza dover aprire l'oggetto.
+    detail: `potere verificato: ${adjudicated}/${coverage.candidates} candidati aggiudicati su ${files.length} target_test`
+      + (structural.length ? `; ${structural.length} fuori portata dell'oracolo (dichiarati, non degradano): ${structural.map(where).join('; ')}` : ''),
   };
 }

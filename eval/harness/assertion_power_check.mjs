@@ -19,16 +19,39 @@
 // trueline/scripts/blueprint/ac_assertion_power_check.mjs — Node ESM, solo built-in:
 //
 //   assertionPower(tasks, appDir, inScope, { runFileTpl }) -> {
-//     ok: boolean,                 // false se c'e' anche un solo inerte o irrisolto
+//     ok: boolean,                 // false su INERTE (red) o su un solo FAILURE (degraded)
 //     status: 'green'|'red'|'degraded'|'error',
-//     inert:      [{ testFile, ... }],       // asserzioni provate INERTI
-//     unresolved: [{ reason: string, ... }], // candidati NON aggiudicabili, DICHIARATI
+//     inert:      [{ testFile, ... }],              // asserzioni provate INERTI
+//     unresolved: [{ kind, reason: string, ... }],  // candidati NON aggiudicati, DICHIARATI
 //     coverage: {
 //       scanned: n,                          // file in-scope esaminati
 //       candidates: n,                       // asserzioni candidate trovate in totale
+//       adjudicated: n,                      // candidati su cui il RUNNER ha dato un verdetto
+//       unresolved: n,                       // e il dettaglio per tipo:
+//       unresolved_structural: n, unresolved_failure: n,
+//       declared: [{ file, line, binding, kind, reason }], // ognuno col suo motivo
 //       files: [{ file, candidates: n }],    // ogni target_test in-scope, col suo conto
 //     },
 //   }
+//
+// I DUE TIPI DI IRRISOLTO (deciso dall'utente il 30/07/2026, su misura del reviewer del
+// task 3). «Irrisolto» copriva due situazioni OPPOSTE, e trattarle uguali produceva un
+// FALSO BLOCCO: un progetto sano il cui unico target_test usa `import * as ns` finiva
+// degraded -> controllo 4 ROSSO, pur non avendo nulla che non va. E la regola precedente
+// («verde se ho aggiudicato almeno un candidato») era una soglia SENZA PRINCIPIO: due
+// candidati identici in due file diversi finivano trattati in modo opposto a seconda di
+// cosa era successo nell'ALTRO file.
+//
+//   structural — l'oracolo NON PUO' giudicare per costruzione: binding di namespace,
+//                initializer non riconosciuto (`= make()`), dichiarazione solo commentata,
+//                binding fuori da appDir. NON degrada MAI: esce in coverage.declared col
+//                suo motivo, e il gate resta verde. L-COL-006 e' rispettato dalla
+//                DICHIARAZIONE, non dal rosso — precedente di scan_scope (L-COL-036).
+//   failure    — l'oracolo DOVEVA farcela e qualcosa e' andato storto: runTargetFile in
+//                errore, run che esegue ZERO test, runner non configurato. DEGRADA SEMPRE,
+//                anche se e' l'unico e anche se altri candidati sono stati aggiudicati.
+//
+// Ordine del verdetto: inert.length > 0 -> red · un solo failure -> degraded · altrimenti green.
 // Il metodo e' la MUTAZIONE: si neutralizza un lato dell'asserzione e si riesegue il
 // file. Se il test resta VERDE, l'asserzione e' inerte. L'albero dell'app va
 // RIPRISTINATO bit-esatto (sotto-test 8): un albero sporco invalida ogni verdetto.
@@ -56,7 +79,7 @@
 //      treeHash qui sotto.
 //
 // ---------------------------------------------------------------------------
-// GLI 11 SOTTO-TEST (nomi ESATTI: sono il contratto col verificatore)
+// I 13 SOTTO-TEST (nomi ESATTI: sono il contratto col verificatore)
 // ---------------------------------------------------------------------------
 //  (1) inert:detected              inert-identity => ok:false + tests/tokens.test.mjs
 //  (2) honest-parallel:not-flagged LOAD-BEARING — costanti indipendenti che si
@@ -65,20 +88,33 @@
 //                                  passerebbe il gate
 //  (3) healthy:not-flagged         golden-fixture (costante attesa scritta a mano)
 //  (4) fixtures:candidate-exists   ANTI-VACUO DEL GATE STESSO — honest-parallel,
-//                                  healthy e unresolved devono avere >= 1 candidato
-//                                  ciascuna, o i sotto-test 2, 3 e 5 sarebbero verdi
-//                                  per ASSENZA D'ESAME. La prima stesura del piano ci
-//                                  e' cascata: la fixture healthy dava 0 candidati
+//                                  healthy, unresolved, unresolved-failure e mixed
+//                                  devono avere >= 1 candidato ciascuna, o i sotto-test
+//                                  2, 3, 5, 6, 7 e 8 sarebbero verdi per ASSENZA
+//                                  D'ESAME. La prima stesura del piano ci e' cascata:
+//                                  la fixture healthy dava 0 candidati
 //  (5) unresolved:declared         forma non trattabile => dichiarata, con MOTIVO
-//  (6) unresolved-only:degraded    tutti i candidati irrisolti => 'degraded', mai green
-//  (7) zero-candidates:declared    zero candidati va SCRITTO, non taciuto (L-COL-006)
-//  (8) restore:bit-exact           sha256 dell'albero identico prima/dopo, calcolato
+//  (6) structural-unresolved:not-degraded
+//                                  LOAD-BEARING sulla decisione del 30/07/2026: un
+//                                  irrisolto STRUCTURAL (`= make()`) non degrada, esce
+//                                  in coverage.declared e il gate resta VERDE. Sostituisce
+//                                  `unresolved-only:degraded`, che sotto la regola nuova
+//                                  sarebbe FALSO: pretendeva rosso su un progetto sano
+//  (7) failure-unresolved:degraded L'ALTRA DIREZIONE, e senza di essa la (6) da sola
+//                                  passerebbe anche a un oracolo che non degrada MAI:
+//                                  un irrisolto FAILURE (dopo la neutralizzazione il file
+//                                  esegue ZERO test) degrada, da solo e sempre
+//  (8) mixed:green-with-declared   un candidato aggiudicato + uno structural nello stesso
+//                                  file => green, adjudicated 1, unresolved 1. E' il caso
+//                                  misto che nessun'altra fixture arbitra
+//  (9) zero-candidates:declared    zero candidati va SCRITTO, non taciuto (L-COL-006)
+// (10) restore:bit-exact           sha256 dell'albero identico prima/dopo, calcolato
 //                                  DAL KEYSTONE (mai dall'oracolo che deve provare)
-//  (9) coverage:declared           ogni target_test in-scope compare in coverage.files[]
-// (10) wiring:control4             IMPORTA ED ESEGUE control4Conformance: la lezione
+// (11) coverage:declared           ogni target_test in-scope compare in coverage.files[]
+// (12) wiring:control4             IMPORTA ED ESEGUE control4Conformance: la lezione
 //                                  di scan-scope (keystone 12/12 verde sopra un wiring
 //                                  neutralizzato). Innesto del task 4: rosso fino ad allora
-// (11) bit-invariance:legacy       senza blueprintDir il ramo legacy resta invariato
+// (13) bit-invariance:legacy       senza blueprintDir il ramo legacy resta invariato
 //
 // ESITO: exit 0 = tutti e 11 i sotto-test ESEGUITI e verdi (solo DOPO i task 2/3/4);
 // exit 1 = almeno un rosso, o meno di 11 sotto-test eseguiti (alla nascita: tutti rossi
@@ -172,7 +208,7 @@ function stage(name) {
 // `checks.length`: un run interrotto a meta' non puo' riportare PASS avendo eseguito
 // meno controlli di quanti ne promette — sarebbe la stessa vacuita' che il gate
 // sorveglia nelle fixture, spostata nell'harness.
-const TOTAL_SUBTESTS = 11;
+const TOTAL_SUBTESTS = 13;
 
 // RIEPILOGO CHE ESCE SEMPRE — anche su eccezione. Un harness che muore prima di qui
 // nasconde lo stato di TUTTI i sotto-test, e si perde il cleanup della temp dir.
@@ -233,15 +269,40 @@ async function main() {
     `golden-fixture: NON e' inerte, visto ${JSON.stringify(healthy.r)}`);
 
   const unres = run('unresolved');
+  const fail = run('unresolved-failure');
+  const mixed = run('mixed');
   assert('fixtures:candidate-exists',
-    [honest, healthy, unres].every((x) => x.r && x.r.coverage.candidates >= 1),
-    'una fixture di controllo senza candidati renderebbe VACUI i sotto-test 2, 3 e 5');
+    [honest, healthy, unres, fail, mixed].every((x) => x.r && x.r.coverage.candidates >= 1),
+    'una fixture di controllo senza candidati renderebbe VACUI i sotto-test 2, 3, 5, 6, 7 e 8');
 
   assert('unresolved:declared', unres.r && unres.r.unresolved.length === 1
     && typeof unres.r.unresolved[0].reason === 'string' && unres.r.inert.length === 0,
     `atteso 1 unresolved con reason, visto ${JSON.stringify(unres.r)}`);
-  assert('unresolved-only:degraded', unres.r && unres.r.status === 'degraded' && unres.r.ok === false,
-    'candidati non aggiudicati = copertura mancante, mai green (L-COL-006)');
+
+  // I DUE VERSI DELLA DECISIONE DEL 30/07/2026, e servono ENTRAMBI: la (6) da sola
+  // passerebbe anche a un oracolo che non degrada mai, la (7) da sola a uno che degrada
+  // sempre. Insieme inchiodano la regola, non una delle sue due meta'.
+  assert('structural-unresolved:not-degraded',
+    unres.r && unres.r.status === 'green' && unres.r.ok === true
+      && unres.r.unresolved[0].kind === 'structural'
+      && unres.r.coverage.unresolved_structural === 1 && unres.r.coverage.unresolved_failure === 0
+      && unres.r.coverage.declared.length === 1
+      && typeof unres.r.coverage.declared[0].reason === 'string'
+      && unres.r.coverage.declared[0].reason.length > 0
+      && unres.r.coverage.declared[0].kind === 'structural',
+    `structural NON degrada e si DICHIARA in coverage, visto ${JSON.stringify(unres.r)}`);
+
+  assert('failure-unresolved:degraded',
+    fail.r && fail.r.status === 'degraded' && fail.r.ok === false
+      && fail.r.unresolved.length === 1 && fail.r.unresolved[0].kind === 'failure'
+      && fail.r.coverage.unresolved_failure === 1 && fail.r.inert.length === 0,
+    `un failure degrada SEMPRE, anche da solo, visto ${JSON.stringify(fail.r)}`);
+
+  assert('mixed:green-with-declared',
+    mixed.r && mixed.r.status === 'green' && mixed.r.ok === true
+      && mixed.r.coverage.adjudicated === 1 && mixed.r.coverage.unresolved === 1
+      && mixed.r.unresolved[0].kind === 'structural' && mixed.r.inert.length === 0,
+    `un aggiudicato + uno structural = green CON dichiarazione, visto ${JSON.stringify(mixed.r)}`);
 
   const none = run('no-candidates');
   assert('zero-candidates:declared', none.r && none.r.coverage.candidates === 0
@@ -255,7 +316,7 @@ async function main() {
   // Sussume la vecchia guardia `mod &&`, che copriva il solo oracolo ASSENTE: dal task 2
   // il modulo esiste, e un oracolo presente ma che non muta nulla tornava a passare a
   // vuoto — proprio mentre il ripristino cominciava a esistere.
-  assert('restore:bit-exact', [inert, honest, healthy, unres, none].every((x) => x.r && x.before === x.after),
+  assert('restore:bit-exact', [inert, honest, healthy, unres, none, fail, mixed].every((x) => x.r && x.before === x.after),
     'un albero non ripristinato bit-esatto invalida ogni verdetto');
 
   // `inScope.length >= 1` per la stessa ragione: [].every(...) e' true, quindi un
@@ -263,7 +324,7 @@ async function main() {
   // fixture, fence YAML che non parsa) renderebbe questo sotto-test verde avendo
   // confrontato ZERO file, ed existsSync lo scarterebbe in silenzio. E' calcolato dal
   // keystone, quindi non costa fiducia nell'oracolo.
-  assert('coverage:declared', [inert, honest, healthy, unres, none].every(
+  assert('coverage:declared', [inert, honest, healthy, unres, none, fail, mixed].every(
     (x) => x.r && x.inScope.length >= 1 && x.inScope.every((f) => x.r.coverage.files.some((cf) => cf.file === f))),
     'ogni target_test in-scope deve comparire in coverage.files[]');
 
