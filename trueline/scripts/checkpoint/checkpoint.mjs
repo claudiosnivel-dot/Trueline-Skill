@@ -47,6 +47,7 @@ import { scanScopeFor, applyScanScope, scanScopeCoverage } from '../oracles/scan
 import { loadTasks } from '../blueprint/blueprint_tasks.mjs';
 import { runTargetFile } from './run_file.mjs';
 import { assertionTrace } from '../blueprint/ac_assertion_trace_check.mjs';
+import { assertionPower } from '../blueprint/ac_assertion_power_check.mjs';
 import { loadArchContract } from '../blueprint/arch_contract.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -754,10 +755,32 @@ export function control4Conformance(referenceApp, { mode = 'remediate', characte
       if (r.testCount < 1) fails.push(`${file} (vacuo: nessun test eseguito)`);
       else if (!r.passed) fails.push(`${file} (test rosso)`);
     }
-    const green = fails.length === 0;
+    if (fails.length > 0) {
+      return {
+        id: 4, name: 'conformance', status: 'red', green: false,
+        detail: `accettazione AC fallita: ${fails.join('; ')}`,
+      };
+    }
+    // <<< AT-1 Fase C — POTERE DELL'ASSERZIONE, solo su un controllo 4 GIA' VERDE >>>
+    // L'ordine non e' un'ottimizzazione: su un run ROSSO il costo dev'essere ZERO, perche'
+    // un test che gia' fallisce ha per definizione il suo potere di falsificare. La domanda
+    // «questa asserzione poteva fallire?» ha senso solo dopo che tutti i target_test in
+    // scope sono passati — un verde e' l'unico esito che una tautologia puo' contraffare.
+    // Il `detail` RIPORTA cio' che l'oracolo dice, senza riscriverlo: le due specie di
+    // irrisolto (structural non degrada, failure degrada) sono decise dentro assertionPower
+    // e qui si propagano tali e quali, incluso `power.status`.
+    const power = assertionPower(tasks, referenceApp, inScope, { runFileTpl });
+    if (!power.ok) {
+      return {
+        id: 4, name: 'conformance', status: power.status, green: false,
+        detail: `${inScope.length} target_test verdi, ma ${power.detail}`,
+        power,
+      };
+    }
     return {
-      id: 4, name: 'conformance', status: green ? 'green' : 'red', green,
-      detail: green ? `accettazione AC: ${inScope.length} target_test verdi` : `accettazione AC fallita: ${fails.join('; ')}`,
+      id: 4, name: 'conformance', status: 'green', green: true,
+      detail: `accettazione AC: ${inScope.length} target_test verdi; ${power.detail}`,
+      power,
     };
   }
   // --- RAMO LEGACY (invariato): characterization / npm test / degradato -------
