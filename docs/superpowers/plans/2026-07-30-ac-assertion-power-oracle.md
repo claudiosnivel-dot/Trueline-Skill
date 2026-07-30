@@ -317,7 +317,7 @@ Ogni fixture ha il suo `blueprint/01.md` sulla forma di Step 1, con il proprio `
 | 3 | `healthy:not-flagged` | su `healthy` ritorna `ok:true`, `inert` vuoto |
 | 4 | `fixtures:candidate-exists` | **ANTI-VACUO DEL GATE STESSO** — `honest-parallel`, `healthy` e `unresolved` devono avere `coverage.candidates >= 1` ciascuna. Senza questo, 2 e 3 sarebbero verdi per assenza d'esame, non per assoluzione |
 | 5 | `unresolved:declared` | su `unresolved`, il candidato compare in `unresolved[]` **con motivo**, e NON in `inert[]` |
-| 6 | `unresolved-only:degraded` | se ogni candidato è irrisolto, `status==='degraded'` e `ok:false` — mai `green` |
+| 6 | ~~`unresolved-only:degraded`~~ → **SUPERATO nel Task 3** dalla decisione utente sui due `kind` (vedi «I DUE TIPI DI IRRISOLTO»). Sostituito da **tre** sotto-test — `structural-unresolved:not-degraded`, `failure-unresolved:degraded`, `mixed:green-with-declared` — e due fixture nuove (`unresolved-failure`, `mixed`). Il keystone finisce a **13** sotto-test, non 11. | *(storico: pretendeva `degraded` se ogni candidato era irrisolto — regola scartata perché faceva bloccare progetti sani)* |
 | 7 | `zero-candidates:declared` | su `no-candidates`, `coverage.candidates===0` è **scritto**, e `status==='green'` con `coverage.scanned===1` |
 | 8 | `restore:bit-exact` | dopo ogni run, sha256 di tutti i file dell'app identico a prima (calcolato dal keystone, non dall'oracolo) |
 | 9 | `coverage:declared` | ogni `target_test` in-scope compare in `coverage.files[]` con il suo conteggio di candidati |
@@ -413,6 +413,9 @@ async function main() {
   assert('unresolved:declared', unres.r && unres.r.unresolved.length === 1
     && typeof unres.r.unresolved[0].reason === 'string' && unres.r.inert.length === 0,
     `atteso 1 unresolved con reason, visto ${JSON.stringify(unres.r)}`);
+  // SUPERATO nel Task 3: sostituito da structural-unresolved:not-degraded +
+  // failure-unresolved:degraded + mixed:green-with-declared. Lasciato qui perche' e' cio'
+  // che il Task 1 ha effettivamente costruito; non reimplementarlo.
   assert('unresolved-only:degraded', unres.r && unres.r.status === 'degraded' && unres.r.ok === false,
     'candidati non aggiudicati = copertura mancante, mai green (L-COL-006)');
 
@@ -708,7 +711,9 @@ export function findCandidates(appDir, testRelPath) {
     out.push({
       testFile: testRelPath,
       line: src.slice(0, m.index).split('\n').length,
-      kind: m[1] ? 'expect' : 'assert',
+      // Rinominato `assertionForm` nel Task 3: `kind` ora e' il tipo di IRRISOLTO
+      // (structural/failure) e due campi omonimi con significati diversi si confondono.
+      assertionForm: m[1] ? 'expect' : 'assert',
       actualRoot: rootA, expectedRoot: rootB,
       bindingName: rootB, bindingModule: modB,
     });
@@ -843,6 +848,9 @@ export function assertionPower(tasks, appDir, inScope, { runFileTpl } = {}) {
   }
   // FLOOR ANTI-VACUO: candidati trovati ma nessuno aggiudicato = copertura mancante,
   // non un verde (L-COL-006).
+  // SUPERATO dalla decisione utente sui due `kind`: la regola giusta e'
+  // «un solo unresolved di kind FAILURE -> degraded», non «zero aggiudicati -> degraded».
+  // Quella qui sotto e' la soglia senza principio che faceva bloccare progetti sani.
   if (candidates > 0 && adjudicated === 0) {
     return {
       ok: false, status: 'degraded', inert, unresolved, coverage,
