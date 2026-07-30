@@ -79,7 +79,7 @@
 //      treeHash qui sotto.
 //
 // ---------------------------------------------------------------------------
-// I 16 SOTTO-TEST (nomi ESATTI: sono il contratto col verificatore)
+// I 20 SOTTO-TEST (nomi ESATTI: sono il contratto col verificatore)
 // ---------------------------------------------------------------------------
 //  (1) inert:detected              inert-identity => ok:false + tests/tokens.test.mjs
 //  (2) honest-parallel:not-flagged LOAD-BEARING — costanti indipendenti che si
@@ -140,13 +140,51 @@
 //                                  fix precedente non catturava, ed e' il motivo per cui il
 //                                  keystone deve guardare l'output emesso almeno una volta
 //
-// ESITO: exit 0 = tutti e 11 i sotto-test ESEGUITI e verdi (solo DOPO i task 2/3/4);
-// exit 1 = almeno un rosso, o meno di 11 sotto-test eseguiti (alla nascita: tutti rossi
+// (17) restore:bit-exact-via-control4
+//                                  LA (10) SUL PERCORSO CHE SI SPEDISCE. La (10) confronta
+//                                  hash catturati intorno alla chiamata NUDA ad
+//                                  assertionPower, ed e' per giunta VALUTATA PRIMA che le
+//                                  callControl4 girino: il percorso del prodotto e'
+//                                  control4Conformance -> assertionPower, e quello non era
+//                                  misurato da nessuno. E' il sotto-test che avrebbe preso
+//                                  CR-1: un albero lasciato sporco da un ripristino fallito
+//                                  passava sotto entrambe le reti
+// (18) noop-neutralization:declared
+//                                  IL RAMO NO-OP (`mutated === src`), che non aveva
+//                                  copertura. E' la porta d'ingresso del falso verde di
+//                                  CR-1: al secondo tentativo l'oracolo rilegge il file gia'
+//                                  neutralizzato, la mutazione e' un no-op e il candidato
+//                                  diventa uno structural benigno. Il ramo in se' e'
+//                                  corretto — si dichiara, non si scrive un byte — e qui si
+//                                  inchioda: green, 0 inert, 0 aggiudicati, albero intatto
+// (20) report:declared-reaches-output
+//                                  I MOTIVI, SUL REPORT EMESSO. La (16) guarda una fixture
+//                                  a ZERO candidati, dove `declared` e' vuoto per
+//                                  costruzione: certifica che il campo esiste, mai che porti
+//                                  qualcosa. Qui si guida run_checkpoint su una fixture con
+//                                  un irrisolto STRUCTURAL vero e si pretende il motivo nel
+//                                  JSON E nella stringa detail — due canali diversi, gia'
+//                                  persi uno alla volta. Misurato per mutazione: senza questo
+//                                  sotto-test, togliere `declared` da powerSummary lasciava
+//                                  l'intera batteria VERDE (IM-1)
+// (19) dirty-tree:no-green-on-retry
+//                                  CR-1, AL LIVELLO DEL WIRING E SENZA INIETTARE NULLA. La
+//                                  fixture restore-locked rende il modulo del lato atteso
+//                                  non scrivibile mentre l'oracolo lo tiene neutralizzato:
+//                                  il write di ripristino fallisce EPERM per davvero. Il
+//                                  controllo 4 dev'essere `error` a TUTTI E TRE i tentativi
+//                                  che il retry di run_checkpoint produce. Senza il flag
+//                                  d'albero sporco il tentativo 2 tornava VERDE — misurato
+//                                  il 30/07/2026 — e il verde descriveva il danno
+//                                  dell'oracolo come una proprieta' benigna del progetto
+//
+// ESITO: exit 0 = tutti e 20 i sotto-test ESEGUITI e verdi (solo DOPO i task 2/3/4);
+// exit 1 = almeno un rosso, o meno di 20 sotto-test eseguiti (alla nascita: tutti rossi
 // tranne due). Il riepilogo esce SEMPRE, anche su eccezione: oracolo assente, oracolo
 // rotto, e chiamante reale che lancia degradano tutti a rosso MOTIVATO — un crash non e'
 // un verdetto (L-COL-002), e un harness che muore prima del riepilogo nasconde lo stato
 // di tutti i sotto-test proprio quando serve leggerlo.
-import { cpSync, rmSync, mkdirSync, existsSync, readdirSync, readFileSync, writeFileSync, statSync } from 'node:fs';
+import { cpSync, rmSync, mkdirSync, existsSync, readdirSync, readFileSync, writeFileSync, statSync, chmodSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { join, resolve, dirname, relative } from 'node:path';
@@ -277,7 +315,7 @@ function driveCheckpointStable(app, bp, K = 2) {
 // `checks.length`: un run interrotto a meta' non puo' riportare PASS avendo eseguito
 // meno controlli di quanti ne promette — sarebbe la stessa vacuita' che il gate
 // sorveglia nelle fixture, spostata nell'harness.
-const TOTAL_SUBTESTS = 16;
+const TOTAL_SUBTESTS = 20;
 
 // RIEPILOGO CHE ESCE SEMPRE — anche su eccezione. Un harness che muore prima di qui
 // nasconde lo stato di TUTTI i sotto-test, e si perde il cleanup della temp dir.
@@ -340,9 +378,10 @@ async function main() {
   const unres = run('unresolved');
   const fail = run('unresolved-failure');
   const mixed = run('mixed');
+  const noop = run('noop-neutral');
   assert('fixtures:candidate-exists',
-    [honest, healthy, unres, fail, mixed].every((x) => x.r && x.r.coverage.candidates >= 1),
-    'una fixture di controllo senza candidati renderebbe VACUI i sotto-test 2, 3, 5, 6, 7 e 8');
+    [honest, healthy, unres, fail, mixed, noop].every((x) => x.r && x.r.coverage.candidates >= 1),
+    'una fixture di controllo senza candidati renderebbe VACUI i sotto-test 2, 3, 5, 6, 7, 8 e 18');
 
   assert('unresolved:declared', unres.r && unres.r.unresolved.length === 1
     && typeof unres.r.unresolved[0].reason === 'string' && unres.r.inert.length === 0,
@@ -385,15 +424,34 @@ async function main() {
   // Sussume la vecchia guardia `mod &&`, che copriva il solo oracolo ASSENTE: dal task 2
   // il modulo esiste, e un oracolo presente ma che non muta nulla tornava a passare a
   // vuoto — proprio mentre il ripristino cominciava a esistere.
-  assert('restore:bit-exact', [inert, honest, healthy, unres, none, fail, mixed].every((x) => x.r && x.before === x.after),
+  assert('restore:bit-exact', [inert, honest, healthy, unres, none, fail, mixed, noop].every((x) => x.r && x.before === x.after),
     'un albero non ripristinato bit-esatto invalida ogni verdetto');
+
+  // IL RAMO NO-OP, che non aveva copertura. Quando il lato atteso e' GIA' nella forma
+  // inerte la mutazione non muta: l'oracolo non puo' aggiudicare, dichiara STRUCTURAL e
+  // NON scrive un byte. Le tre meta' che servono insieme:
+  //   - green + 0 inert: un no-op non e' una prova d'inerzia. Chiamarlo inerte sarebbe un
+  //     FALSO POSITIVO, l'unica direzione d'errore che quest'oracolo si vieta;
+  //   - structural CON motivo, e adjudicated 0: cio' che non si e' guardato si scrive;
+  //   - `noop.before === noop.after`: la prova che il ramo esce PRIMA di ogni write. E' la
+  //     meta' che inchioda l'ordine delle righe — il ramo ritorna prima di rememberOriginal
+  //     e prima del write, e qui quell'ordine smette di essere un'assunzione tacita.
+  assert('noop-neutralization:declared',
+    noop.r && noop.r.status === 'green' && noop.r.ok === true
+      && noop.r.inert.length === 0
+      && noop.r.coverage.candidates === 1 && noop.r.coverage.adjudicated === 0
+      && noop.r.unresolved.length === 1 && noop.r.unresolved[0].kind === 'structural'
+      && /no-op/.test(String(noop.r.unresolved[0].reason))
+      && noop.r.coverage.unresolved_structural === 1
+      && noop.before === noop.after,
+    `neutralizzazione no-op: green, dichiarata structural, ZERO write, visto ${JSON.stringify(noop.r)}`);
 
   // `inScope.length >= 1` per la stessa ragione: [].every(...) e' true, quindi un
   // blueprint il cui `file:` smettesse di corrispondere al disco (typo, rename della
   // fixture, fence YAML che non parsa) renderebbe questo sotto-test verde avendo
   // confrontato ZERO file, ed existsSync lo scarterebbe in silenzio. E' calcolato dal
   // keystone, quindi non costa fiducia nell'oracolo.
-  assert('coverage:declared', [inert, honest, healthy, unres, none, fail, mixed].every(
+  assert('coverage:declared', [inert, honest, healthy, unres, none, fail, mixed, noop].every(
     (x) => x.r && x.inScope.length >= 1 && x.inScope.every((f) => x.r.coverage.files.some((cf) => cf.file === f))),
     'ogni target_test in-scope deve comparire in coverage.files[]');
 
@@ -460,6 +518,98 @@ async function main() {
       && drv.c4.detail === 'accettazione AC: 1 target_test verdi'
       && Boolean(ap) && ap.candidates === 0 && ap.scanned === 1 && ap.status === 'green',
     `il REPORT EMESSO deve portare la dichiarazione a zero candidati, visto c4=${JSON.stringify(drv.c4)} assertion_power=${JSON.stringify(ap)}${drv.report ? '' : ` (nessun JSON; stderr: ${String(drv.stderr).slice(0, 300)})`}`);
+
+  // I MOTIVI, SUL REPORT EMESSO — non i conteggi, e non in memoria.
+  // La (16) guarda una fixture a ZERO candidati, dove `declared` e' vuoto per costruzione:
+  // certifica che il campo esiste, mai che porti qualcosa. Qui si guida il binario spedito
+  // su una fixture con un irrisolto STRUCTURAL vero e si pretende il MOTIVO nel JSON.
+  // Senza questo sotto-test `coverage.declared` continuava a non raggiungere alcun
+  // artefatto emesso mentre tre artefatti SPEDITI dicevano il contrario (IM-1): misurato
+  // per mutazione il 30/07/2026 — togliendo `declared` da powerSummary l'intera batteria
+  // restava verde. Due meta': il campo strutturato (una macchina lo rilegge) e la stringa
+  // `detail` (una persona la legge), perche' passano per canali diversi e si sono gia'
+  // persi uno alla volta.
+  const emittedU = stage('unresolved', 'unresolved-emitted');
+  mkdirSync(join(emittedU.app, 'supabase'), { recursive: true });
+  writeFileSync(join(emittedU.app, 'supabase', 'config.toml'), SUPABASE_CONFIG_TOML);
+  writeFileSync(join(emittedU.app, 'package.json'), FIXTURE_PKG_JSON);
+  const drvU = driveCheckpointStable(emittedU.app, emittedU.bp);
+  const apU = drvU.report && drvU.report.assertion_power;
+  assert('report:declared-reaches-output',
+    Boolean(drvU.c4) && drvU.c4.status === 'green' && drvU.c4.green === true
+      && Boolean(apU) && apU.unresolved_structural === 1
+      && Array.isArray(apU.declared) && apU.declared.length === 1
+      && apU.declared[0].kind === 'structural'
+      && apU.declared[0].file === 'tests/thing.test.mjs'
+      && typeof apU.declared[0].reason === 'string' && apU.declared[0].reason.length > 0
+      && /fuori portata dell'oracolo/.test(String(drvU.c4.detail)),
+    `il MOTIVO di uno structural deve raggiungere il report emesso, in entrambi i canali. Visto c4.detail=${
+      String(drvU.c4 && drvU.c4.detail)} assertion_power=${JSON.stringify(apU)}${
+      drvU.report ? '' : ` (nessun JSON; stderr: ${String(drvU.stderr).slice(0, 300)})`}`);
+
+  // IL RIPRISTINO, MISURATO SUL PERCORSO CHE SI SPEDISCE.
+  // `restore:bit-exact` (10) confronta hash catturati dentro run(), intorno alla chiamata
+  // NUDA ad assertionPower — e l'assert e' per giunta VALUTATO PRIMA che le callControl4
+  // qui sopra girino. Il percorso del prodotto e' pero' control4Conformance ->
+  // assertionPower, e le cinque callControl4 rilanciano l'oracolo SULLE STESSE DIR senza
+  // che nessuno ricalcoli il treeHash. E' il sotto-test che avrebbe preso CR-1: un albero
+  // lasciato sporco da un ripristino fallito non veniva visto da nessuna delle due reti.
+  // treeHash e' calcolato DAL KEYSTONE, quindi non costa fiducia nell'oracolo che deve provare.
+  const c4Runs = [
+    { name: 'inert-identity', app: inert.app, before: inert.before, r: c4Inert },
+    { name: 'healthy', app: healthy.app, before: healthy.before, r: c4Healthy },
+    { name: 'unresolved-failure', app: fail.app, before: fail.before, r: c4Fail },
+    { name: 'no-candidates (legacy)', app: none.app, before: none.before, r: c4Legacy },
+    { name: 'no-candidates (ramo AC)', app: none.app, before: none.before, r: c4None },
+  ];
+  const c4Dirty = c4Runs.filter((x) => treeHash(x.app) !== x.before);
+  // La guardia sul sentinel di callControl4 non e' difensiva: se control4Conformance ha
+  // LANCIATO non ha ripristinato niente per definizione, e l'albero pulito sarebbe pulito
+  // per non essere mai stato toccato — un verde per assenza d'esame, dentro il sotto-test
+  // che esiste per impedirlo.
+  const c4Ran = c4Runs.every((x) => x.r && typeof x.r.status === 'string' && !x.r.status.startsWith('ECCEZIONE'));
+  assert('restore:bit-exact-via-control4', c4Ran && c4Dirty.length === 0,
+    c4Ran
+      ? `alberi NON ripristinati DOPO control4Conformance: ${c4Dirty.map((x) => x.name).join(', ')}`
+      : `almeno una callControl4 ha lanciato: un albero intatto sarebbe intatto per non essere stato toccato — ${JSON.stringify(c4Runs.map((x) => [x.name, x.r && x.r.status]))}`);
+
+  // ---------------------------------------------------------------------------
+  // CR-1 — ULTIMO SOTTO-TEST, e l'ordine e' OBBLIGATO.
+  // ---------------------------------------------------------------------------
+  // Questa fixture alza il flag d'albero sporco NEL PROCESSO DEL KEYSTONE: da qui in poi
+  // ogni assertionPower esce 'error' senza toccare nulla, che e' precisamente il
+  // comportamento in prova. Anticiparlo renderebbe rossi tutti i sotto-test successivi.
+  //
+  // NON si inietta nulla nel prodotto: la fixture rende `src/tokens.mjs` non scrivibile
+  // mentre l'oracolo lo tiene neutralizzato, quindi il write di ripristino fallisce EPERM
+  // per davvero. I tre giri sono quelli che il retry di run_checkpoint.mjs:279-282 produce
+  // rilanciando l'intero checkpoint finche' un controllo esce 'error'.
+  const locked = stage('restore-locked');
+  const lockedTokens = join(locked.app, 'src', 'tokens.mjs');
+  const lockedBefore = readFileSync(lockedTokens);
+  const lockedTries = [];
+  for (let i = 1; i <= 3; i += 1) {
+    lockedTries.push(callControl4(control4Conformance, locked.app,
+      { mode: 'build', blueprintDir: locked.bp, manifest: MANIFEST }, `restore-locked (tentativo ${i})`));
+  }
+  // Il file resta NEUTRALIZZATO ed e' cio' che si asserisce: senza questa meta' il
+  // sotto-test sarebbe verde anche se l'error venisse da un'altra causa (runner assente,
+  // blueprint illeggibile) e non da una mutazione lasciata sul disco.
+  const lockedStillDirty = !readFileSync(lockedTokens).equals(lockedBefore);
+  try { chmodSync(lockedTokens, 0o644); } catch { /* il cleanup di finish() e' never-throw */ }
+  // Si RESTITUISCE il processo pulito: il seam esiste per questo, ed e' l'unica chiamata.
+  if (mod && typeof mod.resetTreeDirtyState === 'function') mod.resetTreeDirtyState();
+
+  assert('dirty-tree:no-green-on-retry',
+    lockedTries.length === 3
+      && lockedTries.every((c) => c.status === 'error' && c.green === false)
+      && /RIPRISTINO FALLITO/.test(String(lockedTries[0].detail))
+      && /ALBERO SPORCO/.test(String(lockedTries[1].detail))
+      && lockedStillDirty,
+    `il retry non deve poter convertire un 'error' da mutazione in un verde. Visto: ${
+      JSON.stringify(lockedTries.map((c) => c.status))}, file ancora mutato=${lockedStillDirty}, detail[0]=${
+      String(lockedTries[0] && lockedTries[0].detail).slice(0, 200)}, detail[1]=${
+      String(lockedTries[1] && lockedTries[1].detail).slice(0, 200)}`);
 
   finish(null);
 }

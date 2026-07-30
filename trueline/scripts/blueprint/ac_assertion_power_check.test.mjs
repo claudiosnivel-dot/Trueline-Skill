@@ -351,3 +351,242 @@ test('neutralizeExport: un binding con $ nel nome non e\' un buco silenzioso', (
   assert.equal(neutralizeExport('export const $el = { a: 1 };\n', '$el'), 'export const $el = {};\n');
   assert.match(neutralizeFailureReason('export const $el = make();\n', '$el'), /initializer/);
 });
+
+// ---------------------------------------------------------------------------
+// ONDA DI CORREZIONE DEL 30/07/2026 — i rami che il round precedente non copriva
+// ---------------------------------------------------------------------------
+import { treeDirtyState, resetTreeDirtyState } from './ac_assertion_power_check.mjs';
+import { chmodSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+
+// Sorgente di un target_test che rende NON SCRIVIBILE il modulo del lato atteso, ma SOLO
+// quando quel modulo e' gia' stato neutralizzato. E' la riproduzione FEDELE del guasto di
+// I/O (EBUSY / antivirus / handle ancora aperto su Windows) senza iniettare nulla nel
+// prodotto: il write di MUTAZIONE riesce, quello di RIPRISTINO fallisce EPERM.
+// L'asserzione e' tautologica APPOSTA: solo cosi' il file resta verde a token azzerati,
+// che e' la condizione senza la quale il falso verde di CR-1 non si manifesta.
+const LOCKING_TEST = [
+  "import { test } from 'node:test';",
+  "import assert from 'node:assert/strict';",
+  "import { chmodSync } from 'node:fs';",
+  "import { fileURLToPath } from 'node:url';",
+  "import { config } from '../config.mjs';",
+  "import { colors } from '../src/tokens.mjs';",
+  'if (Object.keys(colors).length === 0) {',
+  "  chmodSync(fileURLToPath(new URL('../src/tokens.mjs', import.meta.url)), 0o444);",
+  '}',
+  "test('t', () => { assert.deepEqual(config.theme.colors, colors); });",
+  '',
+].join('\n');
+
+test("assertionPower: un ripristino fallito sporca l'albero, e il giro dopo NON e' un verde", () => {
+  // CR-1, misurato il 30/07/2026. run_checkpoint.mjs:279-282 rilancia l'INTERO checkpoint
+  // finche' un controllo esce 'error' (max 3 tentativi). Quel retry fu scritto per i tool
+  // che non emettono JSON — un oracolo che NON HA GIRATO. Qui incontra un 'error' che
+  // significa l'opposto: «ho MUTATO il sorgente e non sono riuscito a rimetterlo a posto».
+  // Senza il flag d'albero sporco il secondo giro rileggeva il file GIA' neutralizzato,
+  // trovava la neutralizzazione no-op, la dichiarava structural benigno e usciva GREEN: la
+  // stessa asserzione tautologica che l'oracolo esiste per prendere passava da ROSSO a
+  // VERDE per un EBUSY transitorio, e quel verde DESCRIVEVA il danno dell'oracolo come una
+  // proprieta' benigna del progetto.
+  withTempApp({
+    'src/tokens.mjs': "export const colors = { bg: 'x' };\n",
+    'config.mjs': "import { colors } from './src/tokens.mjs';\nexport const config = { theme: { colors } };\n",
+    'tests/t.test.mjs': LOCKING_TEST,
+  }, (app) => {
+    const tokens = join(app, 'src', 'tokens.mjs');
+    const before = readFileSync(tokens, 'utf8');
+    try {
+      const r1 = assertionPower(TASK1, app, ['tests/t.test.mjs'], { runFileTpl: 'node --test {file}' });
+      assert.equal(r1.status, 'error');
+      assert.equal(r1.ok, false);
+      assert.match(r1.detail, /RIPRISTINO FALLITO/);
+      // ANTI-VACUO: il file dev'essere DAVVERO rimasto mutato. Senza questa riga il test
+      // passerebbe anche se l'error venisse da un'altra causa e non da una mutazione
+      // lasciata sul disco — cioe' proverebbe qualcosa di diverso da cio' che dichiara.
+      assert.notEqual(readFileSync(tokens, 'utf8'), before);
+      assert.ok(treeDirtyState(), "il flag d'albero sporco dev'essere alzato");
+      assert.equal(treeDirtyState().path, tokens);
+
+      // IL GIRO DOPO, che e' esattamente cio' che il retry produce.
+      const r2 = assertionPower(TASK1, app, ['tests/t.test.mjs'], { runFileTpl: 'node --test {file}' });
+      assert.equal(r2.status, 'error');
+      assert.equal(r2.ok, false);
+      assert.match(r2.detail, /ALBERO SPORCO/);
+      assert.match(r2.detail, /tokens\.mjs/);   // il file lasciato mutato si NOMINA
+      assert.equal(r2.inert.length, 0);
+      assert.equal(r2.coverage.candidates, 0);  // non ha guardato niente, e lo dichiara
+    } finally {
+      try { chmodSync(tokens, 0o644); } catch { /* il cleanup di withTempApp e' force */ }
+      resetTreeDirtyState();
+    }
+  });
+});
+
+test("assertionPower: il write di MUTAZIONE che fallisce e' un verdetto, non un crash", () => {
+  // Emerso costruendo la fixture restore-locked: con il modulo del lato atteso gia' in sola
+  // lettura, l'EPERM del write di mutazione usciva da assertionPower, da control4Conformance
+  // e da runCheckpoint, e run_checkpoint.mjs moriva con uno stack trace invece di emettere
+  // il JSON del report — nessun verdetto, per NESSUN controllo. Un crash non e' un verdetto
+  // (L-COL-002). Qui niente e' stato scritto, quindi l'albero e' PULITO: e' un FAILURE
+  // (l'oracolo doveva farcela e non ci e' riuscito), che degrada, non un albero sporco.
+  withTempApp({
+    ...SRC_ABX,
+    'tests/t.test.mjs': [
+      "import { A } from '../src/a.mjs';",
+      "import { B } from '../src/b.mjs';",
+      'assert.deepEqual(A, B);',
+      '',
+    ].join('\n'),
+  }, (app) => {
+    const b = join(app, 'src', 'b.mjs');
+    const before = readFileSync(b, 'utf8');
+    chmodSync(b, 0o444);
+    try {
+      const r = assertionPower(TASK1, app, ['tests/t.test.mjs'], { runFileTpl: 'node --test {file}' });
+      assert.equal(r.status, 'degraded');
+      assert.equal(r.unresolved.length, 1);
+      assert.equal(r.unresolved[0].kind, 'failure');
+      assert.match(r.unresolved[0].reason, /impossibile scrivere la neutralizzazione/);
+      assert.equal(readFileSync(b, 'utf8'), before);
+      assert.equal(treeDirtyState(), null); // nulla e' stato scritto: l'albero NON e' sporco
+    } finally {
+      try { chmodSync(b, 0o644); } catch { /* ignore */ }
+      resetTreeDirtyState();
+    }
+  });
+});
+
+test('assertionPower: il ramo no-op dichiara structural e non scrive un byte', () => {
+  // Il ramo `mutated === src`: il lato atteso e' GIA' nella forma inerte, quindi non c'e'
+  // mutazione da cui trarre un verdetto. Non aveva copertura, ed e' la porta d'ingresso del
+  // falso verde di CR-1 — al secondo tentativo l'oracolo imboccava proprio questo ramo.
+  // Il ramo in se' e' CORRETTO: si dichiara, non si scrive. Le tre meta' che servono:
+  //   - green e ZERO inert: un no-op non prova l'inerzia, e chiamarlo inerte sarebbe il
+  //     falso positivo che quest'oracolo si vieta;
+  //   - structural col suo motivo, adjudicated 0;
+  //   - il file INTATTO: e' la prova che il ramo esce prima di rememberOriginal e prima del
+  //     write, cioe' quell'ordine di righe smette di essere un'assunzione tacita.
+  withTempApp({
+    'src/registry.mjs': 'export const registry = {};\n',
+    'tests/expected.mjs': 'export const EXPECTED = {};\n',
+    'tests/t.test.mjs': [
+      "import { test } from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "import { registry } from '../src/registry.mjs';",
+      "import { EXPECTED } from './expected.mjs';",
+      "test('t', () => { assert.deepEqual(registry, EXPECTED); });",
+      '',
+    ].join('\n'),
+  }, (app) => {
+    const exp = join(app, 'tests', 'expected.mjs');
+    const before = readFileSync(exp, 'utf8');
+    const r = assertionPower(TASK1, app, ['tests/t.test.mjs'], { runFileTpl: 'node --test {file}' });
+    assert.equal(r.status, 'green');
+    assert.equal(r.ok, true);
+    assert.equal(r.inert.length, 0);
+    assert.equal(r.coverage.candidates, 1);
+    assert.equal(r.coverage.adjudicated, 0);
+    assert.equal(r.unresolved[0].kind, 'structural');
+    assert.match(r.unresolved[0].reason, /no-op/);
+    assert.equal(readFileSync(exp, 'utf8'), before);
+  });
+});
+
+test('assertionPower: gli structural si dichiarano nel detail anche su RED', () => {
+  // Prima stavano sul SOLO ramo verde, e l'effetto era il rovescio dell'intenzione: nei tre
+  // stati in cui l'utente ha piu' bisogno di sapere cosa NON e' stato guardato — red,
+  // degraded, error — la dichiarazione spariva da ogni output emesso. Il `detail` e' l'unico
+  // canale che attraversa shapeControl e la proiezione del loop.
+  withTempApp({
+    'src/tokens.mjs': "export const colors = { bg: 'x' };\n",
+    'config.mjs': "import { colors } from './src/tokens.mjs';\nexport const config = { theme: { colors } };\n",
+    'src/thing.mjs': 'function make() { return { k: 1 }; }\nexport const thing = make();\n',
+    'src/mirror.mjs': "import { thing } from './thing.mjs';\nexport const mirror = thing;\n",
+    'tests/t.test.mjs': [
+      "import { test } from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "import { config } from '../config.mjs';",
+      "import { colors } from '../src/tokens.mjs';",
+      "import { thing } from '../src/thing.mjs';",
+      "import { mirror } from '../src/mirror.mjs';",
+      "test('inerte', () => { assert.deepEqual(config.theme.colors, colors); });",
+      "test('structural', () => { assert.deepEqual(mirror, thing); });",
+      '',
+    ].join('\n'),
+  }, (app) => {
+    const r = assertionPower(TASK1, app, ['tests/t.test.mjs'], { runFileTpl: 'node --test {file}' });
+    assert.equal(r.status, 'red');
+    assert.match(r.detail, /INERTE/);
+    assert.match(r.detail, /fuori portata dell'oracolo/);
+    assert.match(r.detail, /initializer di 'thing'/);
+    assert.equal(r.coverage.declared.length, 1);
+  });
+});
+
+test('assertionPower: gli structural si dichiarano nel detail anche su DEGRADED', () => {
+  // L'altra meta' della stessa correzione. Il target_test non ha alcun `test()`, quindi dopo
+  // la neutralizzazione esegue ZERO test -> FAILURE -> degraded; accanto c'e' uno structural
+  // (`= make()`), che prima spariva da ogni output proprio qui.
+  withTempApp({
+    ...SRC_ABX,
+    'src/thing.mjs': 'function make() { return { k: 1 }; }\nexport const thing = make();\n',
+    'src/mirror.mjs': "import { thing } from './thing.mjs';\nexport const mirror = thing;\n",
+    'tests/t.test.mjs': [
+      "import assert from 'node:assert/strict';",
+      "import { A } from '../src/a.mjs';",
+      "import { B } from '../src/b.mjs';",
+      "import { thing } from '../src/thing.mjs';",
+      "import { mirror } from '../src/mirror.mjs';",
+      'assert.deepEqual(A, B);',
+      'assert.deepEqual(mirror, thing);',
+      '',
+    ].join('\n'),
+  }, (app) => {
+    const r = assertionPower(TASK1, app, ['tests/t.test.mjs'], { runFileTpl: 'node --test {file}' });
+    assert.equal(r.status, 'degraded');
+    assert.match(r.detail, /guasto dell'oracolo/);
+    assert.match(r.detail, /fuori portata dell'oracolo/);
+    assert.match(r.detail, /initializer di 'thing'/);
+  });
+});
+
+test("la rete su exit rimette i BYTE VERI dopo un ripristino fallito", () => {
+  // build-discipline.md ora PROMETTE questa rete all'utente, e una promessa spedita senza
+  // un test e' la stessa classe di difetto di IM-1. Si prova nell'unico modo in cui e'
+  // osservabile: in un PROCESSO FIGLIO, perche' la rete gira su `exit` e il verdetto e' lo
+  // stato del file DOPO che il processo e' morto.
+  //
+  // Il figlio registra il proprio handler di `exit` PRIMA di chiamare l'oracolo, cosi' gira
+  // per primo (Node li esegue in ordine di registrazione) e toglie il read-only: e' cio'
+  // che nella realta' fa il lock transitorio quando si rilascia. Poi l'handler dell'oracolo
+  // riscrive i byte tenuti in PENDING. Se quei byte fossero quelli NEUTRALIZZATI, o se la
+  // rete non esistesse, il file resterebbe guasto e questo test sarebbe rosso.
+  withTempApp({
+    'src/tokens.mjs': "export const colors = { bg: 'x' };\n",
+    'config.mjs': "import { colors } from './src/tokens.mjs';\nexport const config = { theme: { colors } };\n",
+    'tests/t.test.mjs': LOCKING_TEST,
+  }, (app) => {
+    const tokens = join(app, 'src', 'tokens.mjs');
+    const before = readFileSync(tokens, 'utf8');
+    const oracleUrl = new URL('./ac_assertion_power_check.mjs', import.meta.url).href;
+    const child = [
+      "import { chmodSync } from 'node:fs';",
+      `const TOKENS = ${JSON.stringify(tokens)};`,
+      "process.on('exit', () => { try { chmodSync(TOKENS, 0o644); } catch { /* ignore */ } });",
+      `const { assertionPower } = await import(${JSON.stringify(oracleUrl)});`,
+      `const r = assertionPower(${JSON.stringify(TASK1)}, ${JSON.stringify(app)}, ['tests/t.test.mjs'], { runFileTpl: 'node --test {file}' });`,
+      'console.log(r.status);',
+    ].join('\n');
+    const res = spawnSync(process.execPath, ['--input-type=module', '-e', child], { encoding: 'utf8' });
+    try {
+      // ANTI-VACUO: il figlio deve aver DAVVERO incontrato il ripristino fallito. Senza
+      // questa riga il test sarebbe verde anche se l'oracolo non avesse mai mutato nulla —
+      // il file sarebbe intatto per non essere mai stato toccato.
+      assert.equal(String(res.stdout).trim(), 'error', `stderr: ${String(res.stderr).slice(0, 400)}`);
+      assert.equal(readFileSync(tokens, 'utf8'), before);
+    } finally {
+      try { chmodSync(tokens, 0o644); } catch { /* ignore */ }
+    }
+  });
+});

@@ -961,9 +961,18 @@ export function runCheckpoint(referenceApp, opts = {}) {
     // muore in-process: a zero candidati il controllo 4 uscirebbe VERDE e MUTO, che e'
     // esattamente cio' che L-COL-006 vieta.
     // SINTESI, non l'oggetto intero: il report e' cio' che una persona legge, non un
-    // dump. I conteggi bastano a dire quanto e' stato guardato e quanto no; i MOTIVI
-    // per esteso restano nel `detail` del controllo, che li porta gia' quando c'e'
-    // qualcosa da riferire. null quando il ramo AC non ha girato -> forma invariata.
+    // dump. I conteggi dicono QUANTO e' stato guardato; `declared[]` dice CHE COSA non
+    // lo e' stato e PERCHE', una voce per irrisolto — stessa forma di
+    // `coverage.excluded_patterns` in scan_scope, che porta il `reason` per pattern fin
+    // dentro il report del loop (L-COL-036). null quando il ramo AC non ha girato ->
+    // forma invariata.
+    //
+    // La frase che stava qui — «i MOTIVI per esteso restano nel detail del controllo» —
+    // era FALSA quando l'ha scritta il task 4 e va nominata: il detail portava gli
+    // structural sul SOLO ramo verde, quindi su red, degraded ed error i motivi non
+    // raggiungevano nessun output. Ora sono in entrambi i canali, e la ridondanza e'
+    // voluta: `detail` e' la riga che una persona legge, `declared` e' il campo che una
+    // macchina rilegge senza doverla parsare.
     assertion_power: powerSummary(c4 && c4.power),
   };
 }
@@ -982,5 +991,15 @@ function powerSummary(power) {
     unresolved: cov.unresolved,
     unresolved_structural: cov.unresolved_structural,
     unresolved_failure: cov.unresolved_failure,
+    // CIO' CHE NON E' STATO GUARDATO, COL SUO MOTIVO — non un conteggio.
+    // Senza questo campo `coverage.declared` non raggiungeva NESSUN artefatto emesso:
+    // shapeControl (run_checkpoint) e la proiezione del loop tengono una whitelist e
+    // scartano `power`, e questa sintesi portava solo numeri. Tre artefatti SPEDITI
+    // affermavano il contrario — incluso il commento di ac_assertion_power_check che
+    // motiva l'esistenza di `declared` con «se non comparisse QUI sparirebbe del tutto».
+    // Un numero dice che qualcosa non e' stato guardato; solo il motivo dice CHE COSA,
+    // ed e' la differenza fra dichiarare e accennare (L-COL-006/L-COL-036).
+    // Array VUOTO quando non c'e' nulla da dichiarare: la forma non cambia col contenuto.
+    declared: Array.isArray(cov.declared) ? cov.declared : [],
   };
 }

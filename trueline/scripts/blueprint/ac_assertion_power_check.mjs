@@ -314,6 +314,46 @@ function insideDir(dir, p) {
 const PENDING = new Map();
 let netInstalled = false;
 
+// ALBERO SPORCO — flag di PROCESSO, e la ragione e' MISURATA (30/07/2026, sonda su copia
+// con un throw iniettato nel solo write di ripristino, fixture inert-identity).
+//
+// run_checkpoint.mjs rilancia l'INTERO checkpoint finche' un controllo esce 'error' (max 3
+// tentativi, sovrascrivendo `cp`). Quel retry fu scritto per i tool che non emettono JSON —
+// un oracolo che NON HA GIRATO, dove ri-leggere e' onesto. Qui incontra un 'error' che
+// significa l'opposto: «ho MUTATO il sorgente dell'utente e non sono riuscito a rimetterlo
+// a posto». Rieseguire non e' una seconda lettura: e' una seconda misura su un albero che
+// nel frattempo l'oracolo stesso ha guastato.
+//
+// L'ESITO MISURATO, senza questo flag:
+//   tentativo 1 -> status 'error', tokens.mjs resta `export const colors = {};`
+//   tentativo 2 -> l'oracolo rilegge il file GIA' neutralizzato, neutralizeExport e' un
+//                  no-op, il candidato finisce fra gli structural e il controllo 4 esce
+//                  GREEN, dichiarando il proprio danno come una proprieta' benigna del
+//                  progetto. La stessa asserzione tautologica che l'oracolo esiste per
+//                  prendere passa da ROSSO a VERDE per un EBUSY transitorio.
+//
+// Alzato il flag, ogni assertionPower successiva esce 'error' SENZA TOCCARE NULLA: al terzo
+// tentativo il checkpoint riporta 'error', che e' il verdetto vero. Il retry non puo' piu'
+// convertire niente, e non serve toccare il retry — che tutto il resto del prodotto usa.
+//
+// E' di PROCESSO, non per-appDir, ed e' deliberato: un processo che ha dimostrato di non
+// saper rimettere a posto cio' che ha mutato non torna a mutare un altro albero. La
+// direzione conservativa vale anche contro l'oracolo stesso.
+let TREE_DIRTY = null; // null | { path, reason }
+
+function markTreeDirty(path, reason) { if (!TREE_DIRTY) TREE_DIRTY = { path, reason }; }
+
+/** Stato dello sporco, per chi deve DICHIARARLO (nessun chiamante lo usa per decidere). */
+export function treeDirtyState() { return TREE_DIRTY; }
+
+/** SEAM DI TEST, e si dichiara come tale: azzera il flag di processo.
+ *  In PRODUZIONE nessuno lo chiama e lo sporco NON si dimentica — dimenticarlo
+ *  riaprirebbe esattamente CR-1. Esiste perche' i test del flag girano nello stesso
+ *  processo degli altri (node:test esegue un file per processo) e senza reset
+ *  avvelenerebbero ogni test successivo: un ordine implicito fra test e' fragile
+ *  quanto l'ordine di righe che questa correzione elimina. */
+export function resetTreeDirtyState() { TREE_DIRTY = null; PENDING.clear(); }
+
 function rememberOriginal(path, bytes) {
   if (!netInstalled) {
     netInstalled = true;
@@ -332,7 +372,16 @@ function rememberOriginal(path, bytes) {
       catch { /* segnale non supportato qui: gli altri bastano */ }
     }
   }
-  PENDING.set(path, bytes);
+  // NON si sovrascrive una voce gia' in volo, e la tenuta della rete diventa cosi' una
+  // proprieta' DICHIARATA invece di un effetto dell'ordine delle righe.
+  //
+  // Misurato: nella sonda di CR-1 la rete su exit rimetteva comunque i byte VERI, ma solo
+  // perche' al secondo giro il ramo no-op ritornava PRIMA di arrivare qui — cioe' per la
+  // posizione di un `continue`, non per disegno. Una riorganizzazione futura che spostasse
+  // rememberOriginal sopra quel ramo avrebbe fatto memorizzare i byte NEUTRALIZZATI come
+  // «originali», e la rete su exit avrebbe scritto il danno al posto della salvezza, in
+  // silenzio. Chi e' entrato per primo ha per costruzione i byte veri: quelli si tengono.
+  if (!PENDING.has(path)) PENDING.set(path, bytes);
 }
 
 // SINCRONA, e non e' un dettaglio di stile: il chiamante (il keystone, e control 4 dal
@@ -344,6 +393,20 @@ export function assertionPower(tasks, appDir, inScope, { runFileTpl } = {}) {
   const inert = [];
   const unresolved = [];
   let adjudicated = 0;
+  // PRIMA DI QUALUNQUE COSA: se questo processo ha gia' mutato un sorgente e non e'
+  // riuscito a rimetterlo a posto, non si legge, non si scrive e non si giudica. Uscire
+  // 'error' e' l'unico verdetto vero, e il retry di run_checkpoint lo ritrovera' identico
+  // ai tentativi 2 e 3 invece di convertirlo in un verde (CR-1).
+  if (TREE_DIRTY) {
+    return {
+      ok: false, status: 'error', inert, unresolved,
+      coverage: {
+        scanned: 0, files, candidates: 0, adjudicated: 0,
+        unresolved: 0, unresolved_structural: 0, unresolved_failure: 0, declared: [],
+      },
+      detail: `ALBERO SPORCO da un giro precedente di questo processo: ${TREE_DIRTY.path} e' rimasto NEUTRALIZZATO (${TREE_DIRTY.reason}). Nessuna misura: un oracolo che ha guastato il sorgente non torna a giudicarlo`,
+    };
+  }
   const countCandidates = () => files.reduce((a, f) => a + f.candidates, 0);
   const declare = (c, kind, reason) => unresolved.push({ ...c, kind, reason });
   const ofKind = (k) => unresolved.filter((u) => u.kind === k);
@@ -365,6 +428,25 @@ export function assertionPower(tasks, appDir, inScope, { runFileTpl } = {}) {
       file: u.testFile, line: u.line, binding: u.bindingName, kind: u.kind, reason: u.reason,
     })),
   });
+
+  const where = (u) => `${u.testFile}:${u.line} su '${u.bindingName}' — ${u.reason}`;
+  // GLI STRUCTURAL SI APPENDONO A OGNI `detail`, NON AL SOLO RAMO VERDE.
+  //
+  // Prima stavano solo sul verde, e l'effetto era il rovescio dell'intenzione: nei tre
+  // stati in cui l'utente ha piu' bisogno di sapere cosa NON e' stato guardato — red,
+  // degraded, error — la dichiarazione spariva da ogni output. Il `detail` e' l'unico
+  // canale che attraversa shapeControl e la proiezione del loop, quindi «non degrada»
+  // tornava a essere «non si sa» esattamente dove costava di piu'.
+  //
+  // A ZERO structural il suffisso e' vuoto, e la clausola 2 della bit-invarianza regge
+  // per costruzione: senza candidati non ci sono irrisolti, quindi la stringa del verde
+  // resta byte-identica a prima dell'innesto.
+  const withDeclared = (detail) => {
+    const st = ofKind(STRUCTURAL);
+    return st.length
+      ? `${detail}; ${st.length} fuori portata dell'oracolo (dichiarati, non degradano): ${st.map(where).join('; ')}`
+      : detail;
+  };
 
   // `tasks` serve a dire QUALE AC e' guardato da una tautologia: un messaggio che
   // nomina solo il file lascia all'utente il lavoro di capire cosa non e' piu' provato.
@@ -414,7 +496,19 @@ export function assertionPower(tasks, appDir, inScope, { runFileTpl } = {}) {
       }
       const h0 = sha(bytes);
       rememberOriginal(c.bindingModule, bytes);
-      writeFileSync(c.bindingModule, mutated);
+      // ANCHE IL WRITE DI MUTAZIONE PUO' LANCIARE, e un crash non e' un verdetto
+      // (L-COL-002). Misurato il 30/07/2026 costruendo la fixture restore-locked: con il
+      // modulo del lato atteso in sola lettura, l'EPERM usciva da assertionPower, da
+      // control4Conformance e da runCheckpoint, e run_checkpoint.mjs moriva con uno stack
+      // trace invece di emettere il JSON del report — nessun verdetto, per nessun controllo.
+      // Qui nulla e' stato scritto, quindi l'albero e' PULITO: e' un FAILURE (l'oracolo
+      // doveva farcela e non ci e' riuscito), che degrada, non un albero sporco.
+      try { writeFileSync(c.bindingModule, mutated); }
+      catch (e) {
+        PENDING.delete(c.bindingModule);
+        declare(c, FAILURE, `impossibile scrivere la neutralizzazione di '${c.bindingName}' in ${c.bindingModule} (${String((e && e.message) || e)}): niente mutazione, niente verdetto — l'albero NON e' stato toccato`);
+        continue;
+      }
       let r;
       let restoreErr = null;
       try { r = runTargetFile(appDir, rel, runFileTpl); }
@@ -422,21 +516,35 @@ export function assertionPower(tasks, appDir, inScope, { runFileTpl } = {}) {
         // Il ripristino che lancia NON deve propagare: l'eccezione uscirebbe da qui
         // lasciando il file dell'utente neutralizzato, e un crash non e' un verdetto
         // (L-COL-002). Si cattura e si esce in 'error', dicendo che il file e' sporco.
-        try { writeFileSync(c.bindingModule, bytes); PENDING.delete(c.bindingModule); }
+        //
+        // `PENDING.delete` NON sta piu' qui: era la rete che dimenticava il file NELL'ISTANTE
+        // ESATTO in cui il controllo lo dichiarava sporco. Era parcheggiato con la
+        // motivazione «finestra stretta, lo status e' gia' error»; CR-1 ha falsificato quella
+        // premessa — l'error non restava error, e nel frattempo la rete era l'unica cosa che
+        // rimetteva i byte veri. Si dimentica solo cio' che si e' PROVATO di aver rimesso a
+        // posto, e la prova e' la guardia sha piu' sotto.
+        try { writeFileSync(c.bindingModule, bytes); }
         catch (e) { restoreErr = e; }
       }
       if (restoreErr) {
+        const why = String((restoreErr && restoreErr.message) || restoreErr);
+        markTreeDirty(c.bindingModule, `il write di ripristino ha lanciato: ${why}`);
         return {
           ok: false, status: 'error', inert, unresolved, coverage: coverageNow(),
-          detail: `RIPRISTINO FALLITO di ${c.bindingModule} (${String((restoreErr && restoreErr.message) || restoreErr)}): il file e' rimasto NEUTRALIZZATO, nessun verdetto — la rete su exit provera' a rimetterlo a posto`,
+          detail: withDeclared(`RIPRISTINO FALLITO di ${c.bindingModule} (${why}): il file e' rimasto NEUTRALIZZATO, nessun verdetto — la rete su exit provera' a rimetterlo a posto, e ogni giro successivo di questo processo esce 'error' senza toccare nulla`),
         };
       }
       if (sha(readFileSync(c.bindingModule)) !== h0) {
+        markTreeDirty(c.bindingModule, 'il ripristino non e\' tornato bit-esatto (guardia sha256)');
         return {
           ok: false, status: 'error', inert, unresolved, coverage: coverageNow(),
-          detail: `ripristino NON bit-esatto di ${c.bindingModule}: l'albero e' sporco, nessun verdetto`,
+          detail: withDeclared(`ripristino NON bit-esatto di ${c.bindingModule}: l'albero e' sporco, nessun verdetto`),
         };
       }
+      // Solo ORA la rete puo' dimenticare questo file: il ripristino non e' soltanto
+      // avvenuto senza lanciare, e' PROVATO bit-esatto. Finche' la prova non c'e', i byte
+      // veri restano in PENDING ed e' l'handler su exit a rimetterli.
+      PENDING.delete(c.bindingModule);
       if (r.error) { declare(c, FAILURE, `errore d'esecuzione: ${r.detail}`); continue; }
       // Zero test eseguiti NON e' un'aggiudicazione: l'exit code descrive un file che non
       // ha provato niente, e contarlo tra gli aggiudicati produrrebbe un verde che dichiara
@@ -452,13 +560,12 @@ export function assertionPower(tasks, appDir, inScope, { runFileTpl } = {}) {
   }
 
   const coverage = coverageNow();
-  const where = (u) => `${u.testFile}:${u.line} su '${u.bindingName}' — ${u.reason}`;
 
   // ORDINE DEL VERDETTO: inerte -> red; un solo failure -> degraded; altrimenti green.
   if (inert.length > 0) {
     return {
       ok: false, status: 'red', inert, unresolved, coverage,
-      detail: `asserzione INERTE (non puo' fallire): ${inert.map((i) => `${i.testFile}:${i.line} su '${i.bindingName}' [${i.acIds.join(', ') || 'AC ignoto'}]`).join('; ')}`,
+      detail: withDeclared(`asserzione INERTE (non puo' fallire): ${inert.map((i) => `${i.testFile}:${i.line} su '${i.bindingName}' [${i.acIds.join(', ') || 'AC ignoto'}]`).join('; ')}`),
     };
   }
   // UN SOLO failure degrada, anche se altri candidati sono stati aggiudicati. La regola
@@ -469,16 +576,14 @@ export function assertionPower(tasks, appDir, inScope, { runFileTpl } = {}) {
   if (failures.length > 0) {
     return {
       ok: false, status: 'degraded', inert, unresolved, coverage,
-      detail: `${failures.length} candidati NON aggiudicati per un guasto dell'oracolo: ${failures.map(where).join('; ')}`,
+      detail: withDeclared(`${failures.length} candidati NON aggiudicati per un guasto dell'oracolo: ${failures.map(where).join('; ')}`),
     };
   }
-  const structural = ofKind(STRUCTURAL);
   return {
     ok: true, status: 'green', inert, unresolved, coverage,
     // Il verde dice sempre quanto NON ha guardato. Gli structural NON degradano, ma
     // tacerli sarebbe la meta' sbagliata della decisione: si dichiarano qui, dove chi
     // legge il riepilogo li vede senza dover aprire l'oggetto.
-    detail: `potere verificato: ${adjudicated}/${coverage.candidates} candidati aggiudicati su ${files.length} target_test`
-      + (structural.length ? `; ${structural.length} fuori portata dell'oracolo (dichiarati, non degradano): ${structural.map(where).join('; ')}` : ''),
+    detail: withDeclared(`potere verificato: ${adjudicated}/${coverage.candidates} candidati aggiudicati su ${files.length} target_test`),
   };
 }

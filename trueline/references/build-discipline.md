@@ -115,11 +115,34 @@ stai asserendo `X === X` e il test resterebbe verde anche cancellando tutti i to
 *potere*) neutralizza **temporaneamente** il binding esportato del lato atteso — nel
 sorgente dell'albero su cui il checkpoint sta girando — e riesegue **quel solo**
 `target_test`. Se resta **verde**, l'asserzione è **inerte** e il controllo 4 è **ROSSO**.
-Il file viene **ripristinato a byte grezzi** e il ripristino è **verificato per sha256**:
-un ripristino non bit-esatto è un `error`, mai un verde. A emettere il verdetto è
-l'**esecuzione**, mai l'analisi statica — lo statico si limita a *proporre* candidati, ed
-è volutamente sovra-inclusivo (`L-COL-002`). Gira **dopo** che i `target_test` sono
-passati: su un controllo 4 già rosso non costa nulla.
+A emettere il verdetto è l'**esecuzione**, mai l'analisi
+statica — lo statico si limita a *proporre* candidati, ed è volutamente sovra-inclusivo
+(`L-COL-002`). Gira **dopo** che i `target_test` sono passati: su un controllo 4 già rosso
+non costa nulla.
+
+**Il ripristino, e i modi in cui può non riuscire** (`L-COL-006`: ciò che non si garantisce
+si dichiara, non si tace). Nel caso normale il file torna **bit-identico**: si riscrivono i
+**byte grezzi** letti prima della mutazione — mai una stringa ri-codificata — e il
+ripristino è **verificato per sha256**. Un ripristino non bit-esatto è un `error`, mai un
+verde. Quello che quella frase **non** promette, e che va saputo prima di far girare il gate
+su un albero a cui tieni:
+
+- **il write di ripristino può lanciare** (EBUSY, file in sola lettura, un antivirus che
+  tiene aperto il file — su Windows succede). Allora il file resta **neutralizzato**, il
+  controllo 4 esce `error` **nominando il file**, e da quel momento ogni ulteriore giro
+  dell'oracolo **in quel processo** esce `error` senza toccare più nulla: un `error` che
+  significa «ho mutato il sorgente» non deve poter diventare un verde al tentativo dopo;
+- **una rete su `exit` e sui segnali** (`SIGINT`/`SIGTERM`, più `SIGBREAK` su Windows)
+  tiene i byte originali dei file in volo e li riscrive all'uscita, anche anomala. È una
+  rete, non una garanzia: gira solo se il processo arriva a eseguirla;
+- **c'è una finestra in cui nessun handler gira.** Il `target_test` è rilanciato con
+  `spawnSync` **senza timeout**: fra la mutazione e il ripristino il processo può restare
+  fermo su un test appeso, e un `kill -9`, un riavvio o un crash dell'host in quell'istante
+  lasciano il file **mutato sul disco** senza che `finally`, `exit` o segnali vengano mai
+  eseguiti. Il file è sempre **uno solo** e sempre un `export const` ridotto alla sua forma
+  inerte (`{}`, `[]`, una sentinella): `git diff` lo mostra subito e `git checkout -- <file>`
+  lo annulla. Il timeout non c'è **per scelta**, non per dimenticanza: aggiungerlo
+  cambierebbe anche il run normale del controllo 4.
 
 **Quando l'oracolo non arriva lo dichiara — e non ti blocca per questo.** Due specie di
 irrisolto, opposte:
@@ -138,10 +161,25 @@ irrisolto, opposte:
 non tautologico** (può fallire, ma esercita meno di quanto l'AC pretenda) resta
 **scoperto**: qui non c'è mutation testing generale. La granularità è il **file**, quindi
 un altro test dello stesso file che diventa rosso maschera l'inerzia → **falsi negativi
-possibili**, falsi positivi no: è il verso giusto in cui sbagliare, perché un falso
-positivo renderebbe rosso un progetto sano. Per le mutazioni **comportamentali** la rete
-non è questa ed esiste già: è il **controllo 3** (regressioni sull'intera suite), dove una
-mutazione che cambia davvero il comportamento rompe i test che lo esercitano altrove.
+possibili**: è il verso giusto in cui sbagliare, perché un falso positivo renderebbe rosso
+un progetto sano.
+
+I falsi positivi sono **la direzione che l'oracolo si vieta**, e per questo va detto dove
+resta possibile invece di promettere che non lo è. Il matcher dei candidati **non parsa**:
+riconosce la forma dell'asserzione con una regex sul sorgente **mascherato dai commenti**,
+ma i **letterali di stringa restano intatti** — devono, perché un'asserzione legittima può
+contenere un accesso a chiave (`obj['k']`). Quindi un'asserzione **citata dentro una
+stringa** (un template di messaggio, una tabella di esempi, un test che genera codice)
+resta visibile al matcher; se **entrambi** i lati sono anche binding importati veri e la
+forma dell'export è neutralizzabile, l'oracolo muta un modulo e può dichiarare **INERTE** un
+test sano. È una congiunzione stretta — mai osservata sulle fixture né sulla misura del
+30/07/2026 — ma è un percorso **noto**, non un'ipotesi, e nessun `error` lo copre: si
+presenterebbe come un controllo 4 rosso. Se ti succede, il `detail` nomina file, riga e
+binding: verifica quella riga prima di riscrivere il test.
+
+Per le mutazioni **comportamentali** la rete non è questa ed esiste già: è il **controllo 3**
+(regressioni sull'intera suite), dove una mutazione che cambia davvero il comportamento rompe
+i test che lo esercitano altrove.
 
 ### Momento 3 — Scrittura minima e chirurgica *(Simplicity First + Surgical Changes)*
 
