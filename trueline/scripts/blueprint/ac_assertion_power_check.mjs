@@ -45,23 +45,36 @@ function matchBalanced(src, start) {
   return -1;
 }
 
+// Si CERCA sulla copia mascherata e si RISCRIVE sull'originale: maskComments preserva le
+// lunghezze apposta, quindi ogni indice vale su entrambe.
+//
+// Senza questo, una dichiarazione COMMENTATA — il pattern «vecchia versione commentata
+// sopra la nuova», o un @example in JSDoc — verrebbe neutralizzata al posto di quella
+// viva, che resterebbe intatta. Il file riscritto e' ancora sintatticamente VALIDO, quindi
+// niente a valle se ne accorge: lo stadio 2 rilancia il test, lo trova verde e dichiara
+// INERTE un progetto sano. Cercare sul mascherato fa sparire il commento dal match, cosi'
+// si trova la dichiarazione vera; se l'unica forma presente e' commentata non c'e' match e
+// si torna null — il candidato finisce in unresolved, che e' la risposta onesta.
 export function neutralizeExport(source, name) {
+  const masked = maskComments(source);
   const re = new RegExp(`export\\s+const\\s+${name}\\b([^=]*)=\\s*`, 'm');
-  const m = re.exec(source);
+  const m = re.exec(masked);
   if (!m) return null;
   const initStart = m.index + m[0].length;
   const head = source.slice(0, initStart);
-  const ch = source[initStart];
+  const ch = masked[initStart];
   if (ch === '{' || ch === '[') {
-    const end = matchBalanced(source, initStart);
+    // Anche il bilanciamento gira sul mascherato: una graffa dentro un commento
+    // (`{ a: 1 /* } */ }`) non deve chiudere il letterale in anticipo.
+    const end = matchBalanced(masked, initStart);
     if (end < 0) return null;
     return head + (ch === '{' ? '{}' : '[]') + source.slice(end + 1);
   }
-  const tail = source.slice(initStart);
+  const tail = masked.slice(initStart);
   const strM = /^(['"])(?:\\.|(?!\1).)*\1/.exec(tail);
-  if (strM) return head + NEUTRAL_STRING + tail.slice(strM[0].length);
+  if (strM) return head + NEUTRAL_STRING + source.slice(initStart + strM[0].length);
   const numM = /^-?\d+(?:\.\d+)?/.exec(tail);
-  if (numM) return head + NEUTRAL_NUMBER + tail.slice(numM[0].length);
+  if (numM) return head + NEUTRAL_NUMBER + source.slice(initStart + numM[0].length);
   return null; // forma non riconosciuta: si dichiara, non si indovina
 }
 
@@ -79,7 +92,10 @@ export function neutralizeExport(source, name) {
 // un // dentro una stringa ('http://x') NON apre un commento, altrimenti si perderebbe il
 // resto della riga e con esso candidati REALI. I letterali di stringa restano INTATTI:
 // ASSERT_RE ammette ' e " perche' deve vedere l'accesso a chiave (obj['k']).
-// Limite dichiarato, ereditato dal fratello: i letterali regex non sono riconosciuti.
+// Limite dichiarato, ereditato dal fratello: i letterali regex non sono riconosciuti, e una
+// quote dentro un regex (`/'/g`) puo' far misparsare la riga. Il danno e' pero' CONFINATO
+// alla riga (vedi il reset su newline sotto): prima dilagava sul resto del file, e quello
+// non era un falso negativo locale ma la disattivazione silenziosa dell'intera maschera.
 export function maskComments(src) {
   const out = src.split('');
   let str = null;    // null | "'" | '"' | '`'
@@ -99,6 +115,12 @@ export function maskComments(src) {
       continue;
     }
     if (str) {
+      // Una stringa '/" non puo' contenere un newline non-escapato. Se lo incontriamo il
+      // parse era SBAGLIATO — tipicamente una quote dentro un letterale regex, `/'/g` o
+      // `/don't/` — e lo si confina a QUESTA riga. Senza, lo stato stringa resta aperto e
+      // da li' in poi nessun commento viene piu' mascherato: tornerebbe per intero il
+      // difetto che maskComments esiste per chiudere, e in silenzio.
+      if (c === '\n' && str !== '`') { str = null; continue; }
       if (c === '\\') { i++; continue; } // escape: il prossimo char non chiude nulla
       if (c === str) str = null;
       continue;
@@ -115,6 +137,12 @@ const EXT = ['.ts', '.tsx', '.mjs', '.js', '.jsx'];
 // Risolve uno specificatore ai file del progetto. `@/x` -> <app>/src/x (convenzione
 // piu' diffusa); relativo -> risolto dal file. Pacchetto npm -> null (fuori scope,
 // dichiarato: un binding di libreria non e' codice d'autore da neutralizzare).
+//
+// ASSUNZIONE non verificata contro il tsconfig, che vale la pena nominare: `@/*` mappato
+// alla ROOT del progetto invece che a src/ — configurazione frequente — qui non risolve e
+// il binding sparisce in silenzio. L'effetto e' un candidato in meno, cioe' un possibile
+// FALSO NEGATIVO: il verso giusto in cui sbagliare, ma resta un buco di copertura.
+// Leggere i path del tsconfig e' il modo di chiuderlo, e non e' fatto.
 export function resolveSpec(appDir, fromFile, spec) {
   let base;
   if (spec.startsWith('@/')) base = join(appDir, 'src', spec.slice(2));
@@ -130,8 +158,11 @@ export function resolveSpec(appDir, fromFile, spec) {
 // binding che non esiste a runtime, per la stessa ragione dell'asserzione commentata.
 function importBindings(appDir, file, src) {
   const out = new Map();
-  for (const m of src.matchAll(/import\s+([^;]*?)\s+from\s+'([^']+)'/g)) {
-    const target = resolveSpec(appDir, file, m[2]);
+  // Apici SINGOLI E DOPPI: Prettier emette doppi di default, quindi riconoscendo i soli
+  // singoli l'oracolo sarebbe cieco per costruzione su una fetta larga dei progetti
+  // bersaglio — zero binding, zero candidati, un gate che non spara mai e non lo dice.
+  for (const m of src.matchAll(/import\s+([^;]*?)\s+from\s+(['"])([^'"]+)\2/g)) {
+    const target = resolveSpec(appDir, file, m[3]);
     if (!target) continue;
     const clause = m[1];
     const named = /\{([^}]*)\}/.exec(clause);
@@ -139,6 +170,11 @@ function importBindings(appDir, file, src) {
       const n = p.trim().split(/\s+as\s+/).pop().trim();
       if (n) out.set(n, target);
     }
+    // `import * as ns`: registrato come binding del modulo. Lo stadio 2 cerchera'
+    // `export const ns` e non lo trovera', quindi il candidato finira' in unresolved con
+    // un motivo. E' l'esito giusto: prima veniva scartato qui, senza lasciare traccia.
+    const ns = /^\s*\*\s+as\s+(\w+)\s*$/.exec(clause);
+    if (ns) out.set(ns[1], target);
     const def = /^\s*(\w+)\s*(?:,|$)/.exec(clause);
     if (def) out.set(def[1], target);
   }
