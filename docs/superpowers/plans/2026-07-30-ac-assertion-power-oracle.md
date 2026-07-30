@@ -560,7 +560,8 @@ Expected: FAIL — `Cannot find module` / `neutralizeExport is not a function`.
 // DUE STADI, e la separazione e' il punto:
 //   1) CANDIDATI (statico, SOVRA-INCLUSIVO): nessun verdetto. Misurato il 30/07/2026,
 //      un rilevatore statico su raggiungibilita' dei moduli da 2 FALSI POSITIVI su 3.
-//   2) VERDETTO (ESECUZIONE): si neutralizza il binding esportato sulla COPIA di lavoro
+//   2) VERDETTO (ESECUZIONE): si neutralizza il binding esportato nella DIR CHE IL
+//      CHECKPOINT RICEVE (workspace nel loop, albero VERO con run_checkpoint --in-place)
 //      e si riesegue QUEL SOLO target_test. Resta verde => l'asserzione e' INERTE.
 //      L'autorita' e' l'exit code del runner (L-COL-002), mai l'analisi statica.
 //
@@ -1021,7 +1022,7 @@ L'albero **SPEDITO** è cambiato (`trueline/scripts/blueprint/*`, `trueline/scri
 
 Run:
 ```bash
-node eval/harness/h1_perpid_check.mjs --shipped-allow=trueline/scripts/blueprint/ac_assertion_power_check.mjs,trueline/scripts/blueprint/ac_assertion_power_check.test.mjs,trueline/scripts/checkpoint/checkpoint.mjs,trueline/references/build-discipline.md,trueline/package.json
+node eval/harness/h1_perpid_check.mjs --shipped-allow=trueline/references/build-discipline.md,trueline/scripts/blueprint/ac_assertion_power_check.mjs,trueline/scripts/blueprint/ac_assertion_power_check.test.mjs,trueline/scripts/checkpoint/checkpoint.mjs,trueline/scripts/checkpoint/run_checkpoint.mjs,trueline/scripts/loop/run_loop.mjs,trueline/package.json
 ```
 Expected: **10/10 PASS**. Un path dichiarato ma **non** modificato è ROSSO (allowlist stale): se accade, correggere la lista, non il gate.
 
