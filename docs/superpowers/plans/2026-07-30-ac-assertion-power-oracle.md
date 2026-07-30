@@ -88,6 +88,30 @@ Il gate nasce prima del codice (`L-COL-019`/`L-COL-027`). Alla fine di questo ta
 - Consumes: niente (primo task).
 - Produces: le 5 fixture e i nomi dei sotto-test, consumati dal gate di ogni task successivo.
 
+**VINCOLO OBBLIGATORIO — intestazione `SPECIMEN` (deciso dall'utente il 30 lug 2026).**
+Due fixture contengono **di proposito** ciò che un rubric di review tratta come difetto:
+`inert-identity` ha un test la cui asserzione non può fallire, `unresolved` ha un export in
+una forma che il neutralizzatore non sa trattare. Nel diff sono indistinguibili da difetti
+veri. Ogni file-campione porta quindi in testa un commento che dichiara **cosa dimostra**,
+**quale sotto-test lo consuma** e **che correggerlo romperebbe il keystone** — l'informazione
+sta nel codice, dove il reviewer la legge, non in una nota dell'orchestratore. È
+`L-COL-036` applicato alle fixture: ciò che non è quel che sembra va **dichiarato**.
+
+Forma esatta, da replicare in `inert-identity/app/tests/tokens.test.mjs`,
+`inert-identity/app/config.mjs` e `unresolved/app/src/thing.mjs`:
+
+```js
+// SPECIMEN — NON e' un difetto da correggere.
+// Questo test e' DELIBERATAMENTE inerte: assert.deepEqual(config.theme.extend.colors, colors)
+// confronta lo STESSO oggetto, perche' config.mjs importa colors per riferimento.
+// E' il caso misurato il 30/07/2026 su progetto-web-ai, ridotto al minimo.
+// Consumato da: eval/harness/assertion_power_check.mjs -> sotto-test `inert:detected`.
+// Correggerlo renderebbe ROSSO il keystone.
+```
+
+Le fixture `honest-parallel`, `healthy` e `no-candidates` **non** portano l'intestazione:
+sono codice sano, ed è proprio ciò che devono sembrare.
+
 - [ ] **Step 1: fixture `inert-identity` — il caso misurato, ridotto al minimo**
 
 `eval/assertion-power/inert-identity/app/src/tokens.mjs`:
