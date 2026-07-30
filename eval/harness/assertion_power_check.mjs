@@ -248,11 +248,14 @@ async function main() {
     && none.r.coverage.scanned === 1 && none.r.status === 'green',
     `zero candidati va SCRITTO, visto ${JSON.stringify(none.r)}`);
 
-  // `mod &&` NON e' difensivo: senza oracolo nessuna mutazione avviene, quindi
-  // before === after e' vero PER COSTRUZIONE e il sotto-test sarebbe un verde che non
-  // asserisce nulla — esattamente cio' che L-COL-006 vieta, dentro il keystone che lo fa
-  // rispettare. (Difetto dello scheletro originale, colto in review.)
-  assert('restore:bit-exact', mod && [inert, honest, healthy, unres, none].every((x) => x.before === x.after),
+  // `x.r &&` NON e' difensivo: senza un RISULTATO da quella fixture nessuna mutazione e'
+  // avvenuta, quindi before === after e' vero PER COSTRUZIONE e il sotto-test sarebbe un
+  // verde che non asserisce nulla — esattamente cio' che L-COL-006 vieta, dentro il
+  // keystone che lo fa rispettare. (Difetto dello scheletro originale, colto in review.)
+  // Sussume la vecchia guardia `mod &&`, che copriva il solo oracolo ASSENTE: dal task 2
+  // il modulo esiste, e un oracolo presente ma che non muta nulla tornava a passare a
+  // vuoto — proprio mentre il ripristino cominciava a esistere.
+  assert('restore:bit-exact', [inert, honest, healthy, unres, none].every((x) => x.r && x.before === x.after),
     'un albero non ripristinato bit-esatto invalida ogni verdetto');
 
   // `inScope.length >= 1` per la stessa ragione: [].every(...) e' true, quindi un
