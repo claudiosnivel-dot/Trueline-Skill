@@ -45,6 +45,11 @@ function matchBalanced(src, start) {
   return -1;
 }
 
+// Una sola definizione della forma cercata, usata sia da chi neutralizza sia da chi spiega
+// perche' non ci e' riuscito: due copie divergerebbero, e la spiegazione finirebbe per
+// descrivere una ricerca diversa da quella davvero fatta.
+const declRe = (name) => new RegExp(`export\\s+const\\s+${name}\\b([^=]*)=\\s*`, 'm');
+
 // Si CERCA sulla copia mascherata e si RISCRIVE sull'originale: maskComments preserva le
 // lunghezze apposta, quindi ogni indice vale su entrambe.
 //
@@ -57,8 +62,7 @@ function matchBalanced(src, start) {
 // si torna null — il candidato finisce in unresolved, che e' la risposta onesta.
 export function neutralizeExport(source, name) {
   const masked = maskComments(source);
-  const re = new RegExp(`export\\s+const\\s+${name}\\b([^=]*)=\\s*`, 'm');
-  const m = re.exec(masked);
+  const m = declRe(name).exec(masked);
   if (!m) return null;
   const initStart = m.index + m[0].length;
   const head = source.slice(0, initStart);
@@ -76,6 +80,28 @@ export function neutralizeExport(source, name) {
   const numM = /^-?\d+(?:\.\d+)?/.exec(tail);
   if (numM) return head + NEUTRAL_NUMBER + source.slice(initStart + numM[0].length);
   return null; // forma non riconosciuta: si dichiara, non si indovina
+}
+
+// Il `null` di neutralizeExport ha TRE cause diverse, e il motivo e' cio' che l'utente
+// legge quando l'oracolo NON aggiudica: un motivo impreciso lo manda a cercare il difetto
+// dove non e'. «Forma dell'export non riconosciuta» e' vero solo nel primo caso — negli
+// altri due la forma e' riconoscibilissima, manca proprio la dichiarazione da mutare.
+//   1. dichiarazione VIVA ma initializer non riducibile a inerte (una chiamata, un
+//      identificatore, un'arrow) oppure letterale non bilanciato;
+//   2. dichiarazione presente SOLO dentro un commento: e' codice MORTO, e neutralizzarlo
+//      non cambierebbe nulla dell'esecuzione — mutarlo sarebbe anzi il falso positivo che
+//      maskComments esiste per impedire;
+//   3. nessuna dichiarazione affatto: il binding non e' un `export const` (funzione,
+//      classe, default), o e' il nome di un `import * as ns` — che lo stadio 1 registra
+//      apposta per lasciarne traccia, sapendo che qui non si trovera' per costruzione.
+export function neutralizeFailureReason(source, name) {
+  if (declRe(name).test(maskComments(source))) {
+    return `initializer di '${name}' in una forma che il neutralizzatore non sa rendere inerte`;
+  }
+  if (declRe(name).test(source)) {
+    return `dichiarazione di '${name}' presente SOLO in un commento: e' codice morto, non c'e' niente da neutralizzare`;
+  }
+  return `nessun 'export const ${name}' nel modulo: non e' una costante esportata (funzione, classe, default, o namespace 'import * as ${name}')`;
 }
 
 // Sbianca i caratteri DENTRO i commenti lasciando lunghezza e newline intatti, cosi'
@@ -218,4 +244,111 @@ export function findCandidates(appDir, testRelPath) {
     });
   }
   return out;
+}
+
+// -----------------------------------------------------------------------------
+// STADIO 2 — il verdetto, che lo emette L'ESECUZIONE
+// -----------------------------------------------------------------------------
+import { runTargetFile } from '../checkpoint/run_file.mjs';
+
+const sha = (p) => createHash('sha256').update(readFileSync(p)).digest('hex');
+
+// SINCRONA, e non e' un dettaglio di stile: il chiamante (il keystone, e control 4 dal
+// task 4) la invoca senza `await`, quindi una versione async restituirebbe un Promise
+// che nessuno srotola — ogni verdetto diventerebbe un oggetto opaco, piu' un unhandled
+// rejection al termine. runTargetFile e' spawnSync apposta.
+export function assertionPower(tasks, appDir, inScope, { runFileTpl } = {}) {
+  const files = [];
+  const inert = [];
+  const unresolved = [];
+  let adjudicated = 0;
+  const countCandidates = () => files.reduce((a, f) => a + f.candidates, 0);
+
+  // `tasks` serve a dire QUALE AC e' guardato da una tautologia: un messaggio che
+  // nomina solo il file lascia all'utente il lavoro di capire cosa non e' piu' provato.
+  const acsOf = new Map();
+  for (const t of tasks || []) for (const tt of (t.target_tests || [])) {
+    const ids = Array.isArray(tt.covers) ? tt.covers : [tt.covers].filter(Boolean);
+    acsOf.set(tt.file, [...(acsOf.get(tt.file) || []), ...ids]);
+  }
+
+  for (const raw of inScope) {
+    // Separatori `/` UNA VOLTA SOLA e PRIMA di ogni uso, non solo sulla riga che
+    // finisce in coverage: la stessa stringa deve risolvere il file su disco, rilanciare
+    // il runner e comparire nel rapporto. Normalizzare solo all'atto di scriverla
+    // lascerebbe divergere cio' che si DICHIARA da cio' che si e' davvero MISURATO —
+    // ed e' il difetto (guardia messa dopo il join, quindi mai esercitata) gia' rilevato
+    // sul `testFile` dello stadio 1. `inScope` porta la stringa YAML grezza, che il
+    // chiamante riconfronta per uguaglianza: normalizzarla la lascia identica.
+    const rel = raw.replace(/\\/g, '/');
+    const cands = findCandidates(appDir, rel).map((c) => ({ ...c, acIds: acsOf.get(rel) || [] }));
+    files.push({ file: rel, candidates: cands.length });
+    for (const c of cands) {
+      // Prima di sporcare l'albero: senza runner non c'e' esecuzione, quindi non c'e'
+      // verdetto. Si dichiara irrisolto invece di lanciare — un crash non e' un verdetto
+      // (L-COL-002) — e senza mutare un file che poi non si potrebbe comunque provare.
+      if (!runFileTpl) {
+        unresolved.push({ ...c, reason: "nessun template d'esecuzione (test_runner.run_file): niente runner, niente verdetto" });
+        continue;
+      }
+      const src = readFileSync(c.bindingModule, 'utf8');
+      const mutated = neutralizeExport(src, c.bindingName);
+      if (mutated === null) {
+        unresolved.push({ ...c, reason: neutralizeFailureReason(src, c.bindingName) });
+        continue;
+      }
+      if (mutated === src) {
+        unresolved.push({ ...c, reason: `neutralizzazione no-op per '${c.bindingName}'` });
+        continue;
+      }
+      const h0 = sha(c.bindingModule);
+      writeFileSync(c.bindingModule, mutated);
+      let r;
+      try { r = runTargetFile(appDir, rel, runFileTpl); }
+      finally { writeFileSync(c.bindingModule, src); }
+      if (sha(c.bindingModule) !== h0) {
+        return {
+          ok: false, status: 'error', inert, unresolved,
+          coverage: { scanned: files.length, files, candidates: countCandidates(), adjudicated, unresolved: unresolved.length },
+          detail: `ripristino NON bit-esatto di ${c.bindingModule}: l'albero e' sporco, nessun verdetto`,
+        };
+      }
+      if (r.error) { unresolved.push({ ...c, reason: `errore d'esecuzione: ${r.detail}` }); continue; }
+      // Zero test eseguiti NON e' un'aggiudicazione: l'exit code descrive un file che non
+      // ha provato niente, e contarlo tra gli aggiudicati gonfierebbe la copertura fino a
+      // disinnescare il floor anti-vacuo qui sotto. Si dichiara, con il motivo.
+      if (r.testCount < 1) {
+        unresolved.push({ ...c, reason: `dopo la neutralizzazione il file non esegue alcun test (${r.detail}): nessuna prova` });
+        continue;
+      }
+      adjudicated++;
+      // VERDE dopo la neutralizzazione = l'asserzione non puo' fallire.
+      if (r.passed) inert.push({ ...c, verdict: 'inerte' });
+    }
+  }
+
+  const candidates = countCandidates();
+  const coverage = { scanned: files.length, files, candidates, adjudicated, unresolved: unresolved.length };
+
+  if (inert.length > 0) {
+    return {
+      ok: false, status: 'red', inert, unresolved, coverage,
+      detail: `asserzione INERTE (non puo' fallire): ${inert.map((i) => `${i.testFile}:${i.line} su '${i.bindingName}' [${i.acIds.join(', ') || 'AC ignoto'}]`).join('; ')}`,
+    };
+  }
+  // FLOOR ANTI-VACUO: candidati trovati ma nessuno aggiudicato = copertura mancante,
+  // non un verde (L-COL-006).
+  if (candidates > 0 && adjudicated === 0) {
+    return {
+      ok: false, status: 'degraded', inert, unresolved, coverage,
+      detail: `${candidates} candidati, NESSUNO aggiudicato: potere dell'asserzione NON verificato`,
+    };
+  }
+  return {
+    ok: true, status: 'green', inert, unresolved, coverage,
+    // Anche il verde dice quanto NON ha guardato: `2/3 aggiudicati` con i motivi accanto
+    // e' un verde onesto, `verificato` da solo sarebbe una promessa piu' larga della prova.
+    detail: `potere verificato: ${adjudicated}/${candidates} candidati aggiudicati su ${files.length} target_test`
+      + (unresolved.length ? `; ${unresolved.length} NON aggiudicati: ${unresolved.map((u) => u.reason).join('; ')}` : ''),
+  };
 }

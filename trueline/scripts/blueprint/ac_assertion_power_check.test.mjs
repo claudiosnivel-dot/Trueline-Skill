@@ -234,3 +234,84 @@ test('resolveSpec: alias @/, estensione inferita e index di cartella', () => {
     assert.equal(resolveSpec(app, from, '../src/manca'), null);  // inesistente
   });
 });
+
+// ---------- stadio 2: i tre rami che il brief non prescriveva ---------------
+// Aggiunti al Task 3 e pinnati qui perche' sono codice SPEDITO: senza un test, ognuno dei
+// tre si potrebbe cancellare lasciando la suite verde — ed e' la classe di difetto che le
+// review di questo repo trovano piu' spesso.
+import { neutralizeFailureReason, assertionPower } from './ac_assertion_power_check.mjs';
+import { readFileSync } from 'node:fs';
+
+test('neutralizeFailureReason: i tre null non hanno lo stesso motivo', () => {
+  // E' il testo che l'utente legge quando l'oracolo NON aggiudica. «Forma dell'export non
+  // riconosciuta» su una dichiarazione che esiste solo commentata — o che non esiste
+  // affatto, come per un import * as ns — lo manda a cercare il difetto dove non e'.
+  assert.match(neutralizeFailureReason('export const t = make();\n', 't'), /initializer/);
+  assert.match(neutralizeFailureReason('// export const c = { a: 1 };\n', 'c'), /SOLO in un commento/);
+  assert.match(neutralizeFailureReason('export function ns() {}\n', 'ns'), /nessun 'export const ns'/);
+});
+
+const TASK1 = [{ id: 'T-1', target_tests: [{ file: 'tests/t.test.mjs', covers: ['AC-1'] }] }];
+
+test('assertionPower: senza runner non si muta e non si finge un verdetto', () => {
+  // Il template arriva dal manifest del progetto: se manca, runTargetFile lancerebbe
+  // (template.trim() su undefined) e il crash risalirebbe fino a control 4. Un crash non
+  // e' un verdetto (L-COL-002): si dichiara irrisolto, e l'albero non si tocca affatto.
+  withTempApp({
+    ...SRC_ABX,
+    'tests/t.test.mjs': [
+      "import { A } from '../src/a.mjs';",
+      "import { B } from '../src/b.mjs';",
+      'assert.deepEqual(A, B);',
+      '',
+    ].join('\n'),
+  }, (app) => {
+    const before = readFileSync(join(app, 'src', 'b.mjs'), 'utf8');
+    const r = assertionPower(TASK1, app, ['tests/t.test.mjs'], {});
+    assert.equal(r.status, 'degraded');
+    assert.equal(r.unresolved.length, 1);
+    assert.match(r.unresolved[0].reason, /test_runner\.run_file/);
+    assert.equal(readFileSync(join(app, 'src', 'b.mjs'), 'utf8'), before);
+  });
+});
+
+test("assertionPower: zero test eseguiti NON e' un'aggiudicazione", () => {
+  // A E' B per riferimento, e l'asserzione sta al TOP LEVEL, fuori da ogni test():
+  // node:test conta il file come 1 test implicito, che run_file sottrae -> testCount 0.
+  // Il file resta VERDE dopo la neutralizzazione, ma un file che non esegue alcun test non
+  // ha PROVATO niente: contarlo tra gli aggiudicati disinnescherebbe il floor anti-vacuo e
+  // produrrebbe un verde che dichiara «1/1 aggiudicati» senza una sola prova sotto.
+  withTempApp({
+    'src/b.mjs': 'export const B = { k: 1 };\n',
+    'src/a.mjs': "import { B } from './b.mjs';\nexport const A = B;\n",
+    'tests/t.test.mjs': [
+      "import assert from 'node:assert/strict';",
+      "import { A } from '../src/a.mjs';",
+      "import { B } from '../src/b.mjs';",
+      'assert.deepEqual(A, B);',
+      '',
+    ].join('\n'),
+  }, (app) => {
+    const r = assertionPower(TASK1, app, ['tests/t.test.mjs'], { runFileTpl: 'node --test {file}' });
+    assert.equal(r.coverage.candidates, 1);
+    assert.equal(r.coverage.adjudicated, 0);
+    assert.equal(r.inert.length, 0);
+    assert.equal(r.status, 'degraded');
+    assert.match(r.unresolved[0].reason, /non esegue alcun test/);
+  });
+});
+
+test('assertionPower: coverage.files[].file usa sempre i separatori /', () => {
+  // Contratto 3 del keystone. Al Task 2 la guardia gemella su testFile era rimasta NON
+  // falsificabile (l'input arriva gia' con /, quindi toglierla non rompeva nulla): qui si
+  // puo' provare davvero, perche' il separativo si passa in ingresso. Il file di test non
+  // ha asserzioni APPOSTA — zero candidati, nessun processo lanciato, e l'esito e' lo
+  // stesso su Windows e su POSIX, dove un \ nel nome non risolve nemmeno su disco.
+  withTempApp({
+    'tests/t.test.mjs': "import { test } from 'node:test';\ntest('x', () => {});\n",
+  }, (app) => {
+    const r = assertionPower([], app, ['tests\\t.test.mjs'], { runFileTpl: 'node --test {file}' });
+    assert.equal(r.coverage.scanned, 1);
+    assert.equal(r.coverage.files[0].file, 'tests/t.test.mjs');
+  });
+});
