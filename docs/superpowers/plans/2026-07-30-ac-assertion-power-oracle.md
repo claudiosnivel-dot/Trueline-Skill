@@ -934,19 +934,19 @@ con:
     };
 ```
 
-- [ ] **Step 4: eseguire il keystone — atteso 11/11**
+- [ ] **Step 4: eseguire il keystone — atteso 13/13**
 
 Run: `node eval/harness/assertion_power_check.mjs`
-Expected: `assertion_power_check: 11/11 PASS`.
+Expected: `assertion_power_check: 13/13 PASS` (il keystone e' cresciuto a 13 sotto-test nel Task 3, con la decisione sui due kind di irrisolto).
 
 - [ ] **Step 5: provare la FALSIFICABILITÀ in due direzioni**
 
 Neutralizzare l'innesto (commentare la riga `const power = ...` e il blocco `if (!power.ok)`) e rieseguire:
 Run: `node eval/harness/assertion_power_check.mjs`
-Expected: `wiring:control4` e `inert:detected` ROSSI. Poi ripristinare e riottenere 11/11.
+Expected: `wiring:control4` e `inert:detected` ROSSI. Poi ripristinare e riottenere 13/13.
 
 Poi neutralizzare il solo `honest-parallel` (rendere lo stadio 2 sempre «inerte»):
-Expected: `honest-parallel:not-flagged` e `healthy:not-flagged` ROSSI. Ripristinare → 11/11.
+Expected: `honest-parallel:not-flagged` e `healthy:not-flagged` ROSSI. Ripristinare → 13/13.
 
 - [ ] **Step 6: non-regressione dei gate esistenti sul controllo 4**
 
@@ -1060,7 +1060,7 @@ Se DB-live o docker/semgrep mancano: `m5` **non** è ri-gateabile qui → **gap 
 - [ ] **Step 2: gate seriale**
 
 ```bash
-node eval/harness/assertion_power_check.mjs        # atteso 11/11
+node eval/harness/assertion_power_check.mjs        # atteso 13/13
 node eval/harness/anti_tamper_check.mjs            # atteso 49/49
 node eval/harness/build_discipline_check.mjs       # atteso 21/21
 node eval/harness/h1_perpid_check.mjs --shipped-allow=...   # atteso 10/10
