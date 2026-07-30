@@ -8,9 +8,15 @@
 // DUE STADI, e la separazione e' il punto:
 //   1) CANDIDATI (statico, SOVRA-INCLUSIVO): nessun verdetto. Misurato il 30/07/2026,
 //      un rilevatore statico su raggiungibilita' dei moduli da 2 FALSI POSITIVI su 3.
-//   2) VERDETTO (ESECUZIONE): si neutralizza il binding esportato sulla COPIA di lavoro
-//      e si riesegue QUEL SOLO target_test. Resta verde => l'asserzione e' INERTE.
-//      L'autorita' e' l'exit code del runner (L-COL-002), mai l'analisi statica.
+//   2) VERDETTO (ESECUZIONE): si neutralizza TEMPORANEAMENTE il binding esportato nel
+//      sorgente della dir che il checkpoint riceve, e si riesegue QUEL SOLO target_test.
+//      Resta verde => l'asserzione e' INERTE. L'autorita' e' l'exit code del runner
+//      (L-COL-002), mai l'analisi statica.
+//      Quella dir NON e' sempre una copia: nel loop e' un workspace, ma con
+//      run_checkpoint --in-place e' l'albero di lavoro VERO dell'utente (vedi RETE DI
+//      RIPRISTINO, piu' sotto). La garanzia percio' NON e' l'isolamento: e' il ripristino
+//      a BYTE GREZZI verificato per sha256, e un ripristino non bit-esatto esce
+//      status:'error', mai un verde.
 //
 // DIREZIONE CONSERVATIVA, dichiarata: in caso di dubbio NON si segnala. Il file gira a
 // livello di FILE, non di singolo test case, quindi un altro test dello stesso file che
