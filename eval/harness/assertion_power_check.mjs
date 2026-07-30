@@ -81,6 +81,22 @@ const OWNED = !existsSync(TMP_ROOT);
 const checks = [];
 function assert(name, ok, detail) { checks.push({ name, ok: Boolean(ok), detail }); }
 
+// Chiamata DIFENSIVA all'oracolo (idioma di scan_scope_check::callSafe). L'import
+// dinamico copre l'oracolo ASSENTE; questo copre l'oracolo PRESENTE MA ROTTO — export
+// mancante o eccezione. In entrambi i casi il verdetto e' un ROSSO MOTIVATO dei
+// sotto-test che ne dipendono, mai la morte dell'harness: un crash non e' un verdetto,
+// e un oracolo rotto non deve nascondere lo stato degli altri 10 sotto-test.
+const oracleErrors = [];
+function callOracle(mod, tasks, app, inScope) {
+  if (!mod) return null;
+  if (typeof mod.assertionPower !== 'function') {
+    oracleErrors.push("l'oracolo esiste ma non esporta assertionPower()");
+    return null;
+  }
+  try { return mod.assertionPower(tasks, app, inScope, { runFileTpl: MANIFEST.test_runner.run_file }); }
+  catch (e) { oracleErrors.push(`assertionPower ha lanciato: ${String((e && e.message) || e)}`); return null; }
+}
+
 // sha256 ricorsivo dell'albero: prova del ripristino, calcolata DAL KEYSTONE.
 function treeHash(dir) {
   const h = createHash('sha256');
@@ -114,7 +130,7 @@ async function main() {
     const tasks = loadTasks(bp);
     const inScope = tasks.flatMap((t) => (t.target_tests || []).map((tt) => tt.file))
       .filter((f) => existsSync(join(app, f))).sort();
-    const r = mod ? mod.assertionPower(tasks, app, inScope, { runFileTpl: MANIFEST.test_runner.run_file }) : null;
+    const r = callOracle(mod, tasks, app, inScope);
     return { app, bp, tasks, inScope, r, before, after: treeHash(app) };
   };
 
@@ -174,6 +190,7 @@ async function main() {
   console.log(`=== ORACOLO ASSERTION-POWER RESULT: ${red.length === 0 ? 'PASS' : 'FAIL'} ===`);
   if (red.length) {
     console.log(`    sotto-test ROSSI (${red.length}/${checks.length}): ${red.join(', ')}`);
+    for (const e of [...new Set(oracleErrors)]) console.log(`    ORACOLO ROTTO: ${e}`);
     console.log("    (fino a che trueline/scripts/blueprint/ac_assertion_power_check.mjs non esiste, il rosso e' l'ESITO ATTESO.)");
     for (const c of checks.filter((x) => !x.ok)) console.log(`      - ${c.name}: ${c.detail}`);
   }
