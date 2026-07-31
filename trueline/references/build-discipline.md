@@ -77,7 +77,10 @@ controllo 4:
   **non inventa** il comportamento asserito;
 - un `target_test` le cui asserzioni **divergono** dal suo AC è esso stesso un
   **difetto-blueprint / violazione d'integrità del controllo 4** (`L-COL-019`
-  tiene il giudice di proprietà del blueprint, non dell'LLM in BUILD).
+  tiene il giudice di proprietà del blueprint, non dell'LLM in BUILD);
+- un `target_test` la cui asserzione **non può fallire** non è un oracolo: è un
+  verde senza contenuto. La **provenienza non implica il potere** — un'asserzione
+  può discendere dall'AC alla lettera e restare incapace di dire di no.
 
 **Convenzione di provenienza (meccanizzata, AT-1 Fase B).** Ogni blocco del
 `target_test` che esercita un AC porta un tag `covers: <AC-id>` **in un commento**
@@ -91,6 +94,92 @@ di `validate_blueprint`). È **per-AC globale** (basta un file coprante taggato)
 *che* il file dichiara quale AC esercita, **non** che l'asserzione sia semanticamente
 fedele (quello resta advisory). Lo schema del task e `validate_blueprint` **non
 cambiano**: il tag vive nel file di test, non nel blueprint.
+
+**Potere dell'asserzione (meccanizzato, AT-1 Fase C).** Quando **tutti** i `target_test`
+in scope sono verdi, il controllo 4 chiede una seconda cosa: che l'asserzione **potesse
+fallire**. Il caso che il gate coglie è l'asserzione **tautologica** —
+`expect(A).toEqual(B)` (o `assert.deepEqual(A, B)`) dove i due lati sono lo **stesso
+oggetto**, perché il lato atteso è importato dallo stesso modulo che il codice sotto test
+usa: l'uguaglianza è vera **per costruzione** e resta verde qualunque cosa accada al
+valore.
+
+**Cosa devi fare mentre scrivi il `target_test`.** Il **lato atteso** — l'argomento di
+`toEqual`/`toBe`, il **secondo** di `assert.deepEqual` — dev'essere un valore **scritto
+nel test**: un letterale, una fixture, un valore ricalcolato a mano. **Non** il binding
+che l'implementazione importa a sua volta. Se l'AC dice *"la config espone i token di
+`tokens.ts`"*, asserisci contro i **valori** attesi, non contro `tokens.ts`: altrimenti
+stai asserendo `X === X` e il test resterebbe verde anche cancellando tutti i token.
+
+**Cosa succede se non lo fai.** L'oracolo `scripts/blueprint/ac_assertion_power_check.mjs`
+(fratello di `ac_assertion_trace_check`: quello verifica la *provenienza*, questo il
+*potere*) neutralizza **temporaneamente** il binding esportato del lato atteso — nel
+sorgente dell'albero su cui il checkpoint sta girando — e riesegue **quel solo**
+`target_test`. Se resta **verde**, l'asserzione è **inerte** e il controllo 4 è **ROSSO**.
+A emettere il verdetto è l'**esecuzione**, mai l'analisi
+statica — lo statico si limita a *proporre* candidati, ed è volutamente sovra-inclusivo
+(`L-COL-002`). Gira **dopo** che i `target_test` sono passati: su un controllo 4 già rosso
+non costa nulla.
+
+**Il ripristino, e i modi in cui può non riuscire** (`L-COL-006`: ciò che non si garantisce
+si dichiara, non si tace). Nel caso normale il file torna **bit-identico**: si riscrivono i
+**byte grezzi** letti prima della mutazione — mai una stringa ri-codificata — e il
+ripristino è **verificato per sha256**. Un ripristino non bit-esatto è un `error`, mai un
+verde. Quello che quella frase **non** promette, e che va saputo prima di far girare il gate
+su un albero a cui tieni:
+
+- **il write di ripristino può lanciare** (EBUSY, file in sola lettura, un antivirus che
+  tiene aperto il file — su Windows succede). Allora il file resta **neutralizzato**, il
+  controllo 4 esce `error` **nominando il file**, e da quel momento ogni ulteriore giro
+  dell'oracolo **in quel processo** esce `error` senza toccare più nulla: un `error` che
+  significa «ho mutato il sorgente» non deve poter diventare un verde al tentativo dopo;
+- **una rete su `exit` e sui segnali** (`SIGINT`/`SIGTERM`, più `SIGBREAK` su Windows)
+  tiene i byte originali dei file in volo e li riscrive all'uscita, anche anomala. È una
+  rete, non una garanzia: gira solo se il processo arriva a eseguirla;
+- **c'è una finestra in cui nessun handler gira.** Il `target_test` è rilanciato con
+  `spawnSync` **senza timeout**: fra la mutazione e il ripristino il processo può restare
+  fermo su un test appeso, e un `kill -9`, un riavvio o un crash dell'host in quell'istante
+  lasciano il file **mutato sul disco** senza che `finally`, `exit` o segnali vengano mai
+  eseguiti. Il file è sempre **uno solo** e sempre un `export const` ridotto alla sua forma
+  inerte (`{}`, `[]`, una sentinella): `git diff` lo mostra subito e `git checkout -- <file>`
+  lo annulla. Il timeout non c'è **per scelta**, non per dimenticanza: aggiungerlo
+  cambierebbe anche il run normale del controllo 4.
+
+**Quando l'oracolo non arriva lo dichiara — e non ti blocca per questo.** Due specie di
+irrisolto, opposte:
+
+- **`structural`** — l'oracolo **non può** giudicare per costruzione: binding di namespace
+  (`import * as ns`, dove non esiste alcun `export const ns` da neutralizzare),
+  initializer non riducibile a inerte (`= make()`), dichiarazione presente **solo in un
+  commento**, binding fuori dall'app. Il progetto non ha nulla che non va: **non degrada
+  mai**, si **dichiara** nella coverage col suo motivo.
+- **`failure`** — l'oracolo **doveva** farcela e qualcosa è andato storto: run in errore,
+  **zero test eseguiti**, runner non configurato. **Degrada sempre**, anche se è l'unico e
+  anche se altri candidati sono stati aggiudicati: un oracolo che non ha girato non passa
+  per verde (`L-COL-006`).
+
+**Cosa il gate NON copre — dichiarato, non assunto** (`L-COL-006`). Un test **debole ma
+non tautologico** (può fallire, ma esercita meno di quanto l'AC pretenda) resta
+**scoperto**: qui non c'è mutation testing generale. La granularità è il **file**, quindi
+un altro test dello stesso file che diventa rosso maschera l'inerzia → **falsi negativi
+possibili**: è il verso giusto in cui sbagliare, perché un falso positivo renderebbe rosso
+un progetto sano.
+
+I falsi positivi sono **la direzione che l'oracolo si vieta**, e per questo va detto dove
+resta possibile invece di promettere che non lo è. Il matcher dei candidati **non parsa**:
+riconosce la forma dell'asserzione con una regex sul sorgente **mascherato dai commenti**,
+ma i **letterali di stringa restano intatti** — devono, perché un'asserzione legittima può
+contenere un accesso a chiave (`obj['k']`). Quindi un'asserzione **citata dentro una
+stringa** (un template di messaggio, una tabella di esempi, un test che genera codice)
+resta visibile al matcher; se **entrambi** i lati sono anche binding importati veri e la
+forma dell'export è neutralizzabile, l'oracolo muta un modulo e può dichiarare **INERTE** un
+test sano. È una congiunzione stretta — mai osservata sulle fixture né sulla misura del
+30/07/2026 — ma è un percorso **noto**, non un'ipotesi, e nessun `error` lo copre: si
+presenterebbe come un controllo 4 rosso. Se ti succede, il `detail` nomina file, riga e
+binding: verifica quella riga prima di riscrivere il test.
+
+Per le mutazioni **comportamentali** la rete non è questa ed esiste già: è il **controllo 3**
+(regressioni sull'intera suite), dove una mutazione che cambia davvero il comportamento rompe
+i test che lo esercitano altrove.
 
 ### Momento 3 — Scrittura minima e chirurgica *(Simplicity First + Surgical Changes)*
 

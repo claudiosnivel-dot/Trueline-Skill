@@ -483,6 +483,11 @@ async function main() {
       green: cp.green, summary: cp.summary, degraded: cp.degraded,
       controls: cp.controls.map((c) => ({ id: c.id, name: c.name, status: c.status, green: c.green, detail: c.detail })),
     };
+    // POTERE DELL'ASSERZIONE (AT-1 Fase C): la proiezione dei controlli qui sopra tiene
+    // 5 campi e scarta `power`, come shapeControl. La sintesi risale percio' accanto a
+    // `degraded`, o la dichiarazione non arriverebbe al report del loop. Campo assente
+    // quando il ramo AC non ha girato -> shape del report INVARIATA (come scan_scope).
+    if (cp.assertion_power) report.checkpoint.assertion_power = cp.assertion_power;
 
     // SCAN-SCOPE nel REPORT REMEDIATE (PLAN §3.5 / §3.4): cio' che NON e' stato
     // scansionato si dichiara, con pattern, PROVENIENZA, `reason` di progetto e

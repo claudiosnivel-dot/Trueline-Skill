@@ -11,11 +11,18 @@ import { join } from 'node:path';
 import { control4Conformance } from './checkpoint.mjs';
 
 const MANIFEST = { test_runner: { run_file: 'node --test {file}' } };
+// Il tag `covers:` va DENTRO il file di test, non solo nel blueprint: la Fase B ha
+// aggiunto la precondizione di TRACE (assertionTrace) PRIMA del floor anti-vacuo e
+// prima dell'esecuzione, quindi un target_test non taggato esce «non tracciabile
+// all'AC» e non arriva mai al ramo che questi test vogliono esercitare. Senza il tag,
+// tre di questi sei test non misuravano cio' che dichiarano: due erano ROSSI dal
+// 26/06/2026, e il terzo — «target_test che fallisce -> RED» — era VERDE PER LA
+// RAGIONE SBAGLIATA, rosso di trace invece che rosso di test fallito.
 function scaffold({ testBody, covers = 'AC-1' }) {
   const root = mkdtempSync(join(tmpdir(), 'c4-'));
   const app = join(root, 'app'); const bp = join(root, 'bp');
   mkdirSync(join(app, 'tests'), { recursive: true }); mkdirSync(bp, { recursive: true });
-  if (testBody !== null) writeFileSync(join(app, 'tests', 'a.test.mjs'), testBody);
+  if (testBody !== null) writeFileSync(join(app, 'tests', 'a.test.mjs'), `// covers: ${covers}\n${testBody}`);
   writeFileSync(join(bp, '01.md'), [
     '```yaml', '- id: T-1', '  macrotask: m', '  objective: o', '  definition_of_done: [d]',
     '  acceptance_criteria:', '    - id: AC-1', '      given: g', '      when: w', '      then: t',

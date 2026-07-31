@@ -309,6 +309,12 @@ function runOn(dir, { mode, eval: evalMode, noOsv, baseline, copied, workspace, 
     forwardDeps: cp.degraded && cp.degraded.length
       ? `controlli degradati (NON verdi) in attesa dei test M3: ${cp.degraded.join(', ')} (// TODO M3)`
       : undefined,
+    // POTERE DELL'ASSERZIONE (AT-1 Fase C): la sintesi risale QUI perche' shapeControl
+    // tiene una whitelist di campi e scarta `power`. Senza questa riga la dichiarazione
+    // non esisterebbe in nessun output emesso, e a zero candidati il controllo 4 uscirebbe
+    // VERDE e MUTO (L-COL-006). undefined quando il ramo AC non ha girato -> il JSON
+    // emesso resta byte-identico per ogni progetto senza --blueprint.
+    assertion_power: cp.assertion_power || undefined,
     controls,
   };
 }

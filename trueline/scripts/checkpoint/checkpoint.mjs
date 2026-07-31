@@ -47,6 +47,7 @@ import { scanScopeFor, applyScanScope, scanScopeCoverage } from '../oracles/scan
 import { loadTasks } from '../blueprint/blueprint_tasks.mjs';
 import { runTargetFile } from './run_file.mjs';
 import { assertionTrace } from '../blueprint/ac_assertion_trace_check.mjs';
+import { assertionPower } from '../blueprint/ac_assertion_power_check.mjs';
 import { loadArchContract } from '../blueprint/arch_contract.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -754,10 +755,45 @@ export function control4Conformance(referenceApp, { mode = 'remediate', characte
       if (r.testCount < 1) fails.push(`${file} (vacuo: nessun test eseguito)`);
       else if (!r.passed) fails.push(`${file} (test rosso)`);
     }
-    const green = fails.length === 0;
+    if (fails.length > 0) {
+      return {
+        id: 4, name: 'conformance', status: 'red', green: false,
+        detail: `accettazione AC fallita: ${fails.join('; ')}`,
+      };
+    }
+    // <<< AT-1 Fase C — POTERE DELL'ASSERZIONE, solo su un controllo 4 GIA' VERDE >>>
+    // L'ordine non e' un'ottimizzazione: su un run ROSSO il costo dev'essere ZERO, perche'
+    // un test che gia' fallisce ha per definizione il suo potere di falsificare. La domanda
+    // «questa asserzione poteva fallire?» ha senso solo dopo che tutti i target_test in
+    // scope sono passati — un verde e' l'unico esito che una tautologia puo' contraffare.
+    // Il `detail` RIPORTA cio' che l'oracolo dice, senza riscriverlo: le due specie di
+    // irrisolto (structural non degrada, failure degrada) sono decise dentro assertionPower
+    // e qui si propagano tali e quali, incluso `power.status`.
+    const power = assertionPower(tasks, referenceApp, inScope, { runFileTpl });
+    if (!power.ok) {
+      return {
+        id: 4, name: 'conformance', status: power.status, green: false,
+        detail: `${inScope.length} target_test verdi, ma ${power.detail}`,
+        power,
+      };
+    }
+    // BIT-INVARIANZA, clausola 2: su un progetto SENZA candidati l'output del controllo 4
+    // dev'essere BYTE-IDENTICO a prima dell'innesto. Il suffisso compare percio' solo dove
+    // una misura c'e' stata davvero: a zero candidati non c'e' nulla da riferire, e
+    // appenderlo comunque cambierebbe la riga di riepilogo di OGNI progetto che non ha
+    // ancora un'asserzione analizzabile.
+    // NON e' un verde muto (L-COL-006), ma SOLO grazie alla risalita di `assertion_power`
+    // in cima all'esito di runCheckpoint (vedi powerSummary): il campo `power` che si
+    // ritorna qui NON raggiunge da solo alcun output emesso — shapeControl e la proiezione
+    // del loop lo scartano. Se quella risalita venisse tolta, questo ramo tornerebbe a
+    // tacere e la clausola 2 diventerebbe una violazione: le due cose stanno insieme.
+    const measured = power.coverage && power.coverage.candidates > 0;
     return {
-      id: 4, name: 'conformance', status: green ? 'green' : 'red', green,
-      detail: green ? `accettazione AC: ${inScope.length} target_test verdi` : `accettazione AC fallita: ${fails.join('; ')}`,
+      id: 4, name: 'conformance', status: 'green', green: true,
+      detail: measured
+        ? `accettazione AC: ${inScope.length} target_test verdi; ${power.detail}`
+        : `accettazione AC: ${inScope.length} target_test verdi`,
+      power,
     };
   }
   // --- RAMO LEGACY (invariato): characterization / npm test / degradato -------
@@ -918,5 +954,52 @@ export function runCheckpoint(referenceApp, opts = {}) {
     // NESSUNA dichiarazione: senza esclusioni non c'e' niente da dichiarare, e la
     // forma dell'esito resta quella di prima (BIT-invarianza).
     scan_scope: (c2 && c2.scan_scope) || null,
+    // POTERE DELL'ASSERZIONE (AT-1 Fase C): stessa risalita di scan_scope, e per la
+    // stessa ragione. `c4.power` da solo NON raggiunge nessun output emesso —
+    // shapeControl (run_checkpoint) e la proiezione dei controlli (run_loop) tengono
+    // una WHITELIST di campi e lo scartano. Senza questa risalita la dichiarazione
+    // muore in-process: a zero candidati il controllo 4 uscirebbe VERDE e MUTO, che e'
+    // esattamente cio' che L-COL-006 vieta.
+    // SINTESI, non l'oggetto intero: il report e' cio' che una persona legge, non un
+    // dump. I conteggi dicono QUANTO e' stato guardato; `declared[]` dice CHE COSA non
+    // lo e' stato e PERCHE', una voce per irrisolto — stessa forma di
+    // `coverage.excluded_patterns` in scan_scope, che porta il `reason` per pattern fin
+    // dentro il report del loop (L-COL-036). null quando il ramo AC non ha girato ->
+    // forma invariata.
+    //
+    // La frase che stava qui — «i MOTIVI per esteso restano nel detail del controllo» —
+    // era FALSA quando l'ha scritta il task 4 e va nominata: il detail portava gli
+    // structural sul SOLO ramo verde, quindi su red, degraded ed error i motivi non
+    // raggiungevano nessun output. Ora sono in entrambi i canali, e la ridondanza e'
+    // voluta: `detail` e' la riga che una persona legge, `declared` e' il campo che una
+    // macchina rilegge senza doverla parsare.
+    assertion_power: powerSummary(c4 && c4.power),
+  };
+}
+
+// Sintesi del potere dell'asserzione per il report. Fuori da runCheckpoint perche' la
+// forma e' un contratto verso due emettitori diversi, e duplicarla li farebbe divergere.
+function powerSummary(power) {
+  if (!power || !power.coverage) return null;
+  const cov = power.coverage;
+  return {
+    status: power.status,
+    scanned: cov.scanned,
+    candidates: cov.candidates,
+    adjudicated: cov.adjudicated,
+    inert: Array.isArray(power.inert) ? power.inert.length : 0,
+    unresolved: cov.unresolved,
+    unresolved_structural: cov.unresolved_structural,
+    unresolved_failure: cov.unresolved_failure,
+    // CIO' CHE NON E' STATO GUARDATO, COL SUO MOTIVO — non un conteggio.
+    // Senza questo campo `coverage.declared` non raggiungeva NESSUN artefatto emesso:
+    // shapeControl (run_checkpoint) e la proiezione del loop tengono una whitelist e
+    // scartano `power`, e questa sintesi portava solo numeri. Tre artefatti SPEDITI
+    // affermavano il contrario — incluso il commento di ac_assertion_power_check che
+    // motiva l'esistenza di `declared` con «se non comparisse QUI sparirebbe del tutto».
+    // Un numero dice che qualcosa non e' stato guardato; solo il motivo dice CHE COSA,
+    // ed e' la differenza fra dichiarare e accennare (L-COL-006/L-COL-036).
+    // Array VUOTO quando non c'e' nulla da dichiarare: la forma non cambia col contenuto.
+    declared: Array.isArray(cov.declared) ? cov.declared : [],
   };
 }
