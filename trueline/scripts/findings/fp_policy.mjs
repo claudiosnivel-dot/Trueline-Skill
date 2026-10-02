@@ -176,14 +176,18 @@ export function proposeAllowlistEntry(finding, evidence) {
 
   if (target === 'gitleaks') {
     // .gitleaks.toml: allowlist per regola+path, con commento di giustificazione.
+    // `[[allowlists]]` (la forma che gitleaks e run_gitleaks.mjs accettano) con
+    // `targetRules`: senza, un'allowlist globale con `paths` fa saltare a gitleaks
+    // il file intero per OGNI regola, non solo il finding confermato.
     const path = '.gitleaks.toml';
+    const fileRegex = `(^|/)${String(file).replace(/\\/g, '/').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`;
     const snippet =
       `# ${provenance}\n` +
       `# giustificazione: ${justify}\n` +
-      `[[allowlist]]\n` +
-      `  description = "FP confermato: ${oneLineComment(ruleId)} in ${file} (rivedere prima di mergere)"\n` +
-      `  regexTarget = "match"\n` +
-      `  paths = ['''${escapeToml(file)}''']\n`;
+      `[[allowlists]]\n` +
+      `  description = "FP confermato: ${escapeJson(oneLineComment(ruleId))} in ${escapeJson(oneLineComment(file))} (rivedere prima di mergere)"\n` +
+      `  targetRules = ["${escapeJson(oneLineComment(ruleId))}"]\n` +
+      `  paths = ['''${escapeToml(fileRegex)}''']\n`;
     return { target, path, snippet, requiresHumanApproval: true };
   }
 

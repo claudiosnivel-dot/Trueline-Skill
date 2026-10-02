@@ -27,6 +27,7 @@ import { fileURLToPath } from 'node:url';
 import { prioritize, priorityOrder } from './prioritize.mjs';
 import { applyFpPolicy, flagSuspectedFp, isSuspectedFp, validateEvidence } from './fp_policy.mjs';
 import { explainFinding } from './explain.mjs';
+import { extractProjectAllowlists } from '../oracles/run_gitleaks.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -162,7 +163,11 @@ check('B6 validateEvidence rifiuta evidenza vuota', validateEvidence({}).ok === 
 const glFpEvidence = { kind: 'test-fixture', detail: 'chiave finta in una fixture di test, non una credenziale reale', locator: 'eval/reference-app/test/fixtures/fake-keys.ts:3' };
 const glProp = flagSuspectedFp(F_SECRET, glFpEvidence);
 const glAllow = applyFpPolicy(F_SECRET, glFpEvidence).allowlistProposal;
-check('B7 gitleaks FP -> .gitleaks.toml proposto', glAllow && glAllow.target === 'gitleaks' && /\.gitleaks\.toml/.test(glAllow.path) && /\[\[allowlist\]\]/.test(glAllow.snippet), glAllow && glAllow.path);
+check('B7 gitleaks FP -> .gitleaks.toml proposto come [[allowlists]] limitata alla regola', glAllow && glAllow.target === 'gitleaks' && /\.gitleaks\.toml/.test(glAllow.path) && /^\[\[allowlists\]\]$/m.test(glAllow.snippet) && /^\s*targetRules = \["generic-api-key"\]$/m.test(glAllow.snippet), glAllow && glAllow.snippet);
+// B7b: la proposta e' nella forma che l'oracolo secret applica (run_gitleaks.mjs):
+// un blocco, nessuna sezione ignorata, nessun salto di file interi.
+const glParsed = glAllow ? extractProjectAllowlists(glAllow.snippet) : null;
+check('B7b la proposta e\' applicata dall\'oracolo secret, senza saltare file interi', glParsed && glParsed.blocks.length === 1 && glParsed.ignored.length === 0 && glParsed.wholeFileSkips === 0, JSON.stringify(glParsed && { blocks: glParsed.blocks.length, ignored: glParsed.ignored, wholeFileSkips: glParsed.wholeFileSkips }));
 check('B8 anche un secret flaggato-FP NON e\' rimosso/risolto', glProp.flagged === true && glProp.finding.fix_state === 'detected' && glProp.finding.severity === 'CRITICAL');
 
 // -----------------------------------------------------------------------------

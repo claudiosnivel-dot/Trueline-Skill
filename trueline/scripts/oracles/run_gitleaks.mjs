@@ -19,7 +19,7 @@
 // gitleaks sono ambigui (un path inesistente esce 0, una config rotta esce 1
 // come "findings trovati"). Quindi forziamo `--exit-code 0` e decidiamo l'esito
 // dal report: JSON valido => run riuscito (anche con 0 finding); spawn fallito o
-// stdout non parsabile come JSON => ERRORE DI ESECUZIONE (exit 2), che a monte
+// stdout non parsabile come JSON => ERRORE DI ESECUZIONE (exit 3), che a monte
 // NON va interpretato come "verde" (L-COL-006, nessun falso via libera).
 //
 // ALLOWLIST DI PROGETTO (03 §5.2, 08 §5.2): se `<dir>/.gitleaks.toml` esiste, le

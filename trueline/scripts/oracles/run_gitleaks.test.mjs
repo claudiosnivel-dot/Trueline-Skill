@@ -10,11 +10,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { extractProjectAllowlists, projectConfigFor, resolveGitleaksBin } from './run_gitleaks.mjs';
+import { proposeAllowlistEntry } from '../findings/fp_policy.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = resolve(__dirname, 'run_gitleaks.mjs');
@@ -143,6 +144,26 @@ e2e('una tabella [[allowlist]] (non valida per gitleaks) e ignorata e dichiarata
   assert.equal(r.status, 0);
   assert.ok(r.findings.some((f) => f.RuleID === 'trueline-generic-assigned-secret'));
   assert.match(r.stderr, /\[\[allowlist\]\]/);
+});
+
+e2e('la proposta di fp_policy, scritta nel .gitleaks.toml, spegne solo la regola del finding', () => {
+  const dir = makeProject(FAKE);
+  const finding = {
+    location: { file: 'src/config.ts', start_line: 1 },
+    source_oracle: { oracle: 'gitleaks', rule_id: 'trueline-generic-assigned-secret' },
+  };
+  // Seconda regola nello stesso file: la proposta non deve far saltare il file intero.
+  const dsnPassword = 'tlfixPw' + 'Q8mZ2vK7xR4nL9sT';
+  appendFileSync(join(dir, 'src', 'config.ts'), `export const DSN = "postgresql://app:${dsnPassword}@db.internal:5432/app";\n`);
+  const evidence = { kind: 'test-fixture', detail: 'valore finto della fixture', locator: 'src/config.ts:1' };
+  writeFileSync(join(dir, '.gitleaks.toml'), proposeAllowlistEntry(finding, evidence).snippet);
+
+  const r = runOracle(dir);
+
+  assert.equal(r.status, 0);
+  assert.ok(!r.findings.some((f) => f.RuleID === 'trueline-generic-assigned-secret'));
+  assert.ok(r.findings.some((f) => f.RuleID === 'trueline-connection-string-credentials'));
+  assert.doesNotMatch(r.stderr, /ATTENZIONE|NON applicate/);
 });
 
 e2e("un'allowlist con paths e senza targetRules e dichiarata come file non scansionati", () => {
