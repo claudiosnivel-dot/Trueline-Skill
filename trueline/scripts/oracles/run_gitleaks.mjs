@@ -22,6 +22,13 @@
 // stdout non parsabile come JSON => ERRORE DI ESECUZIONE (exit 2), che a monte
 // NON va interpretato come "verde" (L-COL-006, nessun falso via libera).
 //
+// ALLOWLIST DI PROGETTO (03 §5.2, 08 §5.2): se `<dir>/.gitleaks.toml` esiste, le
+// sue allowlist (`[[allowlists]]` e il legacy `[allowlist]`) si uniscono alla
+// config di Trueline in una config temporanea che la estende. Le altre sezioni
+// (`[extend]`, `[[rules]]`, ...) NON si applicano: un progetto puo' dichiarare un
+// FP, non spegnere una regola. Senza `.gitleaks.toml` la config e' quella di
+// Trueline e gli argomenti di gitleaks sono identici a prima (BIT-invariante).
+//
 // Node ESM, solo moduli built-in (niente dipendenze npm, niente rete).
 //
 // Uso:
@@ -31,7 +38,8 @@
 //   node trueline/scripts/oracles/run_gitleaks.mjs eval/reference-app history
 
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, resolve, join, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -85,14 +93,89 @@ function resolveGitleaksBin(dir) {
   return 'gitleaks';
 }
 
+// Intestazione di tabella TOML con chiave semplice: `[nome]` o `[[nome]]`.
+const TOML_HEADER = /^\s*(\[\[?)\s*([A-Za-z0-9_.-]+)\s*(\]\]?)\s*(?:#.*)?$/;
+
+/**
+ * Estrae dal testo di un `.gitleaks.toml` di progetto le sole allowlist.
+ * `[[allowlists]]` e il legacy `[allowlist]` diventano blocchi `[[allowlists]]`;
+ * ogni altra tabella e' riportata in `ignored`. Limite dichiarato: parser per
+ * righe, una riga che sembra un'intestazione dentro una stringa multi-riga la
+ * chiude; un blocco rotto fa fallire gitleaks, che il wrapper riporta come
+ * ERRORE DI ESECUZIONE (exit 3), mai come verde.
+ *
+ * @returns {{ blocks: string[], ignored: string[], wholeFileSkips: number }}
+ *   `wholeFileSkips`: allowlist con `paths` e senza `targetRules`, con cui
+ *   gitleaks salta per intero i file che combaciano.
+ */
+export function extractProjectAllowlists(text) {
+  const blocks = [];
+  const ignored = [];
+  let current = null;
+  for (const line of String(text).split(/\r?\n/)) {
+    const m = TOML_HEADER.exec(line);
+    if (!m) {
+      if (current) current.push(line);
+      continue;
+    }
+    const [, open, name, close] = m;
+    const isArray = open === '[[' && close === ']]';
+    const isTable = open === '[' && close === ']';
+    if ((isArray && name === 'allowlists') || (isTable && name === 'allowlist')) {
+      current = ['[[allowlists]]'];
+      blocks.push(current);
+    } else {
+      current = null;
+      ignored.push(`${open}${name}${close}`);
+    }
+  }
+  const texts = blocks.map((b) => b.join('\n').trimEnd() + '\n');
+  const wholeFileSkips = texts.filter((t) => /^\s*paths\s*=/m.test(t) && !/^\s*targetRules\s*=/m.test(t)).length;
+  return { blocks: texts, ignored, wholeFileSkips };
+}
+
+/**
+ * Config da passare a gitleaks per `dir`. Con allowlist di progetto scrive, fuori
+ * dal progetto, una config temporanea che estende quella di Trueline; `cleanup()`
+ * la rimuove.
+ *
+ * @returns {{ config: string, applied: number, ignored: string[], wholeFileSkips: number, cleanup: () => void }}
+ */
+export function projectConfigFor(dir) {
+  const none = { config: GITLEAKS_CONFIG, applied: 0, ignored: [], wholeFileSkips: 0, cleanup: () => {} };
+  const projectToml = join(dir, '.gitleaks.toml');
+  if (!existsSync(projectToml)) return none;
+
+  const { blocks, ignored, wholeFileSkips } = extractProjectAllowlists(readFileSync(projectToml, 'utf8'));
+  if (blocks.length === 0) return { ...none, ignored };
+
+  const tmp = mkdtempSync(join(tmpdir(), 'trueline-gitleaks-'));
+  const config = join(tmp, 'gitleaks.toml');
+  writeFileSync(
+    config,
+    '# Generata da run_gitleaks.mjs: config di Trueline + allowlist del progetto.\n' +
+      'title = "trueline-gitleaks + allowlist di progetto"\n\n' +
+      '[extend]\n' +
+      `path = ${JSON.stringify(GITLEAKS_CONFIG.replace(/\\/g, '/'))}\n\n` +
+      blocks.join('\n'),
+  );
+  return {
+    config,
+    applied: blocks.length,
+    ignored,
+    wholeFileSkips,
+    cleanup: () => rmSync(tmp, { recursive: true, force: true }),
+  };
+}
+
 // Costruisce gli argomenti per uno scope, con un subcomando primario e un
 // fallback (per coprire versioni diverse di gitleaks).
 //   working-tree -> primario `dir <dir>`, fallback `detect --no-git --source <dir>`
 //   history      -> primario `git <dir>`, fallback `detect --source <dir>`
 // Flag comuni: report JSON su stdout, redazione, niente banner, exit forzato 0.
-function buildInvocations(dir, scope) {
+function buildInvocations(dir, scope, config = GITLEAKS_CONFIG) {
   const common = [
-    '-c', GITLEAKS_CONFIG,
+    '-c', config,
     '--report-format', 'json',
     '--report-path', '-', // stdout: evita problemi di path su Windows/MSYS
     '--redact',
@@ -176,36 +259,60 @@ function main() {
     PATH: `${process.env.PATH || ''}${delimiter}${extraBin}`,
   };
 
-  const bin = resolveGitleaksBin(dir);
-  const invocations = buildInvocations(dir, scopeArg);
-
-  let lastDiag = '';
-  for (const inv of invocations) {
-    const r = runOnce(bin, inv.args, env);
-    if (!r.spawned) {
-      lastDiag = `gitleaks non eseguibile (subcomando "${inv.label}"): ${r.stderr}`;
-      // Errore di spawn: prova comunque il fallback (potrebbe cambiare nulla,
-      // ma manteniamo il ciclo uniforme).
-      continue;
-    }
-    if (r.parsed) {
-      // Run riuscita: emetti il JSON NATIVO di gitleaks su stdout (re-serializzato
-      // per garantire un array pulito anche se gitleaks avesse aggiunto rumore).
-      process.stdout.write(JSON.stringify(r.json, null, 2) + '\n');
-      diag(`scope=${scopeArg} subcomando="${inv.label}" finding=${r.json.length} (segreti redatti)`);
-      process.exit(EXIT_OK);
-    }
-    // Spawnato ma stdout non parsabile: subcomando ignoto o config rotta.
-    // Tieni la diagnostica e prova il fallback.
-    lastDiag =
-      `subcomando "${inv.label}" non ha prodotto un array JSON valido ` +
-      `(probabile subcomando non supportato o errore di config). ` +
-      `stderr: ${r.stderr.trim().split('\n').slice(-1)[0] || '(vuoto)'}`;
+  // Allowlist del `.gitleaks.toml` di progetto: dichiarate su stderr, mai in silenzio
+  // (L-COL-006). Senza il file nessuna riga in piu'.
+  const project = projectConfigFor(dir);
+  if (project.applied > 0) {
+    diag(`allowlist di progetto: ${project.applied} da .gitleaks.toml, unite alla config di Trueline`);
+  }
+  if (project.ignored.length > 0) {
+    diag(`sezioni del .gitleaks.toml di progetto NON applicate (solo le allowlist si uniscono): ${project.ignored.join(', ')}`);
+  }
+  if (project.wholeFileSkips > 0) {
+    diag(
+      `ATTENZIONE: ${project.wholeFileSkips} allowlist di progetto con paths e senza targetRules: ` +
+        'gitleaks salta per intero i file che combaciano, che quindi NON sono scansionati',
+    );
   }
 
-  // Nessuna invocazione ha prodotto un report JSON valido => errore di esecuzione.
-  diag(`ERRORE DI ESECUZIONE: ${lastDiag || 'gitleaks non ha prodotto output utilizzabile'}`);
-  process.exit(EXIT_EXEC_ERROR);
+  const bin = resolveGitleaksBin(dir);
+  const invocations = buildInvocations(dir, scopeArg, project.config);
+
+  let exitCode = EXIT_EXEC_ERROR;
+  let lastDiag = '';
+  try {
+    for (const inv of invocations) {
+      const r = runOnce(bin, inv.args, env);
+      if (!r.spawned) {
+        lastDiag = `gitleaks non eseguibile (subcomando "${inv.label}"): ${r.stderr}`;
+        // Errore di spawn: prova comunque il fallback (potrebbe cambiare nulla,
+        // ma manteniamo il ciclo uniforme).
+        continue;
+      }
+      if (r.parsed) {
+        // Run riuscita: emetti il JSON NATIVO di gitleaks su stdout (re-serializzato
+        // per garantire un array pulito anche se gitleaks avesse aggiunto rumore).
+        process.stdout.write(JSON.stringify(r.json, null, 2) + '\n');
+        diag(`scope=${scopeArg} subcomando="${inv.label}" finding=${r.json.length} (segreti redatti)`);
+        exitCode = EXIT_OK;
+        break;
+      }
+      // Spawnato ma stdout non parsabile: subcomando ignoto o config rotta.
+      // Tieni la diagnostica e prova il fallback.
+      lastDiag =
+        `subcomando "${inv.label}" non ha prodotto un array JSON valido ` +
+        `(probabile subcomando non supportato o errore di config). ` +
+        `stderr: ${r.stderr.trim().split('\n').slice(-1)[0] || '(vuoto)'}`;
+    }
+  } finally {
+    project.cleanup();
+  }
+
+  if (exitCode !== EXIT_OK) {
+    // Nessuna invocazione ha prodotto un report JSON valido => errore di esecuzione.
+    diag(`ERRORE DI ESECUZIONE: ${lastDiag || 'gitleaks non ha prodotto output utilizzabile'}`);
+  }
+  process.exit(exitCode);
 }
 
 // Esegui main() SOLO da CLI. Importato (es. dal test del bin-lookup) NON deve
