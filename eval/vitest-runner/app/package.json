@@ -1,0 +1,8 @@
+{
+  "name": "trueline-vitest-runner-fixture",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "vitest": "5.1.0"
+  }
+}

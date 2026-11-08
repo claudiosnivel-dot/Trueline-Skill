@@ -45,7 +45,7 @@ import { classify, loadManifest } from '../ecosystem/resolve.mjs';
 import { AUTHZ_ORACLES, AUTHZ_TOOL_NAMES, runAuthzOracle } from '../oracles/authz_oracles.mjs';
 import { scanScopeFor, applyScanScope, scanScopeCoverage } from '../oracles/scan_scope.mjs';
 import { loadTasks } from '../blueprint/blueprint_tasks.mjs';
-import { runTargetFile } from './run_file.mjs';
+import { runTargetFile, resolveRunFile } from './run_file.mjs';
 import { assertionTrace } from '../blueprint/ac_assertion_trace_check.mjs';
 import { assertionPower } from '../blueprint/ac_assertion_power_check.mjs';
 import { loadArchContract } from '../blueprint/arch_contract.mjs';
@@ -713,7 +713,9 @@ export function control3Regressions(referenceApp, { mode = 'remediate', characte
 export function control4Conformance(referenceApp, { mode = 'remediate', characterization = null, finding = null, blueprintDir = null, manifest = null } = {}) {
   // --- RAMO AC-ACCEPTANCE (AT-1 Fase A) ---------------------------------------
   // Si attiva SOLO in BUILD con un blueprint esplicito (blueprintDir) E un
-  // run_file nel manifest (test_runner.run_file). PREEMPTA la characterization:
+  // template d'esecuzione per file: il run_file del manifest (test_runner.run_file)
+  // o, se il manifest non lo dichiara ma riconosce vitest e il progetto lo usa, il
+  // template vitest (VR-1, resolveRunFile in run_file.mjs). PREEMPTA la characterization:
   // quando attivo, il controllo 4 e' il test d'accettazione AC per-task (esegue i
   // target_test del blueprint che esistono su disco, uno per uno). Senza queste
   // condizioni cade al ramo legacy -> output BYTE-IDENTICO a oggi (BIT-invarianza).
@@ -724,7 +726,7 @@ export function control4Conformance(referenceApp, { mode = 'remediate', characte
   // FLOOR ANTI-VACUO: un file con <1 test eseguito e' RED (un file vuoto non puo'
   // far passare l'accettazione). Un target_test rosso e' RED. Un errore
   // d'esecuzione e' status='error'. L'oracolo e' l'exit/output reale (L-COL-002).
-  const runFileTpl = manifest && manifest.test_runner && manifest.test_runner.run_file;
+  const runFileTpl = resolveRunFile(referenceApp, manifest);
   if (mode === 'build' && blueprintDir && runFileTpl) {
     let tasks;
     try { tasks = loadTasks(blueprintDir); }

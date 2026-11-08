@@ -95,6 +95,15 @@ di `validate_blueprint`). È **per-AC globale** (basta un file coprante taggato)
 fedele (quello resta advisory). Lo schema del task e `validate_blueprint` **non
 cambiano**: il tag vive nel file di test, non nel blueprint.
 
+**Con quale runner gira il `target_test`.** Il controllo 4 lancia ogni `target_test` da
+solo: con `node --test` quando il pack lo dichiara (`test_runner.run_file`), oppure con
+il **vitest locale** del progetto quando il pack non dichiara un runner ma riconosce
+vitest e il `package.json` del progetto lo elenca. Un file che importa da `'vitest'`
+gira sempre con vitest, uno che importa `'node:test'` sempre con node --test. Serve
+`npm install` fatto: vitest assente è un `error` dichiarato, mai un verde. Con jest o
+mocha non c'è esecuzione per file: il controllo 4 resta sul ramo legacy (`npm test`),
+senza trace né potere dell'asserzione, e va dichiarato così (`L-COL-006`).
+
 **Potere dell'asserzione (meccanizzato, AT-1 Fase C).** Quando **tutti** i `target_test`
 in scope sono verdi, il controllo 4 chiede una seconda cosa: che l'asserzione **potesse
 fallire**. Il caso che il gate coglie è l'asserzione **tautologica** —

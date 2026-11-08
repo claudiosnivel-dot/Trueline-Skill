@@ -2,12 +2,14 @@
 // Verifica: (a) default invariato (no blueprintDir -> ramo legacy degradato);
 // (b) target_test verde -> verde; (c) target_test rosso -> RED; (d) file vacuo
 // (nessun test()) -> RED (floor anti-vacuo); (e) nessun file materializzato ->
-// degradato (non verde); (f) manifest senza run_file -> ramo legacy (guard).
+// degradato (non verde); (f) manifest senza run_file -> ramo legacy (guard);
+// (g) VR-1: manifest senza run_file ma progetto vitest -> ramo per-AC col runner vitest.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, cpSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { control4Conformance } from './checkpoint.mjs';
 
 const MANIFEST = { test_runner: { run_file: 'node --test {file}' } };
@@ -65,4 +67,16 @@ test('manifest senza run_file -> ramo legacy (guard)', () => {
   const { app, bp } = scaffold({ testBody: "import {test} from 'node:test'; test('x',()=>{});" });
   const c = control4Conformance(app, { mode: 'build', blueprintDir: bp, manifest: { test_runner: {} } });
   assert.equal(c.status, 'degraded'); // non entra nel ramo AC
+});
+
+// VR-1: postgres-jsts e gli altri pack JS/TS non dichiarano run_file. Se il progetto
+// dichiara vitest e il manifest lo riconosce, il ramo per-AC si attiva col runner vitest
+// (qui il vitest FINTO di eval/vitest-runner; il vero sta in run_file.vitest.test.mjs).
+test('manifest senza run_file + progetto vitest -> ramo per-AC col runner vitest', () => {
+  const { app, bp } = scaffold({ testBody: "import { it } from 'vitest'; // FAKE:pass 1" });
+  writeFileSync(join(app, 'package.json'), JSON.stringify({ type: 'module', devDependencies: { vitest: '5.1.0' } }));
+  cpSync(fileURLToPath(new URL('../../../eval/vitest-runner/fake-vitest/', import.meta.url)), join(app, 'node_modules', 'vitest'), { recursive: true });
+  const c = control4Conformance(app, { mode: 'build', blueprintDir: bp, manifest: { test_runner: { detect: ['vitest', 'jest'] } } });
+  assert.equal(c.status, 'green', c.detail);
+  assert.match(c.detail, /accettazione AC: 1 target_test verdi/);
 });

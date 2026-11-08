@@ -43,3 +43,9 @@ eval/ecosystems/_a2c-fixtures/**/package-lock.json
 # dei path che ogni repo ignora (`.env`, `.next/`, `.trueline/`) e di un `.gitignore`
 # ANNIDATO — che varrebbe anche per QUESTO repo e nasconderebbe la fixture a se stessa.
 eval/scan-scope/*/project/
+
+# VR-1: fixture del runner vitest. I SORGENTI (package.json, src/, tests/, bp/) sono
+# materiale di gate -> TRACKED; node_modules e lockfile si provvigionano con
+# `npm install` in eval/vitest-runner/app (senza, i test end-to-end si saltano dichiarati).
+eval/vitest-runner/app/node_modules/
+eval/vitest-runner/app/package-lock.json
